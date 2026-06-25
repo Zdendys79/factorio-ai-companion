@@ -148,7 +148,7 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     local ext = 0
     for _, e in ipairs(es) do
       if e.valid and e ~= c.entity then
-        for _, it in ipairs({defines.inventory.chest, defines.inventory.furnace_result, defines.inventory.assembling_machine_output}) do
+        for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output}) do
           local inv = e.get_inventory(it)
           if inv then
             local av = inv.get_item_count(item)
