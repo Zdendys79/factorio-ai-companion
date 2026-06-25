@@ -14,8 +14,11 @@ M.COMPANION_COLORS = {
 }
 
 M.dir_map = {
+  -- Simple 0-3 convention (MCP tools API)
   [0] = defines.direction.north, [1] = defines.direction.east,
-  [2] = defines.direction.south, [3] = defines.direction.west
+  [2] = defines.direction.south, [3] = defines.direction.west,
+  -- Factorio native 16-direction values (aliases)
+  [4] = defines.direction.east,  [8] = defines.direction.south, [12] = defines.direction.west,
 }
 
 function M.print_color(c) return {color = c} end

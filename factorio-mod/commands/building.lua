@@ -61,31 +61,40 @@ end)
 
 commands.add_command("fac_building_rotate", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+(%d)$", cmd.parameter)
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
     if not id then u.error_response("Companion not found"); return end
     local x, y, dir = tonumber(args[2]), tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
-    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, force = c.entity.force}
+    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1}
     local t
-    for _, e in ipairs(es) do if e.valid and e ~= c.entity and e.rotatable then t = e; break end end
+    for _, e in ipairs(es) do if e.valid and e ~= c.entity and e.type ~= "character" and e.rotatable then t = e; break end end
     if not t then u.json_response({id = id, error = "No rotatable entity"}); return end
-    t.direction = u.dir_map[dir] or defines.direction.north
-    u.json_response({id = id, rotated = t.name, direction = dir})
+    if dir then
+      t.direction = u.dir_map[dir] or defines.direction.north
+    else
+      t.rotate()
+    end
+    u.json_response({id = id, rotated = t.name, direction = t.direction})
   end)
 end)
 
 commands.add_command("fac_building_info", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
     if not id then u.error_response("Companion not found"); return end
-    local name, x, y = args[2], tonumber(args[3]), tonumber(args[4])
+    local x, y = tonumber(args[2]), tonumber(args[3])
     if not x or not y then u.error_response("Invalid coordinates"); return end
-    local es = c.entity.surface.find_entities_filtered{name = name, position = {x=x, y=y}, radius = 2}
+    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 2}
     if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
     local t, min = nil, math.huge
-    for _, e in ipairs(es) do local d = u.distance(e.position, {x=x, y=y}); if d < min then min, t = d, e end end
+    for _, e in ipairs(es) do
+      if e.type ~= "resource" and e.type ~= "item-entity" then
+        local d = u.distance(e.position, {x=x, y=y}); if d < min then min, t = d, e end
+      end
+    end
+    if not t then u.json_response({id = id, error = "Not found"}); return end
     local info = {name = t.name, type = t.type, position = {x = t.position.x, y = t.position.y}, direction = t.direction}
     if t.health then info.health = t.health end
     if t.energy then info.energy = t.energy end
@@ -135,7 +144,7 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     if not id then u.error_response("Companion not found"); return end
     local item, count = args[2], tonumber(args[3]) or 10
     local pos = (tonumber(args[4]) and tonumber(args[5])) and {x = tonumber(args[4]), y = tonumber(args[5])} or c.entity.position
-    local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5, force = c.entity.force}
+    local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5}
     local ext = 0
     for _, e in ipairs(es) do
       if e.valid and e ~= c.entity then
@@ -181,6 +190,54 @@ commands.add_command("fac_building_fill", nil, function(cmd)
 end)
 
 -- Realistic tick-based building placement
+-- Mine (destroy) any entity at position - works on crash site wrecks, decoratives, etc.
+commands.add_command("fac_mine_entity", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
+    local id, c = u.find_companion(args[1])
+    if not id then u.error_response("Companion not found"); return end
+    local x, y = tonumber(args[2]), tonumber(args[3])
+    if not x or not y then u.error_response("Invalid coordinates"); return end
+    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 3}
+    local target = nil
+    for _, e in ipairs(es) do
+      if e.valid and e ~= c.entity and e.type ~= "character" and e.type ~= "resource" then
+        target = e; break
+      end
+    end
+    if not target then u.json_response({id = id, error = "No entity found"}); return end
+    if u.distance(c.entity.position, target.position) > 15 then u.json_response({id = id, error = "Too far"}); return end
+    local entity_name = target.name
+    local items_received = {}
+    for inv_id = 1, 10 do
+      local inv = target.get_inventory(inv_id)
+      if inv then
+        for i = 1, #inv do
+          local stack = inv[i]
+          if stack and stack.valid_for_read then
+            c.entity.insert{name = stack.name, count = stack.count}
+            items_received[stack.name] = (items_received[stack.name] or 0) + stack.count
+          end
+        end
+      end
+    end
+    if target.prototype and target.prototype.mineable_properties then
+      local mp = target.prototype.mineable_properties
+      if mp.minable and mp.products then
+        for _, prod in ipairs(mp.products) do
+          if prod.name then
+            local amt = prod.amount or 1
+            c.entity.insert{name = prod.name, count = amt}
+            items_received[prod.name] = (items_received[prod.name] or 0) + amt
+          end
+        end
+      end
+    end
+    target.destroy{raise_destroy = false}
+    u.json_response({id = id, mined = true, entity = entity_name, items = items_received})
+  end)
+end)
+
 commands.add_command("fac_building_place_start", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s+(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s*(%S*)$", cmd.parameter)
