@@ -1,4 +1,22 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.14.0
+Date: 2026-06-26
+  Changes:
+    - Factorio 2.1 compatibility (factorio_version 2.1, verified on 2.1.8)
+  Features:
+    - Autonomous build pipeline: fac_building_place_start approaches a safe
+      position near the target, clears trees/rocks at the footprint, then
+      places - no external pathfinding needed
+    - fac_building_place auto-clears trees/rocks before placing
+  Bugfixes:
+    - Fixed scheduler crash: SOLID_TYPES contained invalid prototype types
+      ('chest', 'steam-engine') so find_entities_filtered raised inside the
+      unguarded on_nth_tick handler, killing ALL companion queues on any
+      build attempt. Use valid types (generator, container, ...)
+    - Wrapped every tick subsystem in pcall so one failure can no longer stop
+      the whole scheduler
+    - Restored stuck-detection + perpendicular obstacle-bypass walking
+---------------------------------------------------------------------------------------------------
 Version: 0.13.3
 Date: 2025-01-17
   Features:
