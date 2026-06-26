@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.14.1
+Date: 2026-06-26
+  Bugfixes:
+    - fac_companion_spawn no longer requires a connected player: spawns near a
+      player if one exists, else at the map spawn/origin via
+      find_non_colliding_position. Enables companion control on a HEADLESS
+      server (no client connected) - required for autonomous RL training.
+---------------------------------------------------------------------------------------------------
 Version: 0.14.0
 Date: 2026-06-26
   Changes:

@@ -31,9 +31,15 @@ commands.add_command("fac_companion_spawn", nil, function(cmd)
     local id = req_id or storage.companion_next_id
     if not req_id then storage.companion_next_id = storage.companion_next_id + 1
     elseif req_id >= storage.companion_next_id then storage.companion_next_id = req_id + 1 end
+    -- Spawn near a player if one exists, else at the map spawn / origin so the
+    -- companion works on a HEADLESS server with no connected player.
     local p = game.players[1]
-    if not p or not p.valid then u.error_response("No player"); return end
-    local e = p.surface.create_entity{name = "character", position = {x = p.position.x + id * 2, y = p.position.y}, force = p.force}
+    local surface = (p and p.valid) and p.surface or game.surfaces[1]
+    local force = (p and p.valid) and p.force or game.forces.player
+    local base = (p and p.valid) and p.position or {x = 0, y = 0}
+    local want = {x = base.x + id * 2, y = base.y}
+    local pos = surface.find_non_colliding_position("character", want, 64, 0.5) or want
+    local e = surface.create_entity{name = "character", position = pos, force = force}
     if e then
       local color = u.get_companion_color(id)
       e.color = color
