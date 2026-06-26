@@ -169,16 +169,25 @@ local function update_companion_markers()
   end
 end
 
-script.on_nth_tick(5, function(ev)
-  if ev.tick % 1800 == 0 then cleanup_messages() end
-  -- Update map markers every 30 ticks (0.5 sec)
-  if ev.tick % 30 == 0 then update_companion_markers() end
-  -- Process all tick-based queues (realistic actions)
-  queues.tick_harvest_queues()
-  queues.tick_craft_queues()
-  queues.tick_build_queues()
-  queues.tick_combat_queues()
-  -- Process walking queues
+-- Run one tick subsystem defensively: a runtime error (e.g. an invalid
+-- prototype-type filter) must NEVER propagate out of on_nth_tick, or it would
+-- crash the whole scheduler / the game. Errors are recorded and printed
+-- throttled (once per ~5s) instead.
+local function guard_tick(name, fn, tick)
+  local ok, err = pcall(fn)
+  if not ok then
+    storage.errors = storage.errors or {}
+    storage.errors[name] = {tick = tick, error = tostring(err)}
+    if tick % 300 == 0 then
+      game.print("[AI Companion] " .. name .. " tick error: " .. tostring(err),
+        u.print_color(u.COLORS.error))
+    end
+  end
+end
+
+-- Walking queues: drive each companion toward its target with stuck-detection
+-- and perpendicular obstacle bypass (clears trees/small rocks blocking the path).
+local function process_walking_queues()
   if not storage.walking_queues then return end
   for cid, q in pairs(storage.walking_queues) do
     local c = u.get_companion(cid)
@@ -189,14 +198,85 @@ script.on_nth_tick(5, function(ev)
       else storage.walking_queues[cid] = nil; goto skip end
     end
     if not q.target then storage.walking_queues[cid] = nil; goto skip end
-    local e, dist = c.entity, u.distance(c.entity.position, q.target)
+    local e = c.entity
+    local dist = u.distance(e.position, q.target)
     if dist < 2 then
       e.walking_state = {walking = false}
       if not q.follow_player then storage.walking_queues[cid] = nil end
+      q.stuck_ticks = 0
+      q.bypass_ticks = 0
     else
-      local dir = u.get_direction(e.position, q.target)
-      if dir then e.walking_state = {walking = true, direction = dir} end
+      -- Stuck detection: compare position to previous call
+      local prev = q.prev_pos
+      local moved = prev and u.distance(prev, e.position) or 1
+      q.prev_pos = {x = e.position.x, y = e.position.y}
+
+      -- Clear trees and small rocks blocking path (not crash site wrecks or cliffs)
+      if moved < 0.3 then
+        local nearby = e.surface.find_entities_filtered{
+          position = e.position, radius = 4,
+          type = {"tree", "simple-entity"}
+        }
+        for _, obs in ipairs(nearby) do
+          if obs.valid and obs.name ~= "big-rock" then
+            obs.destroy()
+          end
+        end
+      end
+
+      if moved < 0.3 then
+        q.stuck_ticks = (q.stuck_ticks or 0) + 1
+      else
+        q.stuck_ticks = 0
+        q.bypass_ticks = 0
+        q.bypass_side = nil
+      end
+
+      local dir_to_target = u.get_direction(e.position, q.target)
+
+      if (q.bypass_ticks or 0) > 0 then
+        -- Continue bypass: walk perpendicular to unblock
+        if q.bypass_dir then
+          e.walking_state = {walking = true, direction = q.bypass_dir}
+        end
+        q.bypass_ticks = q.bypass_ticks - 1
+      elseif (q.stuck_ticks or 0) >= 4 then
+        -- Stuck for ~0.3s: try perpendicular bypass, alternating left/right
+        q.stuck_ticks = 0
+        q.bypass_side = ((q.bypass_side or 0) + 1) % 2
+        local perp_dirs = {
+          [defines.direction.north] = {defines.direction.west, defines.direction.east},
+          [defines.direction.south] = {defines.direction.east, defines.direction.west},
+          [defines.direction.east]  = {defines.direction.north, defines.direction.south},
+          [defines.direction.west]  = {defines.direction.south, defines.direction.north},
+          [defines.direction.northeast] = {defines.direction.northwest, defines.direction.southeast},
+          [defines.direction.southeast] = {defines.direction.northeast, defines.direction.southwest},
+          [defines.direction.southwest] = {defines.direction.southeast, defines.direction.northwest},
+          [defines.direction.northwest] = {defines.direction.southwest, defines.direction.northeast},
+        }
+        local choices = dir_to_target and perp_dirs[dir_to_target]
+        if choices then
+          q.bypass_dir = choices[(q.bypass_side % 2) + 1]
+          q.bypass_ticks = 10  -- bypass for 10 calls (~0.5s)
+          e.walking_state = {walking = true, direction = q.bypass_dir}
+        end
+      else
+        -- Normal movement toward target
+        if dir_to_target then e.walking_state = {walking = true, direction = dir_to_target} end
+      end
     end
     ::skip::
   end
+end
+
+script.on_nth_tick(5, function(ev)
+  if ev.tick % 1800 == 0 then cleanup_messages() end
+  -- Update map markers every 30 ticks (0.5 sec)
+  if ev.tick % 30 == 0 then update_companion_markers() end
+  -- Process all tick-based queues (each guarded so one failure can't kill the rest)
+  guard_tick("harvest", queues.tick_harvest_queues, ev.tick)
+  guard_tick("craft",   queues.tick_craft_queues,   ev.tick)
+  guard_tick("build",   queues.tick_build_queues,   ev.tick)
+  guard_tick("combat",  queues.tick_combat_queues,  ev.tick)
+  guard_tick("walking", process_walking_queues,     ev.tick)
 end)

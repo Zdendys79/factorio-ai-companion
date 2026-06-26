@@ -222,14 +222,18 @@ end
 
 -- ============ BUILD ============
 
--- Entity types that block character movement (used for approach-position search)
+-- Entity types that block character movement (used for approach-position search).
+-- These MUST be valid Factorio 2.0 prototype TYPE names, not entity names — a
+-- single invalid string makes find_entities_filtered{type=...} raise and (without
+-- the pcall in control.lua) would crash the whole tick scheduler. Notably:
+-- steam-engine's type is "generator"; chests are "container"/"logistic-container".
 local SOLID_TYPES = {
-  "offshore-pump", "boiler", "steam-engine", "pipe", "pipe-to-ground",
+  "offshore-pump", "boiler", "generator", "pipe", "pipe-to-ground",
   "mining-drill", "furnace", "assembling-machine", "inserter",
   "transport-belt", "splitter", "underground-belt",
-  "lab", "wall", "gate", "electric-pole", "chest", "container",
+  "lab", "wall", "gate", "electric-pole", "container", "logistic-container",
   "storage-tank", "beacon", "radar", "solar-panel", "accumulator",
-  "roboport", "pump"
+  "roboport", "pump", "cliff"
 }
 
 -- Find a walkable tile near build_pos from which the character can reach it
