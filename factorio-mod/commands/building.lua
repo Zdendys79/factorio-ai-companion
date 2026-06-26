@@ -32,6 +32,17 @@ commands.add_command("fac_building_place", nil, function(cmd)
     local inv = c.entity.get_inventory(defines.inventory.character_main)
     if inv.get_item_count(name) == 0 then u.json_response({id = id, error = "Not in inventory"}); return end
     local surf = c.entity.surface
+    -- Auto-clear trees and rocks from build footprint before placing
+    local proto = prototypes.entity[name]
+    if proto and proto.collision_box then
+      local bb = proto.collision_box
+      local area = {
+        {x = x + bb.left_top.x - 0.5, y = y + bb.left_top.y - 0.5},
+        {x = x + bb.right_bottom.x + 0.5, y = y + bb.right_bottom.y + 0.5}
+      }
+      local obs = surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}
+      for _, o in ipairs(obs) do if o.valid then o.destroy() end end
+    end
     if not surf.can_place_entity{name = name, position = {x=x, y=y}, direction = dir, force = c.entity.force} then
       u.json_response({id = id, error = "Cannot place"}); return
     end
@@ -148,7 +159,7 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     local ext = 0
     for _, e in ipairs(es) do
       if e.valid and e ~= c.entity then
-        for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output}) do
+        for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output, defines.inventory.furnace_result}) do
           local inv = e.get_inventory(it)
           if inv then
             local av = inv.get_item_count(item)

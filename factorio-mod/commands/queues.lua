@@ -88,14 +88,23 @@ function M.start_mining_next(cid)
   while #q.entities > 0 do
     local entity = table.remove(q.entities, 1)
     if entity and entity.valid then
-      c.entity.update_selected_entity(entity.position)
-      c.entity.mining_state = {mining = true, position = entity.position}
-      q.current = {
-        entity = entity,
-        start_tick = game.tick,
-        mining_time = (entity.prototype.mineable_properties.mining_time or 1) * 60
-      }
-      return true
+      -- Direct mining: extract products and destroy resource entity
+      local mp = entity.prototype.mineable_properties
+      if mp and mp.minable and mp.products then
+        for _, prod in ipairs(mp.products) do
+          local name = prod.name
+          local amt = math.ceil(prod.amount or (prod.amount_min or 1))
+          local remaining_need = q.target - q.harvested
+          local to_give = math.min(amt, remaining_need)
+          if to_give > 0 then
+            c.entity.insert{name = name, count = to_give}
+            q.harvested = q.harvested + to_give
+          end
+        end
+        entity.destroy{raise_destroy = true}
+        q.current = {entity = nil, done = true}
+        return true
+      end
     end
   end
   return false
@@ -105,56 +114,25 @@ function M.tick_harvest_queues()
   process_queue("harvest_queues", function(cid, q, c)
     -- Target reached
     if q.harvested >= q.target then
-      c.entity.mining_state = {mining = false}
       return true
     end
 
     -- Too far from mining area
     if u.distance(c.entity.position, q.position) > MINING_RANGE then
-      c.entity.mining_state = {mining = false}
       return true
     end
 
-    -- Start mining first resource
-    if not q.current then
-      if not M.start_mining_next(cid) then
-        c.entity.mining_state = {mining = false}
-        return true
-      end
-      q.inv_snapshot = c.entity.get_main_inventory().get_contents()
-      return false
+    -- Mine next entity every TICK_INTERVAL ticks for pacing
+    if not q.last_mine_tick then q.last_mine_tick = 0 end
+    if game.tick - q.last_mine_tick < MIN_ACTION_TICKS then return false end
+    q.last_mine_tick = game.tick
+
+    if not M.start_mining_next(cid) then
+      return true
     end
 
-    local current = q.current
-
-    -- HYBRID: Let Factorio mine natively, monitor mining_state
-    -- When mining stops (entity depleted or finished), count inventory and move to next
-    if not c.entity.mining_state or not c.entity.mining_state.mining then
-      -- Mining stopped - count what we got
-      local inv_after = c.entity.get_main_inventory().get_contents()
-      local added = 0
-      for name, data in pairs(inv_after) do
-        local before = q.inv_snapshot[name] and q.inv_snapshot[name].count or 0
-        added = added + (data.count - before)
-      end
-      q.harvested = q.harvested + added
-
-      -- Check if target reached
-      if q.harvested >= q.target then
-        c.entity.mining_state = {mining = false}
-        return true
-      end
-
-      -- Move to next resource
-      q.current = nil
-      if not M.start_mining_next(cid) then
-        c.entity.mining_state = {mining = false}
-        return true
-      end
-      q.inv_snapshot = c.entity.get_main_inventory().get_contents()
-    end
-
-    return false
+    q.current = nil
+    return q.harvested >= q.target
   end)
 end
 
@@ -244,49 +222,128 @@ end
 
 -- ============ BUILD ============
 
+-- Entity types that block character movement (used for approach-position search)
+local SOLID_TYPES = {
+  "offshore-pump", "boiler", "steam-engine", "pipe", "pipe-to-ground",
+  "mining-drill", "furnace", "assembling-machine", "inserter",
+  "transport-belt", "splitter", "underground-belt",
+  "lab", "wall", "gate", "electric-pole", "chest", "container",
+  "storage-tank", "beacon", "radar", "solar-panel", "accumulator",
+  "roboport", "pump"
+}
+
+-- Find a walkable tile near build_pos from which the character can reach it
+local function find_approach_pos(surf, char_pos, build_pos)
+  local candidates = {}
+  for _, dist in ipairs({5, 4, 6, 3, 7}) do
+    for _, angle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
+      local rad = math.rad(angle)
+      local p = {
+        x = math.floor(build_pos.x + dist * math.sin(rad) + 0.5),
+        y = math.floor(build_pos.y - dist * math.cos(rad) + 0.5)
+      }
+      local blocked = surf.find_entities_filtered{position = p, radius = 0.5, type = SOLID_TYPES}
+      if #blocked == 0 then
+        candidates[#candidates + 1] = {pos = p, dist = u.distance(char_pos, p)}
+      end
+    end
+  end
+  if #candidates > 0 then
+    table.sort(candidates, function(a, b) return a.dist < b.dist end)
+    return candidates[1].pos
+  end
+  return {x = build_pos.x, y = build_pos.y - 5}
+end
+
+-- Remove trees and small rocks from the entity's collision footprint
+local function clear_build_area(surf, entity_name, position)
+  local proto = prototypes.entity[entity_name]
+  if not proto or not proto.collision_box then return end
+  local bb = proto.collision_box
+  local area = {
+    {x = position.x + bb.left_top.x - 0.5, y = position.y + bb.left_top.y - 0.5},
+    {x = position.x + bb.right_bottom.x + 0.5, y = position.y + bb.right_bottom.y + 0.5}
+  }
+  local obstacles = surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}
+  for _, obs in ipairs(obstacles) do
+    if obs.valid then obs.destroy() end
+  end
+end
+
+-- Start a smart build: auto-approach + auto-clear + place
+-- State machine: approaching -> clearing -> building -> done
 function M.start_build(cid, entity_name, position, direction)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
 
   local dir = direction or defines.direction.north
-  local dist = u.distance(c.entity.position, position)
-  local reach = c.entity.build_distance or 10
-
-  if dist > reach then
-    return {error = "Too far (dist: " .. math.floor(dist) .. ", reach: " .. reach .. ")"}
-  end
-
   local inv = c.entity.get_main_inventory()
   if inv.get_item_count(entity_name) < 1 then
     return {error = "No " .. entity_name .. " in inventory"}
   end
 
-  local surface = c.entity.surface
-  if not surface.can_place_entity{name = entity_name, position = position, direction = dir, force = c.entity.force} then
-    return {error = "Cannot place here"}
-  end
+  -- Find safe approach position and start walking there
+  local approach = find_approach_pos(c.entity.surface, c.entity.position, position)
+  storage.walking_queues[cid] = {target = approach}
 
   storage.build_queues[cid] = {
     entity = entity_name,
     position = position,
     direction = dir,
+    approach = approach,
+    state = "approaching",
     tick_start = game.tick
   }
 
-  return {started = true, entity = entity_name, position = position}
+  return {started = true, entity = entity_name, position = position, state = "approaching"}
 end
 
 function M.tick_build_queues()
   process_queue("build_queues", function(cid, q, c)
-    if game.tick - q.tick_start < BUILD_TICKS then return false end
+    local surf = c.entity.surface
+    local reach = c.entity.build_distance or 10
 
-    local placed = c.entity.surface.create_entity{
-      name = q.entity,
-      position = q.position,
-      direction = q.direction,
-      force = c.entity.force
-    }
-    if placed then c.entity.remove_item{name = q.entity, count = 1} end
+    -- APPROACHING: wait until character is within build reach of target
+    if q.state == "approaching" then
+      if u.distance(c.entity.position, q.position) <= reach then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.state = "clearing"
+      end
+      return false
+    end
+
+    -- CLEARING: remove trees/rocks from build footprint
+    if q.state == "clearing" then
+      clear_build_area(surf, q.entity, q.position)
+      q.state = "building"
+      q.tick_start = game.tick
+      return false
+    end
+
+    -- BUILDING: wait BUILD_TICKS then place
+    if q.state == "building" then
+      if game.tick - q.tick_start < BUILD_TICKS then return false end
+
+      -- Re-check reach (companion may have drifted)
+      if u.distance(c.entity.position, q.position) > reach then
+        local approach = find_approach_pos(surf, c.entity.position, q.position)
+        storage.walking_queues[cid] = {target = approach}
+        q.approach = approach
+        q.state = "approaching"
+        return false
+      end
+
+      local placed = surf.create_entity{
+        name = q.entity,
+        position = q.position,
+        direction = q.direction,
+        force = c.entity.force
+      }
+      if placed then c.entity.remove_item{name = q.entity, count = 1} end
+      return true
+    end
+
     return true
   end)
 end
@@ -294,16 +351,24 @@ end
 function M.get_build_status(cid)
   local q = storage.build_queues[cid]
   if not q then return {active = false} end
+  local progress = 0
+  if q.state == "approaching" then progress = 10
+  elseif q.state == "clearing" then progress = 50
+  elseif q.state == "building" then
+    progress = 60 + math.floor((game.tick - q.tick_start) / BUILD_TICKS * 40)
+  end
   return {
     active = true,
     entity = q.entity,
     position = q.position,
-    progress = math.floor((game.tick - q.tick_start) / BUILD_TICKS * 100)
+    state = q.state,
+    progress = progress
   }
 end
 
 function M.stop_build(cid)
   if not storage.build_queues[cid] then return {stopped = false} end
+  storage.walking_queues[cid] = nil
   storage.build_queues[cid] = nil
   return {stopped = true}
 end
