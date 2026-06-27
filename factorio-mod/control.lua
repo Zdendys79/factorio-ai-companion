@@ -13,6 +13,7 @@ local function init_storage()
   storage.context_clear_requests = storage.context_clear_requests or {}
   storage.errors = storage.errors or {}
   storage.companion_markers = storage.companion_markers or {}
+  storage.path_requests = storage.path_requests or {}
   queues.init()
 end
 
@@ -185,8 +186,55 @@ local function guard_tick(name, fn, tick)
   end
 end
 
--- Walking queues: drive each companion toward its target with stuck-detection
--- and perpendicular obstacle bypass (clears trees/small rocks blocking the path).
+-- Ask the game pathfinder for a route to q.target that goes AROUND large obstacles
+-- (water, cliffs) -- the straight-line + perpendicular bypass only clears small
+-- stuff (trees/rocks) and cannot navigate around a lake. Result arrives async via
+-- on_script_path_request_finished and is stored as q.path (list of waypoints).
+local function request_walk_path(cid, q, e)
+  local proto = prototypes.entity["character"]
+  local ok, id = pcall(function()
+    return e.surface.request_path{
+      bounding_box = proto.collision_box,
+      collision_mask = proto.collision_mask,
+      start = e.position,
+      goal = q.target,
+      force = e.force,
+      radius = 2,
+      can_open_gates = true,
+      -- CRITICAL: ignore the companion itself, otherwise its own collision box makes
+      -- the START position collide -> pathfinder returns nil (no path) every time.
+      entity_to_ignore = e,
+      pathfind_flags = {cache = false, low_priority = false},
+    }
+  end)
+  if ok and id then
+    storage.path_requests[id] = cid
+    q.path_pending = true
+    q.path_req_tick = game.tick
+  else
+    -- API/call failed -> fall back to straight-line; retry later
+    q.path_failed_tick = game.tick
+  end
+end
+
+script.on_event(defines.events.on_script_path_request_finished, function(ev)
+  local cid = storage.path_requests and storage.path_requests[ev.id]
+  if not cid then return end
+  storage.path_requests[ev.id] = nil
+  local q = storage.walking_queues and storage.walking_queues[cid]
+  if not q then return end
+  q.path_pending = false
+  if ev.path and #ev.path > 0 then
+    q.path = ev.path           -- array of {position=, needs_destroy_to_reach=}
+    q.path_idx = 1
+  else
+    q.path = nil               -- no route found / try later -> straight-line fallback
+    q.path_failed_tick = game.tick
+  end
+end)
+
+-- Walking queues: follow a pathfinder route around obstacles when available, with
+-- straight-line + perpendicular bypass as the fallback for small obstacles.
 local function process_walking_queues()
   if not storage.walking_queues then return end
   for cid, q in pairs(storage.walking_queues) do
@@ -206,6 +254,25 @@ local function process_walking_queues()
       q.stuck_ticks = 0
       q.bypass_ticks = 0
     else
+      -- Pathfind around big obstacles (water/cliffs): request a route once per
+      -- target, then steer toward the current WAYPOINT instead of straight at the
+      -- final goal. Falls back to straight-line below while no route is available.
+      if not q.follow_player and not q.path and not q.path_pending then
+        local cooling = q.path_failed_tick and (game.tick - q.path_failed_tick) < 180
+        if not cooling then request_walk_path(cid, q, e) end
+      end
+      local goal = q.target
+      if q.path and q.path_idx then
+        while q.path[q.path_idx] and u.distance(e.position, q.path[q.path_idx].position) < 2 do
+          q.path_idx = q.path_idx + 1
+        end
+        if q.path[q.path_idx] then
+          goal = q.path[q.path_idx].position
+        else
+          q.path = nil  -- consumed all waypoints; head straight to final target
+        end
+      end
+
       -- Stuck detection: compare position to previous call
       local prev = q.prev_pos
       local moved = prev and u.distance(prev, e.position) or 1
@@ -232,7 +299,7 @@ local function process_walking_queues()
         q.bypass_side = nil
       end
 
-      local dir_to_target = u.get_direction(e.position, q.target)
+      local dir_to_target = u.get_direction(e.position, goal)
 
       if (q.bypass_ticks or 0) > 0 then
         -- Continue bypass: walk perpendicular to unblock
