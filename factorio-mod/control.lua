@@ -257,6 +257,12 @@ local function process_walking_queues()
       -- Pathfind around big obstacles (water/cliffs): request a route once per
       -- target, then steer toward the current WAYPOINT instead of straight at the
       -- final goal. Falls back to straight-line below while no route is available.
+      -- timeout a stuck pending request: if the finished-event never arrives (e.g. the
+      -- request id was lost across save/load), reset so pathfinding isn't disabled forever.
+      if q.path_pending and q.path_req_tick and (game.tick - q.path_req_tick) > 600 then
+        q.path_pending = false
+        q.path_failed_tick = game.tick
+      end
       if not q.follow_player and not q.path and not q.path_pending then
         local cooling = q.path_failed_tick and (game.tick - q.path_failed_tick) < 180
         if not cooling then request_walk_path(cid, q, e) end
@@ -285,7 +291,9 @@ local function process_walking_queues()
           type = {"tree", "simple-entity"}
         }
         for _, obs in ipairs(nearby) do
-          if obs.valid and obs.name ~= "big-rock" then
+          -- clear trees, but SPARE rocks (they yield stone -> destroying = silent resource
+          -- loss); the companion bypasses/pathfinds around the rarer rock obstacles instead.
+          if obs.valid and (obs.type == "tree" or not string.find(obs.name, "rock")) then
             obs.destroy()
           end
         end

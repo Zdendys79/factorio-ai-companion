@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.14.5
+Date: 2026-06-29
+  Bugfixes (PR #2 cubic review):
+    - fac_mine_entity: pick the NEAREST entity (not first in radius); respect insert return
+      values (no item loss when companion inventory full); honor product amount_min/probability.
+    - fac_building_info: exclude the companion and player characters from results.
+    - fac_companion_spawn: headless fallback uses force.get_spawn_position (not hardcoded {0,0}).
+    - control.lua: path_pending now times out (600 ticks) so a missed path-finished event
+      (e.g. across save/load) no longer permanently disables pathfinding.
+    - control.lua: stuck-path clearing spares rocks (yield stone) -- only clears trees / non-rock
+      obstacles, avoiding silent resource loss.
+---------------------------------------------------------------------------------------------------
 Version: 0.14.4
 Date: 2026-06-29
   Bugfixes:

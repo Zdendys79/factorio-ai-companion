@@ -36,7 +36,8 @@ commands.add_command("fac_companion_spawn", nil, function(cmd)
     local p = game.players[1]
     local surface = (p and p.valid) and p.surface or game.surfaces[1]
     local force = (p and p.valid) and p.force or game.forces.player
-    local base = (p and p.valid) and p.position or {x = 0, y = 0}
+    -- headless (no player): use the force's actual spawn position, not a hardcoded origin
+    local base = (p and p.valid) and p.position or force.get_spawn_position(surface)
     local want = {x = base.x + id * 2, y = base.y}
     local pos = surface.find_non_colliding_position("character", want, 64, 0.5) or want
     local e = surface.create_entity{name = "character", position = pos, force = force}
