@@ -124,7 +124,7 @@ commands.add_command("fac_building_info", nil, function(cmd)
     if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
     local t, min = nil, math.huge
     for _, e in ipairs(es) do
-      if e.type ~= "resource" and e.type ~= "item-entity" then
+      if e.valid and e ~= c.entity and e.type ~= "character" and e.type ~= "resource" and e.type ~= "item-entity" then
         local d = u.distance(e.position, {x=x, y=y}); if d < min then min, t = d, e end
       end
     end
@@ -233,36 +233,45 @@ commands.add_command("fac_mine_entity", nil, function(cmd)
     local x, y = tonumber(args[2]), tonumber(args[3])
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 3}
-    local target = nil
+    local target, tmin = nil, math.huge   -- mine the NEAREST entity, not the first arbitrary one
     for _, e in ipairs(es) do
       if e.valid and e ~= c.entity and e.type ~= "character" and e.type ~= "resource" then
-        target = e; break
+        local d = u.distance({x=x, y=y}, e.position)
+        if d < tmin then tmin, target = d, e end
       end
     end
     if not target then u.json_response({id = id, error = "No entity found"}); return end
     if u.distance(c.entity.position, target.position) > 15 then u.json_response({id = id, error = "Too far"}); return end
     local entity_name = target.name
     local items_received = {}
+    -- collect the entity's inventory; insert the real stack (preserves quality) and respect
+    -- the insert return value so nothing is silently lost when the companion inventory is full
     for inv_id = 1, 10 do
       local inv = target.get_inventory(inv_id)
       if inv then
         for i = 1, #inv do
           local stack = inv[i]
           if stack and stack.valid_for_read then
-            c.entity.insert{name = stack.name, count = stack.count}
-            items_received[stack.name] = (items_received[stack.name] or 0) + stack.count
+            local moved = c.entity.insert(stack)
+            if moved > 0 then items_received[stack.name] = (items_received[stack.name] or 0) + moved end
           end
         end
       end
     end
+    -- mineable products: honor amount / amount_min..max and probability (skip uncertain drops)
     if target.prototype and target.prototype.mineable_properties then
       local mp = target.prototype.mineable_properties
       if mp.minable and mp.products then
         for _, prod in ipairs(mp.products) do
           if prod.name then
-            local amt = prod.amount or 1
-            c.entity.insert{name = prod.name, count = amt}
-            items_received[prod.name] = (items_received[prod.name] or 0) + amt
+            local amt = prod.amount
+            if not amt then
+              amt = ((prod.probability or 1) >= 1) and (prod.amount_min or 1) or 0
+            end
+            if amt and amt > 0 then
+              local moved = c.entity.insert{name = prod.name, count = amt}
+              if moved > 0 then items_received[prod.name] = (items_received[prod.name] or 0) + moved end
+            end
           end
         end
       end
