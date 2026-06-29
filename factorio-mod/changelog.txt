@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.14.3
+Date: 2026-06-29
+  Features:
+    - fac_building_place now autonomously CLEARS the build site before placing: trees,
+      rocks (simple-entity), and lying items (item-entity, collected into inventory).
+    - If the companion stands on the build footprint it steps aside (find_non_colliding_position)
+      so it no longer blocks its own placement. Only a genuine post-clear failure returns "Cannot place".
+---------------------------------------------------------------------------------------------------
 Version: 0.14.1
 Date: 2026-06-26
   Bugfixes:
