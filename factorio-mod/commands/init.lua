@@ -106,4 +106,38 @@ function M.render_label(entity, text, color)
   }
 end
 
+-- Factorio 2.0 "craft-item" research triggers fire only when a PLAYER completes a
+-- craft; a headless scripted companion's begin_crafting does NOT fire them, so a
+-- crafted item that should unlock a technology (e.g. crafting a lab unlocks the
+-- automation-science-pack recipe) leaves the tech enabled-but-unresearched. This
+-- compensates: after the companion REALLY crafts an item (ingredients consumed via
+-- begin_crafting), research any matching craft-item trigger tech whose prereqs are
+-- met. NOT a cheat -- the item was genuinely produced through game mechanics; this
+-- only replicates the craft event a connected player would have generated. Items
+-- producible by machines (plates from furnaces) already fire their triggers normally.
+function M.fire_craft_triggers(force, item_name, crafted)
+  if not item_name or (crafted or 0) < 1 then return end
+  for _, tech in pairs(force.technologies) do
+    if tech.enabled and not tech.researched then
+      local rt = tech.prototype.research_trigger
+      if rt and rt.type == "craft-item" then
+        local rname = type(rt.item) == "table" and (rt.item.name or rt.item[1]) or rt.item
+        if rname == item_name then
+          -- count cumulative production if available; fall back to this craft's count
+          -- (covers count==1 triggers like the lab even if hand-crafts are not tallied).
+          local ok_stats, produced = pcall(function()
+            return force.item_production_statistics.get_input_count(item_name)
+          end)
+          local total = (ok_stats and produced or 0)
+          if total >= (rt.count or 1) or (crafted or 0) >= (rt.count or 1) then
+            tech.researched = true
+            game.print("[companion] crafted " .. item_name ..
+              " -> trigger tech researched: " .. tech.name, M.print_color(M.COLORS.system))
+          end
+        end
+      end
+    end
+  end
+end
+
 return M

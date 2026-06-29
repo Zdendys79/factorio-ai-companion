@@ -193,6 +193,8 @@ function M.tick_craft_queues()
 
     local crafted = c.entity.begin_crafting{recipe = q.recipe, count = 1}
     if crafted < 1 then return true end
+    -- headless: fire craft-item research triggers the scripted craft would otherwise miss
+    u.fire_craft_triggers(c.entity.force, q.recipe, crafted)
 
     q.crafted = q.crafted + 1
     q.tick_start = game.tick

@@ -21,6 +21,9 @@ commands.add_command("fac_item_craft", nil, function(cmd)
       u.json_response({id = id, error = "Missing", missing = missing}); return
     end
     local crafted = c.entity.begin_crafting{recipe = item, count = count}
+    -- headless: the companion's craft does not fire craft-item research triggers ->
+    -- compensate (e.g. crafting a lab unlocks the automation-science-pack recipe).
+    u.fire_craft_triggers(c.entity.force, item, crafted)
     u.json_response({id = id, crafted = crafted, item = item})
   end)
 end)
