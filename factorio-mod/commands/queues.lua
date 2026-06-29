@@ -340,6 +340,16 @@ function M.tick_build_queues()
         return false
       end
 
+      -- COLLISION CHECK (same guard the game applies to a player): create_entity does
+      -- NOT reject overlaps, so without this the async build could stack a building on
+      -- top of another (observed: output furnace overlapping the drill by one row).
+      -- Refuse instead of force-overlapping; the caller verifies via entity presence.
+      if not surf.can_place_entity{name = q.entity, position = q.position,
+                                   direction = q.direction, force = c.entity.force} then
+        q.failed = "Cannot place (collision)"
+        return true
+      end
+
       local placed = surf.create_entity{
         name = q.entity,
         position = q.position,
