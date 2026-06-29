@@ -178,18 +178,26 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     if not id then u.error_response("Companion not found"); return end
     local item, count = args[2], tonumber(args[3]) or 10
     local pos = (tonumber(args[4]) and tonumber(args[5])) and {x = tonumber(args[4]), y = tonumber(args[5])} or c.entity.position
+    -- Extract ONLY from the entity CLOSEST to the target tile (not any in radius): in a
+    -- tight furnace row, collecting from the wrong furnace mismatches the fed one.
     local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5}
-    local ext = 0
+    local target, bd = nil, 1e18
     for _, e in ipairs(es) do
       if e.valid and e ~= c.entity then
-        for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output, defines.inventory.furnace_result}) do
-          local inv = e.get_inventory(it)
-          if inv then
-            local av = inv.get_item_count(item)
-            if av > 0 then
-              local rm = inv.remove{name = item, count = math.min(count - ext, av)}
-              if rm > 0 then c.entity.insert{name = item, count = rm}; ext = ext + rm end
-            end
+        local dx, dy = e.position.x - pos.x, e.position.y - pos.y
+        local d = dx * dx + dy * dy
+        if d < bd then bd, target = d, e end
+      end
+    end
+    local ext = 0
+    if target then
+      for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output, defines.inventory.furnace_result}) do
+        local inv = target.get_inventory(it)
+        if inv then
+          local av = inv.get_item_count(item)
+          if av > 0 then
+            local rm = inv.remove{name = item, count = math.min(count - ext, av)}
+            if rm > 0 then c.entity.insert{name = item, count = rm}; ext = ext + rm end
           end
         end
         if ext >= count then break end
@@ -209,16 +217,24 @@ commands.add_command("fac_building_fill", nil, function(cmd)
     local inv = c.entity.get_inventory(defines.inventory.character_main)
     local have = inv.get_item_count(item)
     if have == 0 then u.json_response({id = id, error = "No " .. item}); return end
+    -- Insert ONLY into the entity CLOSEST to the target tile, not the first in radius:
+    -- in a tight furnace row several furnaces are within radius, and feeding the wrong
+    -- one breaks parallel smelting (observed: copper-ore fed an iron furnace -> 0 copper).
     local es = c.entity.surface.find_entities_filtered{position = pos, radius = 3}
-    local ins = 0
+    local target, bd = nil, 1e18
     for _, e in ipairs(es) do
       if e.valid and e ~= c.entity then
-        local r = e.insert{name = item, count = math.min(count - ins, have)}
-        if r > 0 then inv.remove{name = item, count = r}; ins, have = ins + r, have - r end
-        if ins >= count then break end
+        local dx, dy = e.position.x - pos.x, e.position.y - pos.y
+        local d = dx * dx + dy * dy
+        if d < bd then bd, target = d, e end
       end
     end
-    if ins > 0 then u.json_response({id = id, inserted = ins, item = item})
+    local ins = 0
+    if target then
+      local r = target.insert{name = item, count = math.min(count, have)}
+      if r > 0 then inv.remove{name = item, count = r}; ins = r end
+    end
+    if ins > 0 then u.json_response({id = id, inserted = ins, item = item, into = target and target.name})
     else u.json_response({id = id, error = "Could not insert"}) end
   end)
 end)
