@@ -163,9 +163,18 @@ commands.add_command("fac_building_fuel", nil, function(cmd)
     if have == 0 then u.json_response({id = id, error = "No " .. fuel}); return end
     local es = c.entity.surface.find_entities_filtered{position = c.entity.position, radius = 3, type = {"furnace", "boiler", "burner-inserter", "car", "locomotive", "mining-drill"}}
     if #es == 0 then u.json_response({id = id, error = "No burner nearby"}); return end
-    local fi = es[1].get_fuel_inventory()
-    if not fi then u.json_response({id = id, error = "No fuel slot"}); return end
-    local ins = fi.insert{name = fuel, count = math.min(amount, have)}
+    -- Fuel EVERY nearby burner (not just es[1], whose order is arbitrary): in a tight
+    -- furnace row, fueling only the first leaves the others starved -> they stop smelting
+    -- and their input fills up (observed: copper furnace unfueled -> copper-ore stuck).
+    local ins = 0
+    for _, e in ipairs(es) do
+      if have - ins <= 0 then break end
+      local fi = e.get_fuel_inventory()
+      if fi then
+        local r = fi.insert{name = fuel, count = math.min(amount, have - ins)}
+        if r > 0 then ins = ins + r end
+      end
+    end
     if ins > 0 then inv.remove{name = fuel, count = ins}; u.json_response({id = id, inserted = ins, fuel = fuel})
     else u.json_response({id = id, error = "Full"}) end
   end)
