@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.14.4
+Date: 2026-06-29
+  Bugfixes:
+    - fac_building_place: clear obstacles ONLY when placement is actually blocked (was
+      destroying trees/rocks even when placement would fail anyway for other reasons).
+    - fac_building_place: pick up lying items by inserting the real LuaItemStack (preserves
+      quality/count) and only destroy the ground item if it was fully collected (no item loss).
+---------------------------------------------------------------------------------------------------
 Version: 0.14.3
 Date: 2026-06-29
   Features:
