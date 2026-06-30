@@ -49,7 +49,31 @@ end
 
 function M.get_companion(id)
   local c = storage.companions[id]
-  return (c and c.entity and c.entity.valid) and c or nil
+  if c and c.entity and c.entity.valid then return c end
+  -- Record exists but the character entity is gone => the companion DIED (e.g. biters).
+  -- Remember that so EVERY subsequent request can report it as dead instead of a vague
+  -- "not found", letting the orchestrator/recorder react (discard/respawn) immediately.
+  if c then
+    storage.dead_companions = storage.dead_companions or {}
+    storage.dead_companions[id] = game.tick
+  end
+  return nil
+end
+
+-- Death-aware failure response: if the requested (or any known) companion has died, say so
+-- explicitly on EVERY request; otherwise fall back to the generic not-found message.
+function M.not_found(identifier)
+  local dc = storage.dead_companions or {}
+  local id = tonumber(identifier)
+  if id and dc[id] then
+    M.error_response("companion #" .. id .. " is dead", "dead")
+  elseif next(dc) then
+    local ids = {}
+    for k in pairs(dc) do ids[#ids + 1] = "#" .. k end
+    M.error_response("companion " .. table.concat(ids, ",") .. " is dead", "dead")
+  else
+    M.error_response("Companion not found")
+  end
 end
 
 function M.find_companion(identifier)

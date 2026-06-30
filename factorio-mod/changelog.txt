@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.15.0
+Date: 2026-06-30
+  Features:
+    - Death reporting: a companion whose character entity is gone (e.g. killed by biters) is
+      tracked as DEAD (storage.dead_companions); EVERY command now reports
+      "companion #N is dead" instead of the vague "Companion not found", so the orchestrator /
+      recorder can discard or respawn immediately instead of driving a corpse.
+    - fac_move_to: enemy-base protection -- refuses a destination within 16 tiles of a
+      unit-spawner so the companion never walks into a nest and provokes biters.
+    - fac_companion_spawn clears the dead flag on (re)spawn.
+---------------------------------------------------------------------------------------------------
 Version: 0.14.5
 Date: 2026-06-29
   Bugfixes (PR #2 cubic review):

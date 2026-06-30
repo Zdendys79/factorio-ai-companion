@@ -8,7 +8,7 @@ commands.add_command("fac_resource_list", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s*(%S*)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local filter = args[2] ~= "" and args[2] or nil
     local radius = tonumber(args[3]) or 50
     local pos = c.entity.position
@@ -31,7 +31,7 @@ commands.add_command("fac_resource_mine", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s*(%d*)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local x, y, count = tonumber(args[2]), tonumber(args[3]), tonumber(args[4]) or 1
     local resource_name = args[5] ~= "" and args[5] or nil
     -- Normalize common resource names
@@ -56,7 +56,7 @@ commands.add_command("fac_resource_mine_status", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local status = queues.get_harvest_status(id)
     u.json_response({id = id, status = status})
   end)
@@ -67,7 +67,7 @@ commands.add_command("fac_resource_mine_stop", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local result = queues.stop_harvest(id)
     u.json_response({id = id, stopped = result.stopped, harvested = result.harvested or 0})
   end)
@@ -77,7 +77,7 @@ commands.add_command("fac_resource_nearest", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local name = normalize[args[2]] or args[2]
     local pos = c.entity.position
     local area = {{pos.x - 200, pos.y - 200}, {pos.x + 200, pos.y + 200}}

@@ -6,7 +6,7 @@ commands.add_command("fac_building_can_place", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s+([%d.-]+)%s+([%d.-]+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local name, x, y = args[2], tonumber(args[3]), tonumber(args[4])
     local dir = u.dir_map[tonumber(args[5]) or 0] or defines.direction.north
     if not x or not y then u.error_response("Invalid coordinates"); return end
@@ -23,7 +23,7 @@ commands.add_command("fac_building_place", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s+([%d.-]+)%s+([%d.-]+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local name, x, y = args[2], tonumber(args[3]), tonumber(args[4])
     local dir = u.dir_map[tonumber(args[5]) or 0] or defines.direction.north
     if not x or not y then u.error_response("Invalid coordinates"); return end
@@ -79,7 +79,7 @@ commands.add_command("fac_building_remove", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local name, x, y = args[2], tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{name = name, position = {x=x, y=y}, radius = 1, force = c.entity.force}
@@ -97,7 +97,7 @@ commands.add_command("fac_building_rotate", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local x, y, dir = tonumber(args[2]), tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1}
@@ -117,7 +117,7 @@ commands.add_command("fac_building_info", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local x, y = tonumber(args[2]), tonumber(args[3])
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 2}
@@ -141,7 +141,7 @@ commands.add_command("fac_building_recipe", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local recipe, x, y = args[2], tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, type = "assembling-machine"}
@@ -156,7 +156,7 @@ commands.add_command("fac_building_fuel", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local fuel, amount = args[2], tonumber(args[3]) or 5
     local inv = c.entity.get_inventory(defines.inventory.character_main)
     local have = inv.get_item_count(fuel)
@@ -184,7 +184,7 @@ commands.add_command("fac_building_empty", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)%s*([%d.-]*)%s*([%d.-]*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local item, count = args[2], tonumber(args[3]) or 10
     local pos = (tonumber(args[4]) and tonumber(args[5])) and {x = tonumber(args[4]), y = tonumber(args[5])} or c.entity.position
     -- Extract ONLY from the entity CLOSEST to the target tile (not any in radius): in a
@@ -220,7 +220,7 @@ commands.add_command("fac_building_fill", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)%s*([%d.-]*)%s*([%d.-]*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local item, count = args[2], tonumber(args[3]) or 10
     local pos = (tonumber(args[4]) and tonumber(args[5])) and {x = tonumber(args[4]), y = tonumber(args[5])} or c.entity.position
     local inv = c.entity.get_inventory(defines.inventory.character_main)
@@ -254,7 +254,7 @@ commands.add_command("fac_mine_entity", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local x, y = tonumber(args[2]), tonumber(args[3])
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 3}
@@ -310,7 +310,7 @@ commands.add_command("fac_building_place_start", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s+(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local entity = args[2]
     local x, y = tonumber(args[3]), tonumber(args[4])
     local dir = args[5] ~= "" and defines.direction[args[5]] or defines.direction.north
@@ -324,7 +324,7 @@ commands.add_command("fac_building_place_status", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local status = queues.get_build_status(id)
     u.json_response({id = id, status = status})
   end)

@@ -6,7 +6,7 @@ commands.add_command("fac_item_craft", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local item, count = args[2], tonumber(args[3]) or 1
     local recipe = c.entity.force.recipes[item]
     if not recipe then u.json_response({id = id, error = "Recipe not found"}); return end
@@ -32,7 +32,7 @@ commands.add_command("fac_item_pick", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s*(%S*)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local filter = args[2] ~= "" and args[2] or nil
     local radius = tonumber(args[3]) or 5
     local items = c.entity.surface.find_entities_filtered{type = "item-entity", position = c.entity.position, radius = radius}
@@ -54,7 +54,7 @@ commands.add_command("fac_item_recipes", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local filter = args[2]
     local result = {}
     for name, recipe in pairs(c.entity.force.recipes) do
@@ -79,7 +79,7 @@ commands.add_command("fac_item_craft_start", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local recipe = args[2]
     local count = tonumber(args[3]) or 1
     local result = queues.start_craft(id, recipe, count)
@@ -92,7 +92,7 @@ commands.add_command("fac_item_craft_status", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local status = queues.get_craft_status(id)
     u.json_response({id = id, status = status})
   end)
@@ -102,7 +102,7 @@ commands.add_command("fac_item_craft_stop", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local result = queues.stop_craft(id)
     u.json_response({id = id, stopped = result.stopped, crafted = result.crafted or 0})
   end)

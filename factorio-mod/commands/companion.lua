@@ -45,6 +45,7 @@ commands.add_command("fac_companion_spawn", nil, function(cmd)
       local color = u.get_companion_color(id)
       e.color = color
       storage.companions[id] = {entity = e, color = color, label = u.render_label(e, "#" .. id, color), spawned_tick = game.tick}
+      if storage.dead_companions then storage.dead_companions[id] = nil end  -- (re)spawned -> no longer dead
       game.print("[#" .. id .. " spawned]", u.print_color(color))
       u.json_response({spawned = true, id = id})
     else u.error_response("Failed to spawn") end
@@ -54,7 +55,7 @@ end)
 commands.add_command("fac_companion_disappear", nil, function(cmd)
   u.safe_command(function()
     local id, c = u.find_companion(cmd.parameter)
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local pos, surf = c.entity.position, c.entity.surface
     local dropped = {}
     local inv = c.entity.get_inventory(defines.inventory.character_main)
@@ -81,7 +82,7 @@ end)
 commands.add_command("fac_companion_position", nil, function(cmd)
   u.safe_command(function()
     local id, c = u.find_companion(cmd.parameter)
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local pos, surf = c.entity.position, c.entity.surface
     local nearby = surf.find_entities_filtered{position = pos, radius = 20, limit = 30}
     local summary = {}
@@ -101,7 +102,7 @@ commands.add_command("fac_companion_health", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local e = c.entity
     local r = {id = id, self = {health = e.health, max = e.max_health, pct = math.floor(e.health / e.max_health * 100)}}
     local tgt = args[2] ~= "" and args[2] or nil
@@ -126,7 +127,7 @@ commands.add_command("fac_companion_inventory", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s*([%d.-]*)%s*([%d.-]*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local x, y = tonumber(args[2]), tonumber(args[3])
     if x and y then
       local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 2}
@@ -155,7 +156,7 @@ end)
 commands.add_command("fac_companion_stop_all", nil, function(cmd)
   u.safe_command(function()
     local id, c = u.find_companion(cmd.parameter)
-    if not id then u.error_response("Companion not found"); return end
+    if not id then u.not_found(); return end
     local stopped = {}
     if storage.harvest_queues and storage.harvest_queues[id] then
       storage.harvest_queues[id] = nil
