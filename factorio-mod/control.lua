@@ -8,6 +8,7 @@ local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
 local function init_storage()
   storage.companion_messages = storage.companion_messages or {}
   storage.companions = storage.companions or {}
+  storage.dead_companions = storage.dead_companions or {}
   storage.companion_next_id = storage.companion_next_id or 1
   storage.walking_queues = storage.walking_queues or {}
   storage.context_clear_requests = storage.context_clear_requests or {}
