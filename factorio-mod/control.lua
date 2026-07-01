@@ -1,6 +1,7 @@
 -- AI Companion - Factorio 2.x
 local u = require("commands.init")
 local queues = require("commands.queues")
+local spectate = require("commands.spectate")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -292,10 +293,10 @@ local function process_walking_queues()
           type = {"tree", "simple-entity"}
         }
         for _, obs in ipairs(nearby) do
-          -- clear trees, but SPARE rocks (they yield stone -> destroying = silent resource
-          -- loss); the companion bypasses/pathfinds around the rarer rock obstacles instead.
+          -- MINE trees (wood into inventory), but SPARE rocks (the companion pathfinds around the
+          -- rarer rock obstacles). Never free-destroy -- a character mines, it doesn't vanish things.
           if obs.valid and (obs.type == "tree" or not string.find(obs.name, "rock")) then
-            obs.destroy()
+            obs.mine{inventory = e.get_main_inventory()}
           end
         end
       end
@@ -355,4 +356,5 @@ script.on_nth_tick(5, function(ev)
   guard_tick("build",   queues.tick_build_queues,   ev.tick)
   guard_tick("combat",  queues.tick_combat_queues,  ev.tick)
   guard_tick("walking", process_walking_queues,     ev.tick)
+  guard_tick("spectate", spectate.tick_spectators,  ev.tick)
 end)

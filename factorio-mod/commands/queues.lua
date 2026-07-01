@@ -85,26 +85,25 @@ function M.start_mining_next(cid)
     return false
   end
 
+  -- NATIVE mining, the SAME mechanic a player's pickaxe uses: entity.mine{inventory=...} extracts
+  -- exactly ONE unit into the companion's inventory and decrements the tile's amount by 1; when the
+  -- tile runs out the GAME itself removes it. The character MINES, it never "destroys" -- every unit
+  -- ends up in the inventory, nothing is wasted. (The old code did entity.destroy per unit, which
+  -- nuked whole 6500-unit deposits to take a single lump = a cheat + massive waste.)
+  -- Verified live: mine{inventory=inv} on coal -> amount 261->260, +1 coal.
   while #q.entities > 0 do
-    local entity = table.remove(q.entities, 1)
-    if entity and entity.valid then
-      -- Direct mining: extract products and destroy resource entity
-      local mp = entity.prototype.mineable_properties
-      if mp and mp.minable and mp.products then
-        for _, prod in ipairs(mp.products) do
-          local name = prod.name
-          local amt = math.ceil(prod.amount or (prod.amount_min or 1))
-          local remaining_need = q.target - q.harvested
-          local to_give = math.min(amt, remaining_need)
-          if to_give > 0 then
-            c.entity.insert{name = name, count = to_give}
-            q.harvested = q.harvested + to_give
-          end
-        end
-        entity.destroy{raise_destroy = true}
-        q.current = {entity = nil, done = true}
-        return true
-      end
+    local entity = q.entities[1]
+    if not (entity and entity.valid and entity.type == "resource") then
+      table.remove(q.entities, 1)   -- invalid / non-resource -> skip to next tile
+    else
+      local inv = c.entity.get_main_inventory()
+      local before = inv.get_item_count()
+      entity.mine{inventory = inv}
+      local gained = inv.get_item_count() - before
+      q.harvested = q.harvested + gained
+      if not entity.valid then table.remove(q.entities, 1) end   -- depleted -> game removed it
+      q.current = {entity = entity.valid and entity or nil, done = false}
+      return gained > 0   -- mined a unit this call (false only if inventory is full -> yield)
     end
   end
   return false
@@ -262,7 +261,7 @@ local function find_approach_pos(surf, char_pos, build_pos)
 end
 
 -- Remove trees and small rocks from the entity's collision footprint
-local function clear_build_area(surf, entity_name, position)
+local function clear_build_area(surf, entity_name, position, inv)
   local proto = prototypes.entity[entity_name]
   if not proto or not proto.collision_box then return end
   local bb = proto.collision_box
@@ -272,7 +271,7 @@ local function clear_build_area(surf, entity_name, position)
   }
   local obstacles = surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}
   for _, obs in ipairs(obstacles) do
-    if obs.valid then obs.destroy() end
+    if obs.valid then obs.mine{inventory = inv} end   -- MINE (wood/stone into inventory), not free-destroy
   end
 end
 
@@ -321,7 +320,7 @@ function M.tick_build_queues()
 
     -- CLEARING: remove trees/rocks from build footprint
     if q.state == "clearing" then
-      clear_build_area(surf, q.entity, q.position)
+      clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory())
       q.state = "building"
       q.tick_start = game.tick
       return false
