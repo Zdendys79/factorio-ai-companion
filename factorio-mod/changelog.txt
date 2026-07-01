@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.3
+Date: 2026-07-01
+  Features:
+    - fac_gather <id> <resource> <count> (+ fac_gather_status): the companion now gathers a resource
+      fully on its own -- find the nearest REACHABLE + SAFE patch, walk there, and mine it to the
+      target with native 1-unit mining, hopping to the next patch as tiles deplete. A new gather_queue
+      state machine (find -> approach -> mine), all server-side. Replaces the external find_nearest +
+      go_to + start_harvest + poll orchestration (start of moving control glue into the mod).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.2
 Date: 2026-07-01
   Bugfixes:
