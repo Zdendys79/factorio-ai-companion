@@ -113,6 +113,9 @@ commands.add_command("fac_building_rotate", nil, function(cmd)
     local t
     for _, e in ipairs(es) do if e.valid and e ~= c.entity and e.type ~= "character" and e.rotatable then t = e; break end end
     if not t then u.json_response({id = id, error = "No rotatable entity"}); return end
+    if u.distance(c.entity.position, t.position) > (c.entity.reach_distance or 10) then
+      u.json_response({id = id, error = "Too far"}); return   -- must be in reach to rotate (no action-at-a-distance)
+    end
     if dir then
       t.direction = u.dir_map[dir] or defines.direction.north
     else
@@ -153,6 +156,9 @@ commands.add_command("fac_building_recipe", nil, function(cmd)
     if not id then u.not_found(); return end
     local recipe, x, y = args[2], tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
+    if u.distance(c.entity.position, {x=x, y=y}) > (c.entity.reach_distance or 10) then
+      u.json_response({id = id, error = "Too far"}); return   -- must be in reach to set a recipe
+    end
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, type = "assembling-machine"}
     if #es == 0 then u.json_response({id = id, error = "No machine"}); return end
     if not c.entity.force.recipes[recipe] then u.json_response({id = id, error = "Recipe not found"}); return end
@@ -196,6 +202,9 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     if not id then u.not_found(); return end
     local item, count = args[2], tonumber(args[3]) or 10
     local pos = (tonumber(args[4]) and tonumber(args[5])) and {x = tonumber(args[4]), y = tonumber(args[5])} or c.entity.position
+    if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
+      u.json_response({id = id, error = "Too far"}); return   -- must be in reach to extract (no action-at-a-distance)
+    end
     -- Extract ONLY from the entity CLOSEST to the target tile (not any in radius): in a
     -- tight furnace row, collecting from the wrong furnace mismatches the fed one.
     local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5}
@@ -232,6 +241,9 @@ commands.add_command("fac_building_fill", nil, function(cmd)
     if not id then u.not_found(); return end
     local item, count = args[2], tonumber(args[3]) or 10
     local pos = (tonumber(args[4]) and tonumber(args[5])) and {x = tonumber(args[4]), y = tonumber(args[5])} or c.entity.position
+    if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
+      u.json_response({id = id, error = "Too far"}); return   -- must be in reach to load a machine
+    end
     local inv = c.entity.get_inventory(defines.inventory.character_main)
     local have = inv.get_item_count(item)
     if have == 0 then u.json_response({id = id, error = "No " .. item}); return end

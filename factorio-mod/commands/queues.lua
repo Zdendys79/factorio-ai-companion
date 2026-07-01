@@ -349,13 +349,20 @@ function M.tick_build_queues()
         return true
       end
 
+      -- Re-check the item is STILL in inventory right before placing (it may have been consumed
+      -- during the walk -- crafted away / dropped). Never create a building for free.
+      if c.entity.get_main_inventory().get_item_count(q.entity) < 1 then
+        q.failed = "No " .. q.entity .. " in inventory"
+        return true
+      end
       local placed = surf.create_entity{
         name = q.entity,
         position = q.position,
         direction = q.direction,
         force = c.entity.force
       }
-      if placed then c.entity.remove_item{name = q.entity, count = 1} end
+      -- Only keep the building if a real item was actually consumed; else remove it (no free build).
+      if placed and c.entity.remove_item{name = q.entity, count = 1} < 1 then placed.destroy() end
       return true
     end
 
