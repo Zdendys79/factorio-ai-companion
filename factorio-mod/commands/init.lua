@@ -147,13 +147,12 @@ function M.fire_craft_triggers(force, item_name, crafted)
       if rt and rt.type == "craft-item" then
         local rname = type(rt.item) == "table" and (rt.item.name or rt.item[1]) or rt.item
         if rname == item_name then
-          -- count cumulative production if available; fall back to this craft's count
-          -- (covers count==1 triggers like the lab even if hand-crafts are not tallied).
-          local ok_stats, produced = pcall(function()
-            return force.item_production_statistics.get_input_count(item_name)
-          end)
-          local total = (ok_stats and produced or 0)
-          if total >= (rt.count or 1) or (crafted or 0) >= (rt.count or 1) then
+          -- Only THIS hand-craft counts. Do NOT read item_production_statistics: that is CUMULATIVE
+          -- MACHINE output (plates from furnaces, etc.) and would complete a craft-item trigger from
+          -- production the player never hand-crafted = a cheat. Machine-produced trigger items already
+          -- fire their triggers via the engine; this path only replicates the on_player_crafted_item
+          -- trigger the engine skips for a SCRIPTED companion craft.
+          if (crafted or 0) >= (rt.count or 1) then
             tech.researched = true
             game.print("[companion] crafted " .. item_name ..
               " -> trigger tech researched: " .. tech.name, M.print_color(M.COLORS.system))

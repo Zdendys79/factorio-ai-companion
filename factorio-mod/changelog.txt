@@ -1,5 +1,5 @@
 ---------------------------------------------------------------------------------------------------
-Version: 0.16.0
+Version: 0.16.1
 Date: 2026-07-01
   Bugfixes:
     - Mining no longer cheats. The resource harvest (queues.lua start_mining_next) used to take a
