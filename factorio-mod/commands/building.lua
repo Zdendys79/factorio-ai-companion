@@ -45,12 +45,12 @@ commands.add_command("fac_building_place", nil, function(cmd)
         {x = x + bb.left_top.x - 0.5, y = y + bb.left_top.y - 0.5},
         {x = x + bb.right_bottom.x + 0.5, y = y + bb.right_bottom.y + 0.5}
       }
-      -- companion must not block its own build: step it aside if standing on the footprint
+      -- companion must not block its own build. A character cannot teleport, so REFUSE rather than
+      -- warp aside: the caller (which walked here) must stand OFF the footprint before placing. The
+      -- async build path already walks the companion clear via walking_state before placing.
       if c.entity.position.x >= area[1].x and c.entity.position.x <= area[2].x
          and c.entity.position.y >= area[1].y and c.entity.position.y <= area[2].y then
-        local spot = surf.find_non_colliding_position(c.entity.name,
-          {x = x + bb.right_bottom.x + 2, y = y}, 8, 0.5)
-        if spot then c.entity.teleport(spot) end
+        u.json_response({id = id, error = "companion on build site -- move off first"}); return
       end
       if not can_here() then   -- only clear when something actually blocks placement
         -- lying items: pick up the ACTUAL stack (preserves quality/count); keep if inv full
@@ -60,9 +60,11 @@ commands.add_command("fac_building_place", nil, function(cmd)
             if moved >= it.stack.count then it.destroy() end
           end
         end
-        -- trees / rocks (simple-entity) blocking the footprint
+        -- trees / rocks (simple-entity) blocking the footprint: MINE them (wood/stone into the
+        -- companion inventory), never free-destroy. If the inventory is full, mine{} leaves the
+        -- obstacle intact -- placement then fails cleanly instead of magically clearing the map.
         for _, o in ipairs(surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}) do
-          if o.valid then o.destroy() end
+          if o.valid then o.mine{inventory = c.entity.get_main_inventory()} end
         end
       end
     end
@@ -86,10 +88,17 @@ commands.add_command("fac_building_remove", nil, function(cmd)
     if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
     local t = es[1]
     if u.distance(c.entity.position, t.position) > 10 then u.json_response({id = id, error = "Too far"}); return end
-    if t.can_be_destroyed() then
-      c.entity.insert{name = name, count = 1}; t.destroy{raise_destroy = false}
+    -- MINE the building (native): its real item + contents go into the companion inventory and the
+    -- game removes it. Never fabricate the item + free-destroy (that minted an item from nothing and
+    -- discarded the building's contents). If the inventory is full, mine{} leaves the building intact.
+    local inv = c.entity.get_main_inventory()
+    local before = inv.get_item_count()
+    t.mine{inventory = inv}
+    if t.valid and inv.get_item_count() == before then
+      u.json_response({id = id, error = "Cannot remove (inventory full?)"})
+    else
       u.json_response({id = id, removed = true, entity = name})
-    else u.json_response({id = id, error = "Cannot remove"}) end
+    end
   end)
 end)
 
@@ -268,41 +277,23 @@ commands.add_command("fac_mine_entity", nil, function(cmd)
     if not target then u.json_response({id = id, error = "No entity found"}); return end
     if u.distance(c.entity.position, target.position) > 15 then u.json_response({id = id, error = "Too far"}); return end
     local entity_name = target.name
-    local items_received = {}
-    -- collect the entity's inventory; insert the real stack (preserves quality) and respect
-    -- the insert return value so nothing is silently lost when the companion inventory is full
-    for inv_id = 1, 10 do
-      local inv = target.get_inventory(inv_id)
-      if inv then
-        for i = 1, #inv do
-          local stack = inv[i]
-          if stack and stack.valid_for_read then
-            local moved = c.entity.insert(stack)
-            if moved > 0 then items_received[stack.name] = (items_received[stack.name] or 0) + moved end
-          end
-        end
-      end
+    -- NATIVE mining (real game mechanic): mine{} yields the entity's products (tree->wood,
+    -- rock->stone, building->its item) AND its inventory contents into the companion inventory, then
+    -- removes the entity -- exactly like hand-mining. If the companion inventory can't hold the
+    -- result, mine{} returns false and the entity is LEFT INTACT: no silent item loss, no
+    -- destroy-without-return, no fabricating items. (Never bypass game mechanics -- no cheating.)
+    local inv = c.entity.get_main_inventory()
+    local before = inv.get_item_count()
+    -- NATIVE mining: tree->wood, rock->stone, building->its item + contents, all into the inventory,
+    -- then the game removes the entity. If the inventory can't hold the result, mine{} leaves the
+    -- entity INTACT (no item loss, no destroy-without-return). The character MINES, never "destroys".
+    target.mine{inventory = inv}
+    local gained = inv.get_item_count() - before
+    if target.valid and gained == 0 then
+      u.json_response({id = id, error = "Could not mine (inventory full?)", entity = entity_name})
+      return
     end
-    -- mineable products: honor amount / amount_min..max and probability (skip uncertain drops)
-    if target.prototype and target.prototype.mineable_properties then
-      local mp = target.prototype.mineable_properties
-      if mp.minable and mp.products then
-        for _, prod in ipairs(mp.products) do
-          if prod.name then
-            local amt = prod.amount
-            if not amt then
-              amt = ((prod.probability or 1) >= 1) and (prod.amount_min or 1) or 0
-            end
-            if amt and amt > 0 then
-              local moved = c.entity.insert{name = prod.name, count = amt}
-              if moved > 0 then items_received[prod.name] = (items_received[prod.name] or 0) + moved end
-            end
-          end
-        end
-      end
-    end
-    target.destroy{raise_destroy = false}
-    u.json_response({id = id, mined = true, entity = entity_name, items = items_received})
+    u.json_response({id = id, mined = true, entity = entity_name, items_gained = gained})
   end)
 end)
 

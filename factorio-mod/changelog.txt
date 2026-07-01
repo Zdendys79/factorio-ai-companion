@@ -1,4 +1,20 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.0
+Date: 2026-07-01
+  Bugfixes:
+    - Mining no longer cheats. The resource harvest (queues.lua start_mining_next) used to take a
+      single lump and then entity.destroy the WHOLE ore tile (up to thousands of units) -- nuking
+      deposits and wasting everything but the one lump. It now uses native entity.mine{inventory=...}:
+      exactly ONE unit into the companion inventory, the tile's amount decrements by one, and the game
+      removes the tile only when it is fully mined out. The character MINES, it never destroys.
+    - fac_mine_entity (trees/rocks/buildings) likewise switched to native entity.mine{}: wood from
+      trees, stone from rocks, the building's item + contents into the inventory. If the inventory is
+      full the entity is LEFT INTACT (no silent item loss, no destroy-without-return).
+  Features:
+    - fac_spectate <player> <companion> and fac_spectate_stop <player>: put a connected player into the
+      native spectator controller and auto-follow a companion's camera every tick (server-side, no
+      external teleport loop). Lets a human watch the AI play without a character and without interfering.
+---------------------------------------------------------------------------------------------------
 Version: 0.15.0
 Date: 2026-06-30
   Features:
