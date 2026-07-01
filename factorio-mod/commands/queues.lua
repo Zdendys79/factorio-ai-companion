@@ -38,6 +38,7 @@ end
 
 function M.init()
   storage.harvest_queues = storage.harvest_queues or {}
+  storage.gather_queues = storage.gather_queues or {}
   storage.craft_queues = storage.craft_queues or {}
   storage.build_queues = storage.build_queues or {}
   storage.combat_queues = storage.combat_queues or {}
@@ -157,6 +158,78 @@ function M.stop_harvest(cid)
   local harvested = q.harvested
   storage.harvest_queues[cid] = nil
   return {stopped = true, harvested = harvested}
+end
+
+-- ============ GATHER (autonomous: find reachable patch -> walk -> mine to target) ============
+-- Self-contained composite: the mod finds the nearest REACHABLE + SAFE patch of `resource`, walks the
+-- companion within reach, mines it ONE unit per MIN_ACTION_TICKS (native mine{} -> 1 unit, amount--,
+-- game removes depleted tile), and moves to the next patch until the inventory holds `count` of the
+-- mined product (or no reachable patch remains). Replaces the Python go_to + start_harvest + poll glue.
+local function find_reachable_resource(surf, from, resource)
+  local ores = surf.find_entities_filtered{name = resource, position = from, radius = 400}
+  table.sort(ores, function(a, b) return u.distance(a.position, from) < u.distance(b.position, from) end)
+  for _, e in ipairs(ores) do
+    if e.valid and (e.amount or 0) > 0
+       and surf.count_entities_filtered{type = "unit-spawner", position = e.position, radius = 20} == 0
+       and surf.find_non_colliding_position("character", e.position, 2.5, 0.5) then
+      return e
+    end
+  end
+  return nil
+end
+
+function M.start_gather(cid, resource, count)
+  local c = valid_companion(cid)
+  if not c then return {error = "Invalid companion"} end
+  storage.gather_queues[cid] = {resource = resource, target = count, state = "find", last_mine_tick = 0}
+  return {started = true, resource = resource, target = count}
+end
+
+function M.tick_gather_queues()
+  process_queue("gather_queues", function(cid, q, c)
+    local surf = c.entity.surface
+    local inv = c.entity.get_main_inventory()
+
+    if q.state == "find" then
+      local e = find_reachable_resource(surf, c.entity.position, q.resource)
+      if not e then return true end   -- no reachable patch -> done, return what we have
+      q.entity_pos = {x = e.position.x, y = e.position.y}
+      q.product = e.prototype.mineable_properties.products[1].name
+      if not q.start_count then q.start_count = inv.get_item_count(q.product) end
+      storage.walking_queues[cid] = {target = surf.find_non_colliding_position("character", e.position, 3, 0.5) or e.position}
+      q.state = "approach"
+      return false
+    end
+
+    if q.state == "approach" then
+      if u.distance(c.entity.position, q.entity_pos) <= (c.entity.reach_distance or 10) then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.state = "mine"
+      end
+      return false
+    end
+
+    if q.state == "mine" then
+      if inv.get_item_count(q.product) - (q.start_count or 0) >= q.target then return true end   -- target met
+      if game.tick - (q.last_mine_tick or 0) < MIN_ACTION_TICKS then return false end
+      q.last_mine_tick = game.tick
+      local res = surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 1}[1]
+      if not (res and res.valid) then q.state = "find"; return false end   -- depleted -> next patch
+      if u.distance(c.entity.position, res.position) > (c.entity.reach_distance or 10) then q.state = "find"; return false end
+      res.mine{inventory = inv}   -- native 1-unit mine (no cheat)
+      return false
+    end
+    return true
+  end)
+end
+
+function M.get_gather_status(cid)
+  local q = storage.gather_queues[cid]
+  if not q then return {active = false} end
+  local c = valid_companion(cid)
+  local have = (c and q.product) and c.entity.get_main_inventory().get_item_count(q.product) - (q.start_count or 0) or 0
+  return {active = true, resource = q.resource, target = q.target, gathered = have, state = q.state}
 end
 
 -- ============ CRAFT ============

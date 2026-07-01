@@ -352,6 +352,7 @@ script.on_nth_tick(5, function(ev)
   if ev.tick % 30 == 0 then update_companion_markers() end
   -- Process all tick-based queues (each guarded so one failure can't kill the rest)
   guard_tick("harvest", queues.tick_harvest_queues, ev.tick)
+  guard_tick("gather",  queues.tick_gather_queues,  ev.tick)
   guard_tick("craft",   queues.tick_craft_queues,   ev.tick)
   guard_tick("build",   queues.tick_build_queues,   ev.tick)
   guard_tick("combat",  queues.tick_combat_queues,  ev.tick)

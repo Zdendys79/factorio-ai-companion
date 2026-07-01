@@ -73,6 +73,33 @@ commands.add_command("fac_resource_mine_stop", nil, function(cmd)
   end)
 end)
 
+-- AUTONOMOUS gather: the mod itself finds the nearest REACHABLE + SAFE patch, walks the companion
+-- there, and mines to `count` (native 1-unit mining), moving to the next patch as tiles deplete.
+-- Replaces the Python find_nearest + go_to + start_harvest + poll glue -- "what the mod can do itself".
+-- Usage: /fac_gather <id> <resource> <count>  ; poll /fac_gather_status <id>
+commands.add_command("fac_gather", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s+(%S+)%s+(%d+)$", cmd.parameter)
+    local id, c = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local resource = args[2] and (normalize[args[2]] or args[2]) or nil
+    local count = tonumber(args[3])
+    if not resource or not count then u.error_response("Usage: fac_gather <id> <resource> <count>"); return end
+    local result = queues.start_gather(id, resource, count)
+    if result.error then u.json_response({id = id, error = result.error})
+    else u.json_response({id = id, gathering = true, resource = resource, target = count}) end
+  end)
+end)
+
+commands.add_command("fac_gather_status", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)$", cmd.parameter)
+    local id = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    u.json_response({id = id, status = queues.get_gather_status(id)})
+  end)
+end)
+
 commands.add_command("fac_resource_nearest", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)$", cmd.parameter)
