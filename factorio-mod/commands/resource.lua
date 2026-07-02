@@ -100,6 +100,32 @@ commands.add_command("fac_gather_status", nil, function(cmd)
   end)
 end)
 
+-- FAC_FUEL_GROUP: autonomous "walk to each burner in range and top up its fuel" composite.
+-- Replaces the Python go_to + fuel + poll loop over a hardcoded machine list ("what the mod can do
+-- itself"). Consumes REAL coal from the companion inventory (native insert, no cheat).
+-- Usage: /fac_fuel_group <id> [per] [radius]  ; poll /fac_fuel_group_status <id>
+commands.add_command("fac_fuel_group", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s*(%d*)%s*(%d*)$", cmd.parameter)
+    local id, c = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local per = tonumber(args[2]) or 20
+    local radius = tonumber(args[3]) or 200
+    local result = queues.start_fuel_group(id, per, radius)
+    if result.error then u.json_response({id = id, error = result.error})
+    else u.json_response({id = id, fueling = true, per = per, radius = radius}) end
+  end)
+end)
+
+commands.add_command("fac_fuel_group_status", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)$", cmd.parameter)
+    local id = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    u.json_response({id = id, status = queues.get_fuel_status(id)})
+  end)
+end)
+
 commands.add_command("fac_resource_nearest", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)$", cmd.parameter)

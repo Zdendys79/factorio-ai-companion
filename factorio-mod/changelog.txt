@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.4
+Date: 2026-07-02
+  Features:
+    - fac_fuel_group <id> [per] [radius] (+ fac_fuel_group_status): the companion now tops up EVERY
+      burner (furnace/boiler/burner-inserter/burner-drill) within range fully on its own -- walks to
+      each nearest-first and inserts coal from its OWN inventory (native insert, real coal consumed).
+      Replaces the external go_to + fuel loop over a hardcoded machine-position list.
+  Bugfixes:
+    - fac_gather could hang its full timeout mining 0 units when the nearest patch of a resource was
+      STANDABLE but not actually PATH-REACHABLE (e.g. across water/cliffs) -- the companion would walk
+      toward it forever without arriving. Added a distance-scaled approach deadline: an unreachable
+      patch is now blacklisted and the next-nearest patch tried instead, so gather always terminates
+      productively instead of stalling for the full timeout.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.3
 Date: 2026-07-01
   Features:

@@ -39,6 +39,7 @@ end
 function M.init()
   storage.harvest_queues = storage.harvest_queues or {}
   storage.gather_queues = storage.gather_queues or {}
+  storage.fuel_queues = storage.fuel_queues or {}
   storage.craft_queues = storage.craft_queues or {}
   storage.build_queues = storage.build_queues or {}
   storage.combat_queues = storage.combat_queues or {}
@@ -165,11 +166,15 @@ end
 -- companion within reach, mines it ONE unit per MIN_ACTION_TICKS (native mine{} -> 1 unit, amount--,
 -- game removes depleted tile), and moves to the next patch until the inventory holds `count` of the
 -- mined product (or no reachable patch remains). Replaces the Python go_to + start_harvest + poll glue.
-local function find_reachable_resource(surf, from, resource)
+-- shared tile-key helper (gather blacklist of unreachable patches + fuel-group visited set)
+local function _tile_key(pos) return math.floor(pos.x) .. "," .. math.floor(pos.y) end
+
+local function find_reachable_resource(surf, from, resource, blacklist)
   local ores = surf.find_entities_filtered{name = resource, position = from, radius = 400}
   table.sort(ores, function(a, b) return u.distance(a.position, from) < u.distance(b.position, from) end)
   for _, e in ipairs(ores) do
     if e.valid and (e.amount or 0) > 0
+       and not (blacklist and blacklist[_tile_key(e.position)])
        and surf.count_entities_filtered{type = "unit-spawner", position = e.position, radius = 20} == 0
        and surf.find_non_colliding_position("character", e.position, 2.5, 0.5) then
       return e
@@ -191,11 +196,15 @@ function M.tick_gather_queues()
     local inv = c.entity.get_main_inventory()
 
     if q.state == "find" then
-      local e = find_reachable_resource(surf, c.entity.position, q.resource)
-      if not e then return true end   -- no reachable patch -> done, return what we have
+      local e = find_reachable_resource(surf, c.entity.position, q.resource, q.blacklist)
+      if not e then return true end   -- no reachable patch left -> done, return what we have
       q.entity_pos = {x = e.position.x, y = e.position.y}
       q.product = e.prototype.mineable_properties.products[1].name
       if not q.start_count then q.start_count = inv.get_item_count(q.product) end
+      -- distance-scaled deadline: 25 ticks/tile (~3.7x the expected walk) so a legit long walk is
+      -- never aborted, but a companion STUCK on an obstacle (standable != path-reachable) bails fast
+      -- instead of hanging the whole 180s (the "3 min and 0 coal" bug).
+      q.approach_deadline = game.tick + math.max(1800, math.floor(u.distance(c.entity.position, e.position) * 25))
       storage.walking_queues[cid] = {target = surf.find_non_colliding_position("character", e.position, 3, 0.5) or e.position}
       q.state = "approach"
       return false
@@ -206,6 +215,12 @@ function M.tick_gather_queues()
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "mine"
+      elseif game.tick >= (q.approach_deadline or 0) then   -- cannot reach this patch -> blacklist + try next
+        q.blacklist = q.blacklist or {}
+        q.blacklist[_tile_key(q.entity_pos)] = true
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.state = "find"
       end
       return false
     end
@@ -230,6 +245,95 @@ function M.get_gather_status(cid)
   local c = valid_companion(cid)
   local have = (c and q.product) and c.entity.get_main_inventory().get_item_count(q.product) - (q.start_count or 0) or 0
   return {active = true, resource = q.resource, target = q.target, gathered = have, state = q.state}
+end
+
+-- ============ FUEL GROUP (autonomous: walk to each burner in range -> top up fuel) ============
+-- Self-contained composite: the mod finds every burner machine (one with a fuel inventory) of the
+-- FUEL_TYPES within `radius` of the companion, walks to each (nearest-first, once per run), and tops
+-- its fuel inventory up to `per` coal FROM THE COMPANION'S OWN INVENTORY (native insert -> consumes
+-- real coal, no cheat). Replaces the Python go_to + fuel + poll loop over a hardcoded machine list.
+-- Terminates when no unvisited burner remains OR the companion runs out of coal.
+-- Valid entity TYPES (not names): burner-inserter's type is "inserter"; electric inserters/drills
+-- return nil get_fuel_inventory() and are skipped, so filtering by type + fuel-inv is exact.
+local FUEL_TYPES = {"furnace", "boiler", "inserter", "mining-drill"}
+local APPROACH_TIMEOUT = 900   -- ticks (~15s@60ups): give up on an unreachable burner, skip it
+-- _tile_key is defined once above (shared with the gather blacklist).
+
+local function find_next_burner(surf, from, radius, per, visited)
+  local es = surf.find_entities_filtered{position = from, radius = radius, type = FUEL_TYPES}
+  table.sort(es, function(a, b) return u.distance(a.position, from) < u.distance(b.position, from) end)
+  for _, e in ipairs(es) do
+    if e.valid and not visited[_tile_key(e.position)] then
+      local fi = e.get_fuel_inventory()
+      if fi and fi.get_item_count("coal") < per then return e end   -- burner (electric = nil fi) that needs topping up
+    end
+  end
+  return nil
+end
+
+function M.start_fuel_group(cid, per, radius)
+  local c = valid_companion(cid)
+  if not c then return {error = "Invalid companion"} end
+  storage.fuel_queues[cid] = {per = per or 20, radius = radius or 200, state = "find", visited = {}, fueled = 0, machines = 0}
+  return {started = true, per = per or 20, radius = radius or 200}
+end
+
+function M.tick_fuel_queues()
+  process_queue("fuel_queues", function(cid, q, c)
+    local surf = c.entity.surface
+    local inv = c.entity.get_main_inventory()
+    if inv.get_item_count("coal") <= 0 then return true end   -- out of coal -> done
+
+    if q.state == "find" then
+      local e = find_next_burner(surf, c.entity.position, q.radius, q.per, q.visited)
+      if not e then return true end                            -- nothing left to fuel -> done
+      q.target_pos = {x = e.position.x, y = e.position.y}
+      q.target_key = _tile_key(e.position)
+      q.approach_deadline = game.tick + APPROACH_TIMEOUT
+      storage.walking_queues[cid] = {target = surf.find_non_colliding_position("character", e.position, 2, 0.5) or e.position}
+      q.state = "approach"
+      return false
+    end
+
+    if q.state == "approach" then
+      if u.distance(c.entity.position, q.target_pos) <= (c.entity.reach_distance or 10) then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.state = "fuel"
+      elseif game.tick >= (q.approach_deadline or 0) then    -- unreachable -> skip this burner
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.visited[q.target_key] = true
+        q.state = "find"
+      end
+      return false
+    end
+
+    if q.state == "fuel" then
+      q.visited[q.target_key] = true                          -- mark BEFORE fueling: at-most-once per run
+      local e = surf.find_entities_filtered{position = q.target_pos, radius = 1, type = FUEL_TYPES}[1]
+      if e and e.valid then
+        local fi = e.get_fuel_inventory()
+        local have = inv.get_item_count("coal")
+        if fi and have > 0 then
+          local want = q.per - fi.get_item_count("coal")
+          if want > 0 then
+            local r = fi.insert{name = "coal", count = math.min(want, have)}
+            if r > 0 then inv.remove{name = "coal", count = r}; q.fueled = q.fueled + r; q.machines = q.machines + 1 end
+          end
+        end
+      end
+      q.state = "find"
+      return false
+    end
+    return true
+  end)
+end
+
+function M.get_fuel_status(cid)
+  local q = storage.fuel_queues[cid]
+  if not q then return {active = false} end
+  return {active = true, state = q.state, fueled = q.fueled, machines = q.machines}
 end
 
 -- ============ CRAFT ============
