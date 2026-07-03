@@ -10,6 +10,13 @@ local BUILD_TICKS = 60
 local ATTACK_COOLDOWN = 15
 local ATTACK_RANGE = 6
 local MINING_RANGE = 5
+-- Real mining requires standing basically ON/adjacent to the resource -- confirmed live
+-- 2026-07-03 (Zdendys, watching: "Stojí postava přímo na uhlí! nic nejde dolovat na dálku"):
+-- unlike build/reach_distance (~10) or MINING_RANGE (5, used elsewhere as a generous "still
+-- close enough to keep going" bound), native mining_state silently does nothing at a genuine
+-- multi-tile distance even with `selected` correctly set -- it only actually starts once the
+-- companion is essentially touching the resource tile.
+local MINE_ADJACENT_RANGE = 2
 
 -- Validate companion exists and is valid
 local function valid_companion(id)
@@ -248,13 +255,16 @@ function M.tick_gather_queues()
       -- never aborted, but a companion STUCK on an obstacle (standable != path-reachable) bails fast
       -- instead of hanging the whole 180s (the "3 min and 0 coal" bug).
       q.approach_deadline = game.tick + math.max(1800, math.floor(u.distance(c.entity.position, e.position) * 25))
-      storage.walking_queues[cid] = {target = surf.find_non_colliding_position("character", e.position, 3, 0.5) or e.position}
+      -- radius=1 (not 3): walk essentially ONTO the resource tile, not just "in the
+      -- neighborhood" -- see MINE_ADJACENT_RANGE comment above (native mining needs real
+      -- adjacency, confirmed live 2026-07-03).
+      storage.walking_queues[cid] = {target = surf.find_non_colliding_position("character", e.position, 1, 0.5) or e.position}
       q.state = "approach"
       return false
     end
 
     if q.state == "approach" then
-      if u.distance(c.entity.position, q.entity_pos) <= (c.entity.reach_distance or 10) then
+      if u.distance(c.entity.position, q.entity_pos) <= MINE_ADJACENT_RANGE then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "mine"
@@ -273,26 +283,55 @@ function M.tick_gather_queues()
         c.entity.mining_state = {mining = false}
         return true   -- target met
       end
-      local res = surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 1}[1]
-      if not (res and res.valid) then
+      -- Pick the NEAREST resource entity to the companion's ACTUAL position, not just any
+      -- entity within radius=1 of the originally-recorded q.entity_pos: a resource patch is
+      -- many individually-tiled entities ~1 tile apart, so a radius=1 query around q.entity_pos
+      -- can catch 2+ neighboring tiles, and an unsorted [1] pick can be the WRONG (slightly
+      -- farther) one -- close enough to have satisfied the "approach" exit check against
+      -- q.entity_pos, yet just over MINE_ADJACENT_RANGE from where the companion is actually
+      -- standing. Live-caught 2026-07-03: state flipped mine->find within one tick, mining_state
+      -- never even attempted (selected stayed nil), even though the companion visibly reached
+      -- and stopped right next to the coal.
+      local candidates = surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 2}
+      local res, best_d = nil, 1e18
+      for _, e in ipairs(candidates) do
+        if e.valid then
+          local d = u.distance(c.entity.position, e.position)
+          if d < best_d then best_d, res = d, e end
+        end
+      end
+      if not res then
         c.entity.mining_state = {mining = false}
         q.state = "find"; return false   -- depleted -> next patch
       end
-      if u.distance(c.entity.position, res.position) > (c.entity.reach_distance or 10) then
+      if best_d > MINE_ADJACENT_RANGE then
         c.entity.mining_state = {mining = false}
         q.state = "find"; return false
       end
       -- NATIVE mining (Zdendys 2026-07-03: "pouzit proste nativni schopnosti postavy"):
       -- setting mining_state lets the GAME ENGINE run the whole cycle -- same speed,
       -- animation, and extraction as a real player holding the mine button. No more manual
-      -- res.mine{} timer call; just keep pointing mining_state at the current resource tile
-      -- (harmless to re-set every tick) and let the engine do the rest.
-      -- `selected` must be (re-)set too: mining_state.position only applies to TILE mining
+      -- res.mine{} timer call; just let the engine run its own mining_time countdown.
+      -- `selected` must be set too: mining_state.position only applies to TILE mining
       -- (landfill/cliffs) -- an ore ENTITY is only mined via the currently `selected` entity,
       -- else mining_state=true silently mines nothing (live-caught 2026-07-03: "0/N harvested"
       -- forever, no error).
-      c.entity.selected = res
-      c.entity.mining_state = {mining = true, position = res.position}
+      --
+      -- CRITICAL: do NOT reassign mining_state every tick once it's already active. Live-caught
+      -- 2026-07-03 (test_gather_diag.py): re-setting mining_state = {mining=true,...} on EVERY
+      -- tick (as the old comment here claimed was "harmless") restarts the engine's per-resource
+      -- mining_time countdown each time, so the swing NEVER completes -- state sat at "mine" with
+      -- gathered=0 for 36s+ straight, companion stationary the whole time. A real player only
+      -- sends the mine-button-down event ONCE and holds it; we now do the same -- only assign
+      -- when the engine reports it isn't already mining (a fresh read of mining_state.mining
+      -- each tick, not a cached value, so this correctly resumes if the engine ever stops it,
+      -- e.g. after the target changes).
+      if c.entity.selected ~= res then
+        c.entity.selected = res
+      end
+      if not c.entity.mining_state.mining then
+        c.entity.mining_state = {mining = true, position = res.position}
+      end
       return false
     end
     return true
