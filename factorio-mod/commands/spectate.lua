@@ -20,7 +20,10 @@ commands.add_command("fac_spectate", nil, function(cmd)
     p.set_controller{type = defines.controllers.spectator}
     storage.spectators = storage.spectators or {}
     storage.spectators[p.index] = id
-    if c.entity and c.entity.valid then p.teleport(c.entity.position, c.entity.surface) end
+    if c.entity and c.entity.valid then
+      p.teleport(c.entity.position, c.entity.surface)   -- one-time jump into the scene
+      p.centered_on = c.entity                          -- native smooth follow (engine-interpolated)
+    end
     u.json_response({spectating = true, player = pname, companion = id})
   end)
 end)
@@ -37,7 +40,12 @@ commands.add_command("fac_spectate_stop", nil, function(cmd)
   end)
 end)
 
--- Called from control.lua's on_nth_tick: keep each spectator's camera centered on its companion.
+-- Called every tick from control.lua: keep each spectator's camera on its companion. Re-asserting
+-- centered_on every tick used to be a per-tick p.teleport() -- that snaps the camera to a new exact
+-- position 60x/sec with NO interpolation between snaps, which reads as visible jitter/stutter
+-- ("obraz poskakuje" -- live feedback). p.centered_on instead hands the entity reference to the
+-- ENGINE, which interpolates the camera smoothly frame-by-frame as the companion moves; we only need
+-- to (re)assign it when it actually changes (companion respawned -> new entity) or was lost.
 -- Auto-clears the entry if the player left, un-spectated, or the companion is gone.
 function M.tick_spectators()
   if not storage.spectators then return end
@@ -48,7 +56,7 @@ function M.tick_spectators()
     else
       local c = u.get_companion(cid)
       if c and c.entity and c.entity.valid then
-        p.teleport(c.entity.position, c.entity.surface)
+        if p.centered_on ~= c.entity then p.centered_on = c.entity end
       end
     end
   end

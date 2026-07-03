@@ -249,21 +249,27 @@ end
 
 -- ============ FUEL GROUP (autonomous: walk to each burner in range -> top up fuel) ============
 -- Self-contained composite: the mod finds every burner machine (one with a fuel inventory) of the
--- FUEL_TYPES within `radius` of the companion, walks to each (nearest-first, once per run), and tops
--- its fuel inventory up to `per` coal FROM THE COMPANION'S OWN INVENTORY (native insert -> consumes
--- real coal, no cheat). Replaces the Python go_to + fuel + poll loop over a hardcoded machine list.
--- Terminates when no unvisited burner remains OR the companion runs out of coal.
+-- FUEL_TYPES within `radius` of the companion, walks to each (nearest-first), and tops it up FROM
+-- THE COMPANION'S OWN INVENTORY (native insert -> consumes real coal, no cheat). Replaces the Python
+-- go_to + fuel + poll loop over a hardcoded machine list.
+-- ROUND-ROBIN, not greedy: with scarce coal, filling burner #1 to `per` in one visit can exhaust the
+-- WHOLE supply before burner #2 is ever tried (the top-of-tick "out of coal -> done" check fires
+-- first) -- observed live as "only the first furnace gets fed". Each burner is visited AT MOST ONCE
+-- per round (tracked in `served`, reset when a round completes); a burner still short after being
+-- served waits for the NEXT round, so every reachable burner gets a turn before any one is topped off
+-- twice, spreading a limited supply evenly instead of draining it on whichever is nearest.
 -- Valid entity TYPES (not names): burner-inserter's type is "inserter"; electric inserters/drills
 -- return nil get_fuel_inventory() and are skipped, so filtering by type + fuel-inv is exact.
 local FUEL_TYPES = {"furnace", "boiler", "inserter", "mining-drill"}
 local APPROACH_TIMEOUT = 900   -- ticks (~15s@60ups): give up on an unreachable burner, skip it
 -- _tile_key is defined once above (shared with the gather blacklist).
 
-local function find_next_burner(surf, from, radius, per, visited)
+local function find_next_burner(surf, from, radius, per, blacklist, served)
   local es = surf.find_entities_filtered{position = from, radius = radius, type = FUEL_TYPES}
   table.sort(es, function(a, b) return u.distance(a.position, from) < u.distance(b.position, from) end)
   for _, e in ipairs(es) do
-    if e.valid and not visited[_tile_key(e.position)] then
+    local key = _tile_key(e.position)
+    if e.valid and not blacklist[key] and not served[key] then
       local fi = e.get_fuel_inventory()
       if fi and fi.get_item_count("coal") < per then return e end   -- burner (electric = nil fi) that needs topping up
     end
@@ -274,7 +280,8 @@ end
 function M.start_fuel_group(cid, per, radius)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
-  storage.fuel_queues[cid] = {per = per or 20, radius = radius or 200, state = "find", visited = {}, fueled = 0, machines = 0}
+  storage.fuel_queues[cid] = {per = per or 20, radius = radius or 200, state = "find",
+                              blacklist = {}, served = {}, fueled = 0, machines = 0}
   return {started = true, per = per or 20, radius = radius or 200}
 end
 
@@ -282,11 +289,22 @@ function M.tick_fuel_queues()
   process_queue("fuel_queues", function(cid, q, c)
     local surf = c.entity.surface
     local inv = c.entity.get_main_inventory()
-    if inv.get_item_count("coal") <= 0 then return true end   -- out of coal -> done
+
+    -- TERMINAL: freeze here until get_fuel_status consumes+clears this entry -- same fix as the
+    -- build queue: deleting the entry the instant it's done meant a Python poll a moment later saw
+    -- plain "active:false" with NO fueled/machines counts (observed live: real coal WAS split across
+    -- both furnaces, but the reported result said "fueled:0, machines:0" because the run finished
+    -- inside the first 2s poll interval, before Python ever saw an in-progress snapshot).
+    if q.state == "done" then return false end
+
+    if inv.get_item_count("coal") <= 0 then q.state = "done"; return false end   -- out of coal -> done
 
     if q.state == "find" then
-      local e = find_next_burner(surf, c.entity.position, q.radius, q.per, q.visited)
-      if not e then return true end                            -- nothing left to fuel -> done
+      local e = find_next_burner(surf, c.entity.position, q.radius, q.per, q.blacklist, q.served)
+      if not e then
+        if next(q.served) then q.served = {}; return false end   -- round complete, some still need more -> new round
+        q.state = "done"; return false                           -- truly nothing left to fuel -> done
+      end
       q.target_pos = {x = e.position.x, y = e.position.y}
       q.target_key = _tile_key(e.position)
       q.approach_deadline = game.tick + APPROACH_TIMEOUT
@@ -300,17 +318,17 @@ function M.tick_fuel_queues()
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "fuel"
-      elseif game.tick >= (q.approach_deadline or 0) then    -- unreachable -> skip this burner
+      elseif game.tick >= (q.approach_deadline or 0) then    -- unreachable -> skip PERMANENTLY (every round)
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
-        q.visited[q.target_key] = true
+        q.blacklist[q.target_key] = true
         q.state = "find"
       end
       return false
     end
 
     if q.state == "fuel" then
-      q.visited[q.target_key] = true                          -- mark BEFORE fueling: at-most-once per run
+      q.served[q.target_key] = true                           -- mark BEFORE fueling: at-most-once per ROUND
       local e = surf.find_entities_filtered{position = q.target_pos, radius = 1, type = FUEL_TYPES}[1]
       if e and e.valid then
         local fi = e.get_fuel_inventory()
@@ -326,13 +344,18 @@ function M.tick_fuel_queues()
       q.state = "find"
       return false
     end
-    return true
+    q.state = "done"
+    return false
   end)
 end
 
 function M.get_fuel_status(cid)
   local q = storage.fuel_queues[cid]
   if not q then return {active = false} end
+  if q.state == "done" then
+    storage.fuel_queues[cid] = nil
+    return {active = false, fueled = q.fueled, machines = q.machines}
+  end
   return {active = true, state = q.state, fueled = q.fueled, machines = q.machines}
 end
 
@@ -485,6 +508,14 @@ function M.tick_build_queues()
     local surf = c.entity.surface
     local reach = c.entity.build_distance or 10
 
+    -- TERMINAL: sit here (do nothing more) until get_build_status consumes+clears this entry.
+    -- Returning true immediately on failure used to delete the queue in the SAME tick it was set,
+    -- so a Python poll a moment later saw plain "active:false" -- indistinguishable from success
+    -- (place_smart then reported {"placed": true} for a build that never happened; the entity was
+    -- never created, e.g. collision or item consumed mid-walk). Now the failure reason survives
+    -- until it is actually read.
+    if q.state == "done" or q.state == "failed" then return false end
+
     -- APPROACHING: wait until character is within build reach of target
     if q.state == "approaching" then
       if u.distance(c.entity.position, q.position) <= reach then
@@ -523,14 +554,16 @@ function M.tick_build_queues()
       if not surf.can_place_entity{name = q.entity, position = q.position,
                                    direction = q.direction, force = c.entity.force} then
         q.failed = "Cannot place (collision)"
-        return true
+        q.state = "failed"
+        return false
       end
 
       -- Re-check the item is STILL in inventory right before placing (it may have been consumed
       -- during the walk -- crafted away / dropped). Never create a building for free.
       if c.entity.get_main_inventory().get_item_count(q.entity) < 1 then
         q.failed = "No " .. q.entity .. " in inventory"
-        return true
+        q.state = "failed"
+        return false
       end
       local placed = surf.create_entity{
         name = q.entity,
@@ -540,7 +573,9 @@ function M.tick_build_queues()
       }
       -- Only keep the building if a real item was actually consumed; else remove it (no free build).
       if placed and c.entity.remove_item{name = q.entity, count = 1} < 1 then placed.destroy() end
-      return true
+      if not placed then q.failed = "create_entity returned nil"; q.state = "failed"; return false end
+      q.state = "done"
+      return false
     end
 
     return true
@@ -550,6 +585,19 @@ end
 function M.get_build_status(cid)
   local q = storage.build_queues[cid]
   if not q then return {active = false} end
+  -- Terminal states are consumed HERE (not by tick_build_queues) so the result -- success OR the
+  -- failure reason -- survives long enough for a Python poll to actually read it. Previously the
+  -- queue was deleted the same tick a failure was detected, so the NEXT poll just saw plain
+  -- "active:false" (indistinguishable from success) and place_smart reported a build that never
+  -- happened as {"placed": true}.
+  if q.state == "done" then
+    storage.build_queues[cid] = nil
+    return {active = false, placed = true}
+  end
+  if q.state == "failed" then
+    storage.build_queues[cid] = nil
+    return {active = false, placed = false, error = q.failed}
+  end
   local progress = 0
   if q.state == "approaching" then progress = 10
   elseif q.state == "clearing" then progress = 50

@@ -1,4 +1,29 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.5
+Date: 2026-07-03
+  Bugfixes:
+    - fac_fuel_group could feed only the NEAREST burner and starve every other one: with less coal
+      than needed to fully top every burner, the greedy nearest-first fill drained the whole supply
+      on burner #1 before the "out of coal" check even let burner #2 be tried. Now round-robin: every
+      reachable burner gets a turn (tracked in a per-round `served` set) before any one gets a SECOND
+      visit, so a scarce supply is actually split across all of them instead of hoarded by whichever
+      is closest.
+    - fac_fuel_group_status and fac_building_place_status could report a stale/empty result (e.g.
+      "fueled:0, machines:0" even though real coal WAS delivered) if the whole job finished inside a
+      single poll interval: the queue entry was deleted the instant it finished, so the NEXT poll saw
+      plain "active:false" with no numbers. The terminal outcome (success/failure/counts) now survives
+      until a status poll actually reads and consumes it.
+    - fac_building_place_status (used by every place_smart call project-wide) replied
+      {"id":.., "status": {...}} but the Python client read fields off the OUTER object instead of
+      the nested "status" -- "active" was always undefined/false, so place_smart declared a build
+      "placed" after its very FIRST poll (~1s in), long before the companion had even reached the
+      site. The building was frequently never actually created. This affected every async placement
+      in the whole project's history (furnaces, drills, power plant, lab, assembler lines, ...).
+    - Spectator camera (fac_spectate) re-teleported the viewing player to the companion's exact
+      position every tick -- 60 discrete snaps/sec with no interpolation, which read as visible
+      jitter/stutter. Now uses LuaPlayer.centered_on (engine-interpolated smooth follow), set once
+      and only re-asserted if it changes.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.4
 Date: 2026-07-02
   Features:
