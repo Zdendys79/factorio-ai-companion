@@ -69,13 +69,34 @@ function M.start_harvest(cid, position, target_count, resource_name)
     return u.distance(a.position, c.entity.position) < u.distance(b.position, c.entity.position)
   end)
 
+  -- Resolve the actual MINED ITEM name from the resource prototype, same as tick_gather_queues
+  -- already does (cubic-dev-ai review, 2026-07-03): the resource entity name (used to find/filter
+  -- entities) is NOT reliably the same as the item you receive -- they happen to match for every
+  -- vanilla solid ore (iron-ore, copper-ore, coal, stone, uranium-ore) but NOT in general (a fluid
+  -- resource like crude-oil has no item at all; modded resources can name the entity and item
+  -- differently, or emit >1 product). Using the raw entity name as an inventory item key would
+  -- silently track the WRONG (or a nonexistent) item, so q.harvested would never advance despite
+  -- real mining happening. Only resolvable when resource_name narrowed the entities to ONE
+  -- resource type; a mixed-resource harvest (resource_name=nil) has no single product to track and
+  -- keeps the whole-inventory-delta fallback in tick_harvest_queues.
+  local product = nil
+  if resource_name then
+    local mp = entities[1].prototype.mineable_properties
+    product = mp and mp.products and mp.products[1] and mp.products[1].name or nil
+    if not product then
+      u.log_error("harvest: resource '" .. resource_name .. "' has no minable item product " ..
+        "-- progress will fall back to whole-inventory tracking", "harvest_queue")
+    end
+  end
+
   storage.harvest_queues[cid] = {
     entities = entities,
     position = position,
     target = target_count,
     harvested = 0,
     current = nil,
-    resource_name = resource_name
+    resource_name = resource_name,
+    product = product
   }
 
   M.start_mining_next(cid)
@@ -142,16 +163,21 @@ function M.tick_harvest_queues()
     -- same speed, same animation, same extraction as a real player holding the mine button.
     -- We just watch the inventory for what the engine actually produced.
     --
-    -- Track the SPECIFIC mined item (q.resource_name), not the whole-inventory total (cubic-dev-ai
-    -- review, 2026-07-03): a plain get_item_count() total is thrown off by ANY concurrent queue on
-    -- the same companion (fuel top-up removing coal, a craft consuming ingredients, a build
-    -- consuming a placed item) -- completely unrelated inventory changes get misread as mined
-    -- progress or lost progress. When start_harvest was called without a resource filter (mines
-    -- whatever resource is nearby, name unknown up front) there's no single item to track, so this
-    -- falls back to the old whole-inventory delta -- same limitation there, but at least the
-    -- baseline-staleness bug below is fixed in both cases.
+    -- Track the SPECIFIC mined ITEM (q.product, resolved in start_harvest from the resource
+    -- prototype's mineable_properties -- NOT q.resource_name, which is the resource ENTITY name
+    -- and only coincidentally matches the item name for vanilla solid ores; a second cubic-dev-ai
+    -- review caught that using the entity name directly would silently track the wrong/nonexistent
+    -- item for fluids or modded resources with a different entity/item name), not the whole-
+    -- inventory total (first cubic-dev-ai review, 2026-07-03): a plain get_item_count() total is
+    -- thrown off by ANY concurrent queue on the same companion (fuel top-up removing coal, a craft
+    -- consuming ingredients, a build consuming a placed item) -- completely unrelated inventory
+    -- changes get misread as mined progress or lost progress. When start_harvest was called
+    -- without a resource filter (mines whatever resource is nearby, product unknown up front) or
+    -- the product couldn't be resolved, there's no single item to track, so this falls back to the
+    -- old whole-inventory delta -- same limitation there, but at least the baseline-staleness bug
+    -- below is fixed in both cases.
     local inv = c.entity.get_main_inventory()
-    local now_count = q.resource_name and inv.get_item_count(q.resource_name) or inv.get_item_count()
+    local now_count = q.product and inv.get_item_count(q.product) or inv.get_item_count()
     if q.last_inv_count == nil then q.last_inv_count = now_count end
     local gained = now_count - q.last_inv_count
     if gained > 0 then
