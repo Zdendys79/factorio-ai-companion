@@ -32,11 +32,16 @@ function M.json_response(data)
   rcon.print(ok and result or '{"error":"JSON failed"}')
 end
 
+-- Tick-safe logging: appends to the storage.errors ring buffer WITHOUT rcon.print (which is
+-- only valid inside an active RCON command context, not from a tick handler like queues.lua).
+function M.log_error(msg, ctx)
+  storage.errors = storage.errors or {}
+  table.insert(storage.errors, {context = ctx or "internal", error = tostring(msg), tick = game.tick})
+  if #storage.errors > 50 then table.remove(storage.errors, 1) end
+end
+
 function M.error_response(msg, ctx)
-  if storage.errors then
-    table.insert(storage.errors, {context = ctx or "rcon", error = tostring(msg), tick = game.tick})
-    if #storage.errors > 50 then table.remove(storage.errors, 1) end
-  end
+  M.log_error(msg, ctx)
   rcon.print('{"error":"' .. tostring(msg) .. '"}')
 end
 

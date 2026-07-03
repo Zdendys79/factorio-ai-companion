@@ -57,6 +57,8 @@ function M.tick_spectators()
       local c = u.get_companion(cid)
       if c and c.entity and c.entity.valid then
         if p.centered_on ~= c.entity then p.centered_on = c.entity end
+      else
+        storage.spectators[pidx] = nil   -- companion gone -> match the documented auto-clear
       end
     end
   end

@@ -87,25 +87,30 @@ function M.start_mining_next(cid)
     return false
   end
 
-  -- NATIVE mining, the SAME mechanic a player's pickaxe uses: entity.mine{inventory=...} extracts
-  -- exactly ONE unit into the companion's inventory and decrements the tile's amount by 1; when the
-  -- tile runs out the GAME itself removes it. The character MINES, it never "destroys" -- every unit
-  -- ends up in the inventory, nothing is wasted. (The old code did entity.destroy per unit, which
-  -- nuked whole 6500-unit deposits to take a single lump = a cheat + massive waste.)
-  -- Verified live: mine{inventory=inv} on coal -> amount 261->260, +1 coal.
+  -- NATIVE mining, the SAME mechanic a real player uses: setting mining_state lets the GAME
+  -- ENGINE run the whole mining cycle itself (real per-resource mining_time, real swinging
+  -- animation, real extraction into the inventory) -- we do NOT call entity.mine{} ourselves
+  -- at all (Zdendys 2026-07-03: "pouzit proste nativni schopnosti postavy", same as
+  -- character.mining_state a player's client sets while holding the mine button). The engine
+  -- keeps mining the SAME target automatically, one unit per completed swing, for as long as
+  -- mining_state stays true and the target is valid+in range -- tick_harvest_queues just
+  -- watches inventory deltas and moves mining_state to the next tile once one depletes.
+  --
+  -- mining_state.position is ONLY consulted for TILE mining (e.g. landfill/cliffs); per the
+  -- Factorio API docs, "when the player isn't mining tiles the player will mine whatever
+  -- entity is currently selected" -- so an ore/resource ENTITY must be set via `selected`
+  -- first, or mining_state silently does nothing (0 extraction forever, no error) even
+  -- though mining=true and the position looks correct. Live-caught 2026-07-03: harvest
+  -- queues stuck at "0/N harvested" indefinitely until this was added.
   while #q.entities > 0 do
     local entity = q.entities[1]
     if not (entity and entity.valid and entity.type == "resource") then
       table.remove(q.entities, 1)   -- invalid / non-resource -> skip to next tile
     else
-      local inv = c.entity.get_main_inventory()
-      local before = inv.get_item_count()
-      entity.mine{inventory = inv}
-      local gained = inv.get_item_count() - before
-      q.harvested = q.harvested + gained
-      if not entity.valid then table.remove(q.entities, 1) end   -- depleted -> game removed it
-      q.current = {entity = entity.valid and entity or nil, done = false}
-      return gained > 0   -- mined a unit this call (false only if inventory is full -> yield)
+      c.entity.selected = entity
+      c.entity.mining_state = {mining = true, position = entity.position}
+      q.current = {entity = entity, done = false}
+      return true
     end
   end
   return false
@@ -115,24 +120,50 @@ function M.tick_harvest_queues()
   process_queue("harvest_queues", function(cid, q, c)
     -- Target reached
     if q.harvested >= q.target then
+      c.entity.mining_state = {mining = false}
       return true
     end
 
     -- Too far from mining area
     if u.distance(c.entity.position, q.position) > MINING_RANGE then
+      c.entity.mining_state = {mining = false}
       return true
     end
 
-    -- Mine next entity every TICK_INTERVAL ticks for pacing
-    if not q.last_mine_tick then q.last_mine_tick = 0 end
-    if game.tick - q.last_mine_tick < MIN_ACTION_TICKS then return false end
-    q.last_mine_tick = game.tick
-
-    if not M.start_mining_next(cid) then
-      return true
+    -- NATIVE mining (Zdendys 2026-07-03: "pouzit proste nativni schopnosti postavy"): the
+    -- engine itself runs the mining cycle once mining_state is set in start_mining_next --
+    -- same speed, same animation, same extraction as a real player holding the mine button.
+    -- We just watch the inventory for what the engine actually produced.
+    local inv = c.entity.get_main_inventory()
+    local now_count = inv.get_item_count()
+    if q.last_inv_count == nil then q.last_inv_count = now_count end
+    local gained = now_count - q.last_inv_count
+    if gained > 0 then
+      q.harvested = q.harvested + gained
+      q.last_inv_count = now_count
     end
 
-    q.current = nil
+    -- Current target depleted (engine removed it) or never set -> advance to the next tile.
+    local cur = q.current and q.current.entity
+    if not (cur and cur.valid) then
+      if #q.entities > 0 and q.entities[1] == cur then table.remove(q.entities, 1) end
+      if not M.start_mining_next(cid) then
+        c.entity.mining_state = {mining = false}
+        -- A depleted tile normally means its full amount was MINED (game inserts or, if the
+        -- inventory is full, spills the item on the ground -- either way the tile empties).
+        -- If harvested is still short of target here, every listed entity ran out while
+        -- items were spilling instead of landing in inventory -- silently reporting this as
+        -- plain "queue done" would hide a real inventory-full condition from the caller.
+        if q.harvested < q.target then
+          u.log_error(string.format(
+            "harvest queue for companion %d ended short (%d/%d %s): entities exhausted, " ..
+            "possible full inventory (mined items spilled to ground)",
+            cid, q.harvested, q.target, q.resource_name or "?"), "harvest_queue")
+        end
+        return true
+      end
+    end
+
     return q.harvested >= q.target
   end)
 end
@@ -163,9 +194,10 @@ end
 
 -- ============ GATHER (autonomous: find reachable patch -> walk -> mine to target) ============
 -- Self-contained composite: the mod finds the nearest REACHABLE + SAFE patch of `resource`, walks the
--- companion within reach, mines it ONE unit per MIN_ACTION_TICKS (native mine{} -> 1 unit, amount--,
--- game removes depleted tile), and moves to the next patch until the inventory holds `count` of the
--- mined product (or no reachable patch remains). Replaces the Python go_to + start_harvest + poll glue.
+-- companion within reach, and mines it NATIVELY via character.mining_state (same speed/animation/
+-- extraction as a real player holding the mine button; amount--, game removes depleted tile), moving
+-- to the next patch until the inventory holds `count` of the mined product (or no reachable patch
+-- remains). Replaces the Python go_to + start_harvest + poll glue.
 -- shared tile-key helper (gather blacklist of unreachable patches + fuel-group visited set)
 local function _tile_key(pos) return math.floor(pos.x) .. "," .. math.floor(pos.y) end
 
@@ -198,8 +230,19 @@ function M.tick_gather_queues()
     if q.state == "find" then
       local e = find_reachable_resource(surf, c.entity.position, q.resource, q.blacklist)
       if not e then return true end   -- no reachable patch left -> done, return what we have
+      local mp = e.prototype.mineable_properties
+      if not (mp and mp.products and mp.products[1]) then
+        -- Non-standard resource (no item product, e.g. a fluid-only patch) -- blacklist this
+        -- tile and retry next tick instead of crashing on a nil index.
+        q.blacklist = q.blacklist or {}
+        q.blacklist[_tile_key(e.position)] = true
+        u.log_error("gather queue: resource '" .. q.resource .. "' at (" ..
+          math.floor(e.position.x) .. "," .. math.floor(e.position.y) ..
+          ") has no minable item product, skipping", "gather_queue")
+        return false
+      end
       q.entity_pos = {x = e.position.x, y = e.position.y}
-      q.product = e.prototype.mineable_properties.products[1].name
+      q.product = mp.products[1].name
       if not q.start_count then q.start_count = inv.get_item_count(q.product) end
       -- distance-scaled deadline: 25 ticks/tile (~3.7x the expected walk) so a legit long walk is
       -- never aborted, but a companion STUCK on an obstacle (standable != path-reachable) bails fast
@@ -226,13 +269,30 @@ function M.tick_gather_queues()
     end
 
     if q.state == "mine" then
-      if inv.get_item_count(q.product) - (q.start_count or 0) >= q.target then return true end   -- target met
-      if game.tick - (q.last_mine_tick or 0) < MIN_ACTION_TICKS then return false end
-      q.last_mine_tick = game.tick
+      if inv.get_item_count(q.product) - (q.start_count or 0) >= q.target then
+        c.entity.mining_state = {mining = false}
+        return true   -- target met
+      end
       local res = surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 1}[1]
-      if not (res and res.valid) then q.state = "find"; return false end   -- depleted -> next patch
-      if u.distance(c.entity.position, res.position) > (c.entity.reach_distance or 10) then q.state = "find"; return false end
-      res.mine{inventory = inv}   -- native 1-unit mine (no cheat)
+      if not (res and res.valid) then
+        c.entity.mining_state = {mining = false}
+        q.state = "find"; return false   -- depleted -> next patch
+      end
+      if u.distance(c.entity.position, res.position) > (c.entity.reach_distance or 10) then
+        c.entity.mining_state = {mining = false}
+        q.state = "find"; return false
+      end
+      -- NATIVE mining (Zdendys 2026-07-03: "pouzit proste nativni schopnosti postavy"):
+      -- setting mining_state lets the GAME ENGINE run the whole cycle -- same speed,
+      -- animation, and extraction as a real player holding the mine button. No more manual
+      -- res.mine{} timer call; just keep pointing mining_state at the current resource tile
+      -- (harmless to re-set every tick) and let the engine do the rest.
+      -- `selected` must be (re-)set too: mining_state.position only applies to TILE mining
+      -- (landfill/cliffs) -- an ore ENTITY is only mined via the currently `selected` entity,
+      -- else mining_state=true silently mines nothing (live-caught 2026-07-03: "0/N harvested"
+      -- forever, no error).
+      c.entity.selected = res
+      c.entity.mining_state = {mining = true, position = res.position}
       return false
     end
     return true
