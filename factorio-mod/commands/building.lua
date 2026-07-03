@@ -218,7 +218,17 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     end
     local ext = 0
     if target then
-      for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output, defines.inventory.furnace_result}) do
+      -- defines.inventory.fuel added so surplus can be collected from a self-fueling burner
+      -- (e.g. a coal-drill pair, [[coal_drill_self_fueling]]) -- caller is responsible for
+      -- requesting less than the full amount so the burner keeps a running buffer.
+      -- NOTE: defines.inventory.furnace_result/furnace_source are STALE 1.x names, removed
+      -- in Factorio 2.0's inventory unification -- they are nil here, and indexing
+      -- get_inventory(nil) THROWS (not returns nil), which used to abort this whole loop
+      -- before ever reaching `fuel` unless chest/crafter_output alone already satisfied the
+      -- request. crafter_output already covers furnace output in 2.0+, so no replacement
+      -- entry is needed for the removed furnace_result.
+      for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output,
+                           defines.inventory.fuel}) do
         local inv = target.get_inventory(it)
         if inv then
           local av = inv.get_item_count(item)
