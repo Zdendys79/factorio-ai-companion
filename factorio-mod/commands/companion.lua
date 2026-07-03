@@ -135,7 +135,10 @@ commands.add_command("fac_companion_inventory", nil, function(cmd)
       for _, e in ipairs(es) do if e.valid and e ~= c.entity then t = e; break end end
       if not t then u.json_response({id = id, error = "No entity"}); return end
       local items = {}
-      for _, it in ipairs({{defines.inventory.chest, "chest"}, {defines.inventory.furnace_source, "in"}, {defines.inventory.furnace_result, "out"}, {defines.inventory.fuel, "fuel"}}) do
+      -- furnace_source/furnace_result are stale 1.x defines removed in Factorio 2.0's
+      -- inventory unification (nil here; get_inventory(nil) throws) -- crafter_input/
+      -- crafter_output are the correct 2.0+ names for both furnaces and assemblers.
+      for _, it in ipairs({{defines.inventory.chest, "chest"}, {defines.inventory.crafter_input, "in"}, {defines.inventory.crafter_output, "out"}, {defines.inventory.fuel, "fuel"}}) do
         local inv = t.get_inventory(it[1])
         if inv then for name, count in pairs(inv.get_contents()) do items[#items + 1] = {name = name, count = count, slot = it[2]} end end
       end
