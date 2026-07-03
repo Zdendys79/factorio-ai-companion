@@ -141,14 +141,27 @@ function M.tick_harvest_queues()
     -- engine itself runs the mining cycle once mining_state is set in start_mining_next --
     -- same speed, same animation, same extraction as a real player holding the mine button.
     -- We just watch the inventory for what the engine actually produced.
+    --
+    -- Track the SPECIFIC mined item (q.resource_name), not the whole-inventory total (cubic-dev-ai
+    -- review, 2026-07-03): a plain get_item_count() total is thrown off by ANY concurrent queue on
+    -- the same companion (fuel top-up removing coal, a craft consuming ingredients, a build
+    -- consuming a placed item) -- completely unrelated inventory changes get misread as mined
+    -- progress or lost progress. When start_harvest was called without a resource filter (mines
+    -- whatever resource is nearby, name unknown up front) there's no single item to track, so this
+    -- falls back to the old whole-inventory delta -- same limitation there, but at least the
+    -- baseline-staleness bug below is fixed in both cases.
     local inv = c.entity.get_main_inventory()
-    local now_count = inv.get_item_count()
+    local now_count = q.resource_name and inv.get_item_count(q.resource_name) or inv.get_item_count()
     if q.last_inv_count == nil then q.last_inv_count = now_count end
     local gained = now_count - q.last_inv_count
     if gained > 0 then
       q.harvested = q.harvested + gained
-      q.last_inv_count = now_count
     end
+    -- ALWAYS refresh the baseline (not just when gained > 0): otherwise any net inventory
+    -- DECREASE (a concurrent queue consuming items) leaves last_inv_count stale/too-high, and
+    -- every subsequent tick's mined units get silently swallowed by the still-negative delta
+    -- until the total climbs back above the old stale baseline (cubic-dev-ai review).
+    q.last_inv_count = now_count
 
     -- Current target depleted (engine removed it) or never set -> advance to the next tile.
     local cur = q.current and q.current.entity
