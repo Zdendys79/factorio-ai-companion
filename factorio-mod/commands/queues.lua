@@ -878,15 +878,25 @@ function M.tick_belt_queues()
       -- no way for a caller to ever learn it failed. Same distance-scaled deadline formula
       -- as tick_gather_queues (25 ticks/tile, floor 1800) so a legitimately long walk isn't
       -- cut short but a genuinely stuck one bails instead of hanging.
-      if not q.walking then
+      -- Also (re)seed the deadline if it's simply MISSING, not just on the first tick of
+      -- walking: `storage` is Factorio's persistent save-game state, so a belt_queues entry
+      -- written by an OLDER mod version (before approach_deadline existed) could still have
+      -- q.walking=true with no deadline after a save/reload -- `(q.approach_deadline or 0)`
+      -- would then make `game.tick >= 0` true on the very next tick and kill a build that's
+      -- still genuinely walking (cubic dev ai bot, 2026-07-04). Healing it here (instead of
+      -- just nil-guarding the comparison) gives that legacy entry a fresh, bounded deadline
+      -- rather than either failing it instantly OR leaving it to hang forever again.
+      if not q.walking or not q.approach_deadline then
         q.approach_deadline = game.tick + math.max(1800, math.floor(
           u.distance(c.entity.position, {x = node.x, y = node.y}) * 25))
-        storage.walking_queues[cid] = {
-          target = surf.find_non_colliding_position("character", {x = node.x, y = node.y}, 3, 0.5)
-                   or {x = node.x, y = node.y}
-        }
-        q.walking = true
-      elseif game.tick >= (q.approach_deadline or 0) then
+        if not q.walking then
+          storage.walking_queues[cid] = {
+            target = surf.find_non_colliding_position("character", {x = node.x, y = node.y}, 3, 0.5)
+                     or {x = node.x, y = node.y}
+          }
+          q.walking = true
+        end
+      elseif game.tick >= q.approach_deadline then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.failed = "cannot reach belt tile (" .. node.x .. "," .. node.y .. ") -- " ..
