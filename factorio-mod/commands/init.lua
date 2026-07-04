@@ -27,7 +27,13 @@ function M.get_companion_color(id)
   return M.COMPANION_COLORS[((id - 1) % #M.COMPANION_COLORS) + 1]
 end
 
+-- tick=game.tick is injected into EVERY response (unless the caller already set
+-- one) so Python-side callers get the current tick for free on any command that
+-- already returns JSON, instead of needing a SEPARATE RCON round-trip just to
+-- read game.tick (2026-07-04, Zdendys: avoid the redundant query the BC recorder
+-- was making after every action).
 function M.json_response(data)
+  if data.tick == nil then data.tick = game.tick end
   local ok, result = pcall(helpers.table_to_json, data)
   rcon.print(ok and result or '{"error":"JSON failed"}')
 end
@@ -42,7 +48,10 @@ end
 
 function M.error_response(msg, ctx)
   M.log_error(msg, ctx)
-  rcon.print('{"error":"' .. tostring(msg) .. '"}')
+  -- Routed through json_response (not a hand-built string) so error replies ALSO
+  -- get tick=game.tick for free, AND so a quote/backslash inside msg gets properly
+  -- JSON-escaped instead of producing invalid JSON that json.loads() would choke on.
+  M.json_response({error = tostring(msg)})
 end
 
 function M.safe_command(callback)

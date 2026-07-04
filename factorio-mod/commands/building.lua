@@ -207,10 +207,16 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     end
     -- Extract ONLY from the entity CLOSEST to the target tile (not any in radius): in a
     -- tight furnace row, collecting from the wrong furnace mismatches the fed one.
+    -- e.type ~= "resource" excludes raw ore/stone/coal patches -- live-caught 2026-07-04:
+    -- a chest/furnace placed adjacent to its own ore patch sits EXACTLY as close to `pos`
+    -- as the underlying resource tile (both d2=0.5 on integer-aligned placement), and the
+    -- resource entity (no inventory, always extracted=0) would silently win the tie
+    -- whenever Factorio's entity enumeration order happened to list it first --
+    -- non-deterministic flaky "extracted=0" despite the target container being full.
     local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5}
     local target, bd = nil, 1e18
     for _, e in ipairs(es) do
-      if e.valid and e ~= c.entity then
+      if e.valid and e ~= c.entity and e.type ~= "resource" then
         local dx, dy = e.position.x - pos.x, e.position.y - pos.y
         local d = dx * dx + dy * dy
         if d < bd then bd, target = d, e end
@@ -260,10 +266,13 @@ commands.add_command("fac_building_fill", nil, function(cmd)
     -- Insert ONLY into the entity CLOSEST to the target tile, not the first in radius:
     -- in a tight furnace row several furnaces are within radius, and feeding the wrong
     -- one breaks parallel smelting (observed: copper-ore fed an iron furnace -> 0 copper).
+    -- e.type ~= "resource" excludes raw ore/stone/coal patches -- same tie-break bug as
+    -- fac_building_empty above (a resource tile can be exactly as close to `pos` as the
+    -- real target, and would win the tie non-deterministically otherwise).
     local es = c.entity.surface.find_entities_filtered{position = pos, radius = 3}
     local target, bd = nil, 1e18
     for _, e in ipairs(es) do
-      if e.valid and e ~= c.entity then
+      if e.valid and e ~= c.entity and e.type ~= "resource" then
         local dx, dy = e.position.x - pos.x, e.position.y - pos.y
         local d = dx * dx + dy * dy
         if d < bd then bd, target = d, e end
