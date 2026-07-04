@@ -109,9 +109,18 @@ commands.add_command("fac_building_rotate", nil, function(cmd)
     if not id then u.not_found(); return end
     local x, y, dir = tonumber(args[2]), tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
+    -- Same nearest-not-first tie-break fix as fac_inserter_set_filter below (found while
+    -- fixing that one, 2026-07-04): a bare [1]/first-match pick over a radius=1 query can
+    -- land on the wrong entity when several rotatable things are packed tightly together.
     local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1}
-    local t
-    for _, e in ipairs(es) do if e.valid and e ~= c.entity and e.type ~= "character" and e.rotatable then t = e; break end end
+    local t, bd = nil, 1e18
+    for _, e in ipairs(es) do
+      if e.valid and e ~= c.entity and e.type ~= "character" and e.rotatable then
+        local dx, dy = e.position.x - x, e.position.y - y
+        local d = dx * dx + dy * dy
+        if d < bd then bd, t = d, e end
+      end
+    end
     if not t then u.json_response({id = id, error = "No rotatable entity"}); return end
     if u.distance(c.entity.position, t.position) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return   -- must be in reach to rotate (no action-at-a-distance)
@@ -366,7 +375,19 @@ commands.add_command("fac_inserter_set_filter", nil, function(cmd)
     if not id then u.not_found(); return end
     local x, y, item = tonumber(args[2]), tonumber(args[3]), args[4]
     if not x or not y then u.error_response("Invalid coordinates"); return end
-    local t = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, type = "inserter"}[1]
+    -- Pick the NEAREST inserter to (x,y), not just find_entities_filtered's [1] (engine
+    -- result order is not guaranteed nearest-first) -- a radius=1 query can overlap several
+    -- 1x1 inserters packed in a tight row, silently configuring the wrong one (cubic dev ai
+    -- bot, 2026-07-04: same tie-break class already fixed in fac_building_empty/_fill below).
+    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, type = "inserter"}
+    local t, bd = nil, 1e18
+    for _, e in ipairs(es) do
+      if e.valid then
+        local dx, dy = e.position.x - x, e.position.y - y
+        local d = dx * dx + dy * dy
+        if d < bd then bd, t = d, e end
+      end
+    end
     if not t then u.json_response({id = id, error = "No inserter"}); return end
     if u.distance(c.entity.position, t.position) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return

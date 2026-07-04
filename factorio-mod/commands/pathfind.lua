@@ -14,6 +14,16 @@ local MAX_SEARCH_MARGIN = 15     -- tiles of slack around the from/to bounding b
 local MAX_NODES = 2500           -- hard cap on A* expansions (bounded, no infinite loop)
 
 local function tile_key(x, y) return x .. ":" .. y end
+-- State key for the SEARCH bookkeeping (visited/gscore/came_from) MUST include the arrival
+-- direction, not just (x,y): edge cost depends on it via turn_penalty below, so two paths
+-- reaching the same tile with equal g but different incoming direction are genuinely
+-- different states -- collapsing them onto one (x,y) key lets whichever is expanded FIRST
+-- permanently block a later, better-oriented arrival at the same g (or even lower cost
+-- overall once its own better-turn continuation is considered), breaking A*'s optimality
+-- (cubic dev ai bot, 2026-07-04: worked example with a wall forcing an extra turn). tile_key
+-- (position only) is still used for the FINAL path reconstruction lookup, which is fine --
+-- that only needs a unique per-node identity, not de-duplication across directions.
+local function state_key(x, y, dir) return x .. ":" .. y .. ":" .. tostring(dir) end
 
 -- Per-run cache: the same neighbor tile is checked from multiple expanded nodes, and
 -- surf.can_place_entity is a real engine call (not a cheap table lookup) -- memoizing
@@ -61,8 +71,8 @@ function M.find_path(surf, from, to, force)
   local function h(x, y) return math.abs(tx - x) + math.abs(ty - y) end
 
   local open = {{x = fx, y = fy, dir = nil, g = 0, f = h(fx, fy)}}
-  local came_from = {}                    -- tile_key -> predecessor node
-  local gscore = {[tile_key(fx, fy)] = 0}
+  local came_from = {}                    -- state_key -> predecessor node
+  local gscore = {[state_key(fx, fy, nil)] = 0}
   local visited = {}
   local expansions = 0
 
@@ -72,15 +82,20 @@ function M.find_path(surf, from, to, force)
     local bi, bf = 1, open[1].f
     for i = 2, #open do if open[i].f < bf then bi, bf = i, open[i].f end end
     local cur = table.remove(open, bi)
-    local ck = tile_key(cur.x, cur.y)
+    local ck = state_key(cur.x, cur.y, cur.dir)
     if not visited[ck] then
       visited[ck] = true
       expansions = expansions + 1
       if cur.x == tx and cur.y == ty then
+        -- Any (goal-tile, *) state popped here is guaranteed minimum-cost for the goal
+        -- POSITION (not just for this particular direction): h() doesn't depend on dir, so
+        -- among all direction-variants of the goal tile the lowest-g one always has the
+        -- lowest f and is popped first (edge costs are non-negative, so g only grows along
+        -- a path) -- position-only goal test is correct even though the state space isn't.
         local path, node = {}, cur
         while node do
           table.insert(path, 1, {x = node.x, y = node.y, dir = node.dir})
-          node = came_from[tile_key(node.x, node.y)]
+          node = came_from[state_key(node.x, node.y, node.dir)]
         end
         return path
       end
@@ -94,7 +109,7 @@ function M.find_path(surf, from, to, force)
           if not is_blocked(nx, ny) then
             local turn_penalty = (cur.dir and cur.dir ~= d.dir) and 0.5 or 0
             local ng = cur.g + 1 + turn_penalty
-            local nk = tile_key(nx, ny)
+            local nk = state_key(nx, ny, d.dir)
             if ng < (gscore[nk] or math.huge) then
               gscore[nk] = ng
               came_from[nk] = cur

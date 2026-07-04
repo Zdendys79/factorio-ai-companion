@@ -1,4 +1,26 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.17
+Date: 2026-07-04
+  Bugfixes (external automated review, "cubic dev ai bot" -- all 4 confirmed valid, fixed,
+  live re-verified via test_belt_connect.py + test_inserter_set_filter.py):
+    - pathfind.lua's belt-corridor A* keyed its visited/gscore/came_from bookkeeping by tile
+      position alone, but edge cost depends on arrival direction (turn-penalty) -- a
+      direction-dependent cost with a position-only state key can permanently prune a later,
+      better-oriented (lower true-cost) path reaching the same tile, breaking A*'s optimality.
+      Fixed by keying search state on (x,y,direction) instead.
+    - fac_inserter_set_filter (building.lua) picked find_entities_filtered's first result
+      instead of the nearest inserter to the target coordinates -- could silently configure
+      the wrong inserter when several are packed in a tight row. Fixed to pick nearest by
+      distance (same convention as fac_building_empty/_fill). Found + fixed the identical bug
+      in fac_building_rotate while here.
+    - queues.lua's underground-belt distance check used dist<=4 ("UNDERGROUND_MAX_GAP"), but
+      the engine's own prototype data (transport-belts.lua) confirms max_distance=5 for the
+      yellow tier (entrance-to-exit span, 4 tiles of actual gap) -- the check incorrectly
+      rejected the legitimate maximum-range placement. Fixed to dist<=5.
+    - tick_belt_queues (queues.lua) had no approach-deadline guard, unlike its sibling
+      tick_gather_queues/tick_fuel_queues -- a permanently unreachable belt tile could hang
+      get_belt_connect_status forever. Fixed with the same distance-scaled deadline formula.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.15
 Date: 2026-07-04
   Bugfixes:
