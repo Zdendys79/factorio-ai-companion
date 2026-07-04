@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.15
+Date: 2026-07-04
+  Bugfixes:
+    - fac_gather's "approach" state blacklisted only the ONE unreachable ore tile it tried, not the
+      whole patch. An entirely unreachable patch (e.g. coal across water from a distant power-plant
+      shore) is typically dozens of adjacent 1-tile entities at nearly identical distance, so "find"
+      immediately re-picked the NEXT tile of the SAME dead patch -- exhausting a large patch needed
+      O(patch size) deadline cycles and could burn the entire 180s Python-side gather() timeout with
+      zero gathered (live-caught: coal gather near a far shore stuck in "approach" for the full 180s).
+      Now blacklists every tile of the resource within patch range (radius=15) once one proves
+      unreachable, live-verified: same test that previously stalled now reaches 10/10 science packs
+      with no gather timeout.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.5
 Date: 2026-07-03
   Bugfixes:
