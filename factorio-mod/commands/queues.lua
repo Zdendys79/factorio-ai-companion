@@ -786,7 +786,13 @@ end
 -- own design pass"). Async like fac_building_place_start/_status: the companion really
 -- walks the path (no teleporting) and consumes real transport-belt/underground-belt items,
 -- one tile per queue tick.
-local UNDERGROUND_MAX_GAP = 4   -- yellow-tier underground-belt max distance (confirmed via wiki)
+-- Confirmed straight from the engine's own prototype data (not the ambiguous/contradictory
+-- wiki wording -- cubic dev ai bot flagged this as an off-by-one, 2026-07-04):
+-- /base/prototypes/entity/transport-belts.lua's "underground-belt" (yellow tier) entry has
+-- max_distance = 5 -- entrance and exit tiles can be up to 5 tiles apart (4 tiles of actual
+-- underground gap in between), NOT 4 tiles apart. Named to match the engine field exactly
+-- so this stays unambiguous.
+local UNDERGROUND_MAX_DISTANCE = 5   -- yellow-tier underground-belt (entrance-to-exit span)
 
 local function step_dir(a, b)
   if b.x > a.x then return defines.direction.east end
@@ -810,7 +816,7 @@ function M.start_belt_connect(cid, from_pos, to_pos)
     local tx, ty = math.floor(to_pos.x), math.floor(to_pos.y)
     local same_row = (fx == tx) or (fy == ty)
     local dist = math.abs(tx - fx) + math.abs(ty - fy)
-    if same_row and dist >= 1 and dist <= UNDERGROUND_MAX_GAP then
+    if same_row and dist >= 1 and dist <= UNDERGROUND_MAX_DISTANCE then
       path = {
         {x = fx, y = fy, dir = step_dir({x = fx, y = fy}, {x = tx, y = ty}), underground = "entrance"},
         {x = tx, y = ty, dir = step_dir({x = fx, y = fy}, {x = tx, y = ty}), underground = "exit"},
@@ -865,12 +871,27 @@ function M.tick_belt_queues()
     if not node then q.state = "done"; return false end
 
     if u.distance(c.entity.position, {x = node.x, y = node.y}) > reach then
+      -- APPROACH DEADLINE (cubic dev ai bot, 2026-07-04): unlike tick_gather_queues/
+      -- tick_fuel_queues, this had NO elapsed-time guard at all -- a permanently blocked
+      -- tile (water/cliff/train in the way) left q.walking=true and this branch returning
+      -- `false` (still active) forever, hanging get_belt_connect_status indefinitely with
+      -- no way for a caller to ever learn it failed. Same distance-scaled deadline formula
+      -- as tick_gather_queues (25 ticks/tile, floor 1800) so a legitimately long walk isn't
+      -- cut short but a genuinely stuck one bails instead of hanging.
       if not q.walking then
+        q.approach_deadline = game.tick + math.max(1800, math.floor(
+          u.distance(c.entity.position, {x = node.x, y = node.y}) * 25))
         storage.walking_queues[cid] = {
           target = surf.find_non_colliding_position("character", {x = node.x, y = node.y}, 3, 0.5)
                    or {x = node.x, y = node.y}
         }
         q.walking = true
+      elseif game.tick >= (q.approach_deadline or 0) then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.failed = "cannot reach belt tile (" .. node.x .. "," .. node.y .. ") -- " ..
+                   (q.idx) .. "/" .. #q.path .. " placed before giving up"
+        q.state = "failed"
       end
       return false
     end
