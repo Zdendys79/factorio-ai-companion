@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.18
+Date: 2026-07-04
+  Bugfixes:
+    - tick_belt_queues's new approach-deadline guard (0.16.17) used (q.approach_deadline or 0),
+      which would instant-fail a belt_queues entry persisted by an older mod version (Factorio's
+      storage table survives save/reload) that predates this field, even while still genuinely
+      walking. Now heals a missing deadline by seeding a fresh one instead.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.17
 Date: 2026-07-04
   Bugfixes (external automated review, "cubic dev ai bot" -- all 4 confirmed valid, fixed,
