@@ -311,7 +311,19 @@ function M.tick_gather_queues()
         q.state = "mine"
       elseif game.tick >= (q.approach_deadline or 0) then   -- cannot reach this patch -> blacklist + try next
         q.blacklist = q.blacklist or {}
-        q.blacklist[_tile_key(q.entity_pos)] = true
+        -- Blacklist every tile of `resource` within patch range (not just q.entity_pos):
+        -- an entirely unreachable patch (e.g. coal across water from a far-flung shore) is
+        -- typically dozens of adjacent 1-tile entities at nearly identical distance, so
+        -- blacklisting only the one candidate tile let "find" immediately re-pick the NEXT
+        -- tile of the SAME dead patch -- exhausting a large patch needed O(patch size)
+        -- deadline cycles, each costing real time, and could burn through the entire 180s
+        -- Python-side gather() timeout with zero gathered (live-caught 2026-07-04,
+        -- scripts/test_phase_b_asm.py: coal gather near a far shore stuck in "approach"
+        -- for the full 180s, 0 coal). radius=15 mirrors the same "same patch" radius
+        -- already used by spatial_demo.py's nearest(exclude_r=15.0).
+        for _, e in ipairs(surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 15}) do
+          q.blacklist[_tile_key(e.position)] = true
+        end
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "find"
