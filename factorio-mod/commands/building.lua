@@ -351,3 +351,62 @@ commands.add_command("fac_building_place_status", nil, function(cmd)
     u.json_response({id = id, status = status})
   end)
 end)
+
+-- fac_inserter_set_filter <cid> <x> <y> <item_name> -- 2026-07-04, belt/inserter
+-- automation plan Stage 0.1. Wraps LuaEntity.set_filter/get_filter (generalized in
+-- 2.1 to a table-valued {name=, quality=, comparator=} ItemFilter, not a bare string --
+-- confirmed live via scripts/probe_inserter_filter_capability.py, PASS: burner-inserter
+-- reports filter_slot_count=5 and accepts set_filter(1, item_name) with a plain string).
+-- Read back via get_filter to confirm the filter actually stuck (mirrors
+-- fac_building_rotate's read-back style), not just that the pcall didn't error.
+commands.add_command("fac_inserter_set_filter", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+(%S+)$", cmd.parameter)
+    local id, c = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local x, y, item = tonumber(args[2]), tonumber(args[3]), args[4]
+    if not x or not y then u.error_response("Invalid coordinates"); return end
+    local t = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, type = "inserter"}[1]
+    if not t then u.json_response({id = id, error = "No inserter"}); return end
+    if u.distance(c.entity.position, t.position) > (c.entity.reach_distance or 10) then
+      u.json_response({id = id, error = "Too far"}); return
+    end
+    if (t.filter_slot_count or 0) < 1 then
+      u.json_response({id = id, error = t.name .. " has no filter slots"}); return
+    end
+    local ok, err = pcall(function() t.set_filter(1, item) end)
+    if not ok then u.json_response({id = id, error = "set_filter failed: " .. tostring(err)}); return end
+    local f = t.get_filter(1)
+    u.json_response({id = id, filtered = (f ~= nil and f.name == item), entity = t.name,
+                      item = item, got = f and f.name or nil})
+  end)
+end)
+
+-- fac_belt_connect_start/<...>_status <cid> <from_x> <from_y> <to_x> <to_y> -- 2026-07-04,
+-- belt/inserter automation plan Stage 0.2. See queues.lua's belt-connect section for the
+-- full design rationale (model=WHAT, mod=HOW routing; narrower than the original plan
+-- sketch -- no material/inserter placement here, see that comment block). Async like
+-- fac_building_place_start/_status: mirrors that exact start+poll pattern.
+commands.add_command("fac_belt_connect_start", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
+    local id, c = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local fx, fy, tx, ty = tonumber(args[2]), tonumber(args[3]), tonumber(args[4]), tonumber(args[5])
+    if not (fx and fy and tx and ty) then u.error_response("Invalid coordinates"); return end
+    local result = queues.start_belt_connect(id, {x = fx, y = fy}, {x = tx, y = ty})
+    result.id = id
+    u.json_response(result)
+  end)
+end)
+
+commands.add_command("fac_belt_connect_status", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)$", cmd.parameter)
+    local id = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local status = queues.get_belt_connect_status(id)
+    status.id = id
+    u.json_response(status)
+  end)
+end)
