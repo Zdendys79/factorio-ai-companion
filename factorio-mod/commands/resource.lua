@@ -99,7 +99,8 @@ commands.add_command("fac_gather_status", nil, function(cmd)
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    u.json_response({id = id, status = queues.get_gather_status(id)})
+    -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
+    u.json_response({id = id, status = queues.get_gather_status(id)}, id)
   end)
 end)
 
@@ -125,7 +126,8 @@ commands.add_command("fac_fuel_group_status", nil, function(cmd)
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    u.json_response({id = id, status = queues.get_fuel_status(id)})
+    -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
+    u.json_response({id = id, status = queues.get_fuel_status(id)}, id)
   end)
 end)
 
