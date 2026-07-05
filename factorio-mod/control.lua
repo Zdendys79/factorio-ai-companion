@@ -6,6 +6,20 @@ local spectate = require("commands.spectate")
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
 
+-- Decorative rocks worth opportunistically clearing (2026-07-05, Zdendys's exhaustive
+-- list: "Vsechny hledane typy kamenu jsou: Big rock, big sandy rock: 120 tick / Huge
+-- rock: 180tick"). Named explicitly rather than matching the broader type='simple-entity'
+-- prototype category: that type ALSO covers a lot of other-planet Space Age content
+-- (Vulcanus volcanic-rock/stromatolite/demolisher-corpse, Fulgora rock/ruins,
+-- lithium-iceberg, etc. -- confirmed live via prototypes.entity, 2026-07-05) that must
+-- NOT be swept up by a home-planet obstacle-clearing rule if the companion ever operates
+-- elsewhere. Trees, by contrast, ARE matched by the generic type='tree' prototype
+-- category everywhere below -- confirmed live that this correctly covers every variant
+-- Zdendys listed (tree-01/02/07/08/09 and color variants, dry-tree, dead-grey-trunk,
+-- dead-tree-desert, dead-dry-hairy-tree, dry-hairy-tree), so no equivalent name list is
+-- needed for trees.
+local CLEARABLE_ROCK_NAMES = {"big-rock", "big-sand-rock", "huge-rock"}
+
 local function init_storage()
   storage.companion_messages = storage.companion_messages or {}
   storage.companions = storage.companions or {}
@@ -188,6 +202,20 @@ local function guard_tick(name, fn, tick)
   end
 end
 
+-- Trees matched by the generic type='tree' prototype category (covers every variant,
+-- confirmed live 2026-07-05 -- see CLEARABLE_ROCK_NAMES comment above for why rocks are
+-- NOT matched this same broad way) + the exact named rocks worth clearing. Two separate
+-- find_entities_filtered calls (Factorio's filter ANDs type/name together within one
+-- call, it can't OR a type against a name list) merged into one result list.
+local function find_clearable_obstacles(surf, pos, radius)
+  local trees = surf.find_entities_filtered{position = pos, radius = radius, type = "tree"}
+  local rocks = surf.find_entities_filtered{position = pos, radius = radius, name = CLEARABLE_ROCK_NAMES}
+  local out = {}
+  for _, e in ipairs(trees) do out[#out + 1] = e end
+  for _, e in ipairs(rocks) do out[#out + 1] = e end
+  return out
+end
+
 -- Ask the game pathfinder for a route to q.target that goes AROUND large obstacles
 -- (water, cliffs) -- the straight-line + perpendicular bypass only clears small
 -- stuff (trees/rocks) and cannot navigate around a lake. Result arrives async via
@@ -290,10 +318,7 @@ local function process_walking_queues()
       -- SAME threshold this function already uses elsewhere for "arrived" (dist<2), and
       -- still only ever catches things genuinely adjacent (trees have a much smaller
       -- ~0.4-tile collision box and stop even closer).
-      local adjacent = e.surface.find_entities_filtered{
-        position = e.position, radius = 2,
-        type = {"tree", "simple-entity"}
-      }
+      local adjacent = find_clearable_obstacles(e.surface, e.position, 2)
       if adjacent[1] then
         q.clearing_target = adjacent[1]
       end
@@ -350,10 +375,7 @@ local function process_walking_queues()
       -- q.clearing_target + mining_state mechanism (not a separate one-shot entity.mine{}
       -- -- same reasoning as above: mining_time is real, one-shot calls fail silently).
       if moved < 0.3 and not q.clearing_target then
-        local nearby = e.surface.find_entities_filtered{
-          position = e.position, radius = 4,
-          type = {"tree", "simple-entity"}
-        }
+        local nearby = find_clearable_obstacles(e.surface, e.position, 4)
         if nearby[1] then
           q.clearing_target = nearby[1]
           e.selected = nearby[1]
