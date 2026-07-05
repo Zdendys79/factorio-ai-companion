@@ -308,6 +308,21 @@ local function process_walking_queues()
     if q.clearing_target and not q.clearing_target.valid then
       q.clearing_target = nil  -- previous target is gone (fully mined, or otherwise removed)
     end
+    -- Stale-but-still-valid target guard (cubic-dev-ai bot, 2026-07-05): a target only
+    -- ever got cleared above when the ENTITY itself became invalid -- not when the
+    -- companion simply walked away from it (e.g. redirected to a new q.target, or
+    -- follow_player moved elsewhere). Factorio's engine auto-cancels mining_state.mining
+    -- once the selected entity is out of reach, but q.clearing_target itself stayed set
+    -- (still a valid entity, just distant) -- and since ALL new-target acquisition below
+    -- is gated by `if not q.clearing_target`, a stale distant target would silently block
+    -- the reach=2 AND the radius=4 stuck-fallback scans from EVER picking a new, genuinely
+    -- nearby obstacle again, for as long as this walking_queue entry lives (which can be
+    -- indefinitely in follow_player mode). 6 tiles = a bit more than the widest radius
+    -- (4) either scan below can acquire a target from, so this only fires once the
+    -- companion has clearly moved on, not from ordinary approach jitter at the boundary.
+    if q.clearing_target and u.distance(e.position, q.clearing_target.position) > 6 then
+      q.clearing_target = nil
+    end
     if not q.clearing_target then
       -- radius=2, not a literal 1 (2026-07-05, live-tested): collision keeps the
       -- companion's CENTER measurably farther than 1 tile from a big/huge-rock's
