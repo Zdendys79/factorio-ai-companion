@@ -27,7 +27,12 @@ info="factorio-mod/info.json"
 fail=0
 lua_files=$(git diff --cached --name-only --diff-filter=ACM | grep '\.lua$' || true)
 if [ -n "$lua_files" ]; then
-  for f in $lua_files; do
+  # Read via a here-string (not `for f in $lua_files`, which word-splits on ALL IFS
+  # whitespace and would mangle/silently-skip a path containing a space) -- `<<<` runs
+  # the loop body in the CURRENT shell (unlike a `| while` pipe), so `fail=1` set inside
+  # correctly persists after the loop (cubic dev ai bot, 2026-07-05).
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
     # A) Tie-break first-vs-nearest: find_entities_filtered{...}[1] added -- picks the
     #    FIRST match, not the nearest to target. Real bug 2x tonight (fac_inserter_set_filter,
     #    fac_building_rotate) before fac_building_empty/_fill's nearest-by-distance pattern
@@ -41,20 +46,24 @@ if [ -n "$lua_files" ]; then
       echo "$hits" | sed 's/^/    /'
       fail=1
     fi
-    # B) New tick_*_queues state-machine function with no approach_deadline anywhere in the
-    #    diff -- async queues waiting on companion movement need a bounded deadline (mirror
-    #    tick_gather_queues/tick_fuel_queues) or a permanently-blocked tile hangs forever.
+    # B) New tick_*_queues state-machine function with no approach_deadline ADDED anywhere
+    #    in the diff -- async queues waiting on companion movement need a bounded deadline
+    #    (mirror tick_gather_queues/tick_fuel_queues) or a permanently-blocked tile hangs
+    #    forever. Anchored to '^\+' (added lines only, cubic dev ai bot, 2026-07-05): without
+    #    it, a commit that REMOVES old approach_deadline code while adding a new deadline-less
+    #    tick_*_queues function would incorrectly pass (the removed '-' line still matches
+    #    a bare grep for the string).
     if git diff --cached -U0 -- "$f" | grep -qE '^\+function M\.tick_\w+_queues'; then
-      if ! git diff --cached -U0 -- "$f" | grep -q 'approach_deadline'; then
+      if ! git diff --cached -U0 -- "$f" | grep -qE '^\+.*approach_deadline'; then
         echo "[pre-commit][BLOCK] $f: new tick_*_queues function added with no"
-        echo "  approach_deadline anywhere in this diff. Async queues that wait on companion"
-        echo "  movement/approach need a bounded deadline (mirror tick_gather_queues /"
-        echo "  tick_fuel_queues) so a permanently-blocked tile fails instead of hanging"
+        echo "  approach_deadline ADDED anywhere in this diff. Async queues that wait on"
+        echo "  companion movement/approach need a bounded deadline (mirror tick_gather_queues"
+        echo "  / tick_fuel_queues) so a permanently-blocked tile fails instead of hanging"
         echo "  get_*_status forever."
         fail=1
       fi
     fi
-  done
+  done <<< "$lua_files"
 fi
 
 if [ "$fail" = "1" ]; then
@@ -67,13 +76,20 @@ if [ "$fail" = "1" ]; then
 fi
 
 # --- 2) Auto-bump mod version (only reached once the checks above passed) ---
+# Portable across GNU/BSD (cubic dev ai bot, 2026-07-05): `grep -oP` is a GNU-only PCRE
+# extension (errors out on BSD/macOS grep), and under `set -e` an unmatched/failing grep
+# here would abort the WHOLE hook before the `[ -n "$ver" ]` guard is ever reached --
+# every other command substitution in this file already uses `|| true` for exactly this
+# reason, this one was the odd one out. `sed -n '...p'` (basic regex, no -P) plus a
+# temp-file+mv instead of `sed -i` (GNU accepts `-i` bare, BSD requires `-i ''`) avoids
+# every GNU-specific flag.
 changed=$(git diff --cached --name-only | grep '^factorio-mod/' | grep -v "$info" || true)
 if [ -n "$changed" ]; then
-  ver=$(grep -oP '"version":\s*"\K[0-9]+\.[0-9]+\.[0-9]+' "$info")
+  ver=$(sed -n 's/.*"version": *"\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/p' "$info" | head -1 || true)
   if [ -n "$ver" ]; then
     IFS='.' read -r major minor patch <<< "$ver"
     new="$major.$minor.$((patch + 1))"
-    sed -i "s/\"version\": \"$ver\"/\"version\": \"$new\"/" "$info"
+    sed "s/\"version\": \"$ver\"/\"version\": \"$new\"/" "$info" > "$info.tmp" && mv "$info.tmp" "$info"
     git add "$info"
     echo "[pre-commit] ai-companion version $ver -> $new (mod files changed)"
   fi
