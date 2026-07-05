@@ -62,7 +62,8 @@ commands.add_command("fac_action_attack_status", nil, function(cmd)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local status = queues.get_combat_status(id)
-    u.json_response({id = id, status = status})
+    -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
+    u.json_response({id = id, status = status}, id)
   end)
 end)
 
