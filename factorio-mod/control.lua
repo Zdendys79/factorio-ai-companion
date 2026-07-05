@@ -250,6 +250,63 @@ local function process_walking_queues()
     if not q.target then storage.walking_queues[cid] = nil; goto skip end
     local e = c.entity
     local dist = u.distance(e.position, q.target)
+
+    -- Proactive reach=1 clearing (2026-07-05, Zdendys): "kdykoli companion narazi na
+    -- okrasny kamen (entitu, nikoli naleziste kamene), nebo jakykoli strom (v dosahu 1
+    -- od postavy) vytezi ho" -- ANY tree or decorative rock within reach=1 gets mined on
+    -- sight, regardless of whether the companion is stuck, still approaching, or has
+    -- just arrived. MUST run unconditionally BEFORE the dist<2 arrival check below, not
+    -- inside the still-approaching `else` branch: live-testing found the two states race
+    -- -- a target whose collision box keeps the companion within [1, 2) tiles (e.g. a
+    -- big-rock placed as the destination itself) satisfies "arrived" (dist<2) on the very
+    -- tick it FIRST comes within reach=1, so a check placed only in the "still walking"
+    -- branch never runs at all for that tick (arrival short-circuits into the `if` branch
+    -- and removes the queue entry before the `else`'s clearing logic is ever reached).
+    --
+    -- NATIVE sustained mining (2026-07-05, Zdendys: "to je zakladni pozadavek jakehokoli
+    -- mininguu, to mod nevi?" -- correctly called out): a big-rock's mining_time is real
+    -- (tens of ticks or more, same as a player holding the mine button) -- a single
+    -- scripted `entity.mine{}` call does NOT model that gradual progress and simply fails
+    -- silently on anything with non-trivial mining_time. Reusing the EXACT pattern already
+    -- proven for ore/resource harvesting elsewhere in this mod (queues.lua's
+    -- start_mining_next/tick_harvest_queues): set `selected` + `mining_state={mining=true,
+    -- position=...}` and let the GAME ENGINE run the real mining cycle -- same speed,
+    -- animation, extraction as a real player. `q.clearing_target` tracks which entity is
+    -- currently being sustained-mined so mining_state is only ever ASSIGNED once per
+    -- target: re-assigning it every cycle (every 5 ticks here) would restart the engine's
+    -- mining_time countdown from zero every time and it would NEVER complete (the exact
+    -- "re-setting mining_state every tick" bug already caught and fixed in
+    -- tick_gather_queues, 2026-07-03).
+    if q.clearing_target and not q.clearing_target.valid then
+      q.clearing_target = nil  -- previous target is gone (fully mined, or otherwise removed)
+    end
+    if not q.clearing_target then
+      -- radius=2, not a literal 1 (2026-07-05, live-tested): collision keeps the
+      -- companion's CENTER measurably farther than 1 tile from a big/huge-rock's
+      -- CENTER (their collision box extends to ~1-1.5 tiles from center, confirmed via
+      -- prototypes.entity[...].collision_box) -- the companion stably parks at ~1.6
+      -- tiles away, which IS "right next to it" in any visual/practical sense, just not
+      -- within a literal radius=1 sample from center-to-center. radius=2 matches the
+      -- SAME threshold this function already uses elsewhere for "arrived" (dist<2), and
+      -- still only ever catches things genuinely adjacent (trees have a much smaller
+      -- ~0.4-tile collision box and stop even closer).
+      local adjacent = e.surface.find_entities_filtered{
+        position = e.position, radius = 2,
+        type = {"tree", "simple-entity"}
+      }
+      if adjacent[1] then
+        q.clearing_target = adjacent[1]
+      end
+    end
+    if q.clearing_target then
+      if e.selected ~= q.clearing_target then
+        e.selected = q.clearing_target
+      end
+      if not e.mining_state.mining then
+        e.mining_state = {mining = true, position = q.clearing_target.position}
+      end
+    end
+
     if dist < 2 then
       e.walking_state = {walking = false}
       if not q.follow_player then storage.walking_queues[cid] = nil end
@@ -286,18 +343,21 @@ local function process_walking_queues()
       local moved = prev and u.distance(prev, e.position) or 1
       q.prev_pos = {x = e.position.x, y = e.position.y}
 
-      -- Clear trees and small rocks blocking path (not crash site wrecks or cliffs)
-      if moved < 0.3 then
+      -- Stuck AND nothing within reach=1 to sustained-mine (the block above already
+      -- covers the common case): the actual blocker may be slightly farther away than
+      -- reach=1 (a wider obstacle's collision edge, or simply not centered under the
+      -- reach=1 sample point) -- widen the search to radius=4 and target it via the SAME
+      -- q.clearing_target + mining_state mechanism (not a separate one-shot entity.mine{}
+      -- -- same reasoning as above: mining_time is real, one-shot calls fail silently).
+      if moved < 0.3 and not q.clearing_target then
         local nearby = e.surface.find_entities_filtered{
           position = e.position, radius = 4,
           type = {"tree", "simple-entity"}
         }
-        for _, obs in ipairs(nearby) do
-          -- MINE trees (wood into inventory), but SPARE rocks (the companion pathfinds around the
-          -- rarer rock obstacles). Never free-destroy -- a character mines, it doesn't vanish things.
-          if obs.valid and (obs.type == "tree" or not string.find(obs.name, "rock")) then
-            obs.mine{inventory = e.get_main_inventory()}
-          end
+        if nearby[1] then
+          q.clearing_target = nearby[1]
+          e.selected = nearby[1]
+          e.mining_state = {mining = true, position = nearby[1].position}
         end
       end
 
