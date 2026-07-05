@@ -94,7 +94,11 @@ commands.add_command("fac_companion_position", nil, function(cmd)
         if d < 100 then players[#players + 1] = {name = p.name, distance = math.floor(d)} end
       end
     end
-    u.json_response({id = id, position = {x = math.floor(pos.x * 10) / 10, y = math.floor(pos.y * 10) / 10}, nearby = summary, players = players})
+    -- `id` passed as 2nd arg (2026-07-05): the companion's OWN position poll -- which
+    -- Python's wait_arrive() already calls every ~1-2s while blocking on movement -- now
+    -- also surfaces whatever OTHER async jobs (mine/build/craft/...) are still in flight
+    -- for this same companion, for free, no extra RCON round-trip needed to discover it.
+    u.json_response({id = id, position = {x = math.floor(pos.x * 10) / 10, y = math.floor(pos.y * 10) / 10}, nearby = summary, players = players}, id)
   end)
 end)
 

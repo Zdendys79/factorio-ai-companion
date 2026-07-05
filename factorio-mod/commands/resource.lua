@@ -58,7 +58,10 @@ commands.add_command("fac_resource_mine_status", nil, function(cmd)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local status = queues.get_harvest_status(id)
-    u.json_response({id = id, status = status})
+    -- `id` passed as 2nd arg (2026-07-05): same free-status-attachment as
+    -- fac_companion_position -- wait_mine()'s existing poll now also surfaces any OTHER
+    -- in-flight job for this companion (e.g. a build queued right after mining started).
+    u.json_response({id = id, status = status}, id)
   end)
 end)
 

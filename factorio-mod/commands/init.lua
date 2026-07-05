@@ -27,13 +27,50 @@ function M.get_companion_color(id)
   return M.COMPANION_COLORS[((id - 1) % #M.COMPANION_COLORS) + 1]
 end
 
+-- Same idea as the tick=game.tick trick below, one step further (2026-07-05, Zdendys: RCON
+-- is request/response only, a mod can never push a message on its own -- but that just means
+-- whichever command Python happens to send next can carry the completion status of OTHER
+-- in-flight async jobs for free, instead of needing a DEDICATED status poll for each one).
+-- Returns nil (not an empty table) when nothing is in flight -- Lua can't tell an empty table
+-- apart from an empty array, so helpers.table_to_json could encode `{}` as JSON `[]`, which a
+-- Python `.get("queues", {}).get(...)` would then crash on (list has no .get). Only ever
+-- attaching a genuinely non-empty table sidesteps that ambiguity entirely.
+function M.companion_queue_status(cid)
+  if not cid then return nil end
+  local out = nil
+  local function mark(name, qs)
+    if qs and qs[cid] then
+      out = out or {}
+      out[name] = true
+    end
+  end
+  mark("walking", storage.walking_queues)
+  mark("harvest", storage.harvest_queues)
+  mark("gather", storage.gather_queues)
+  mark("fuel", storage.fuel_queues)
+  mark("craft", storage.craft_queues)
+  mark("build", storage.build_queues)
+  mark("belt", storage.belt_queues)
+  mark("combat", storage.combat_queues)
+  return out
+end
+
 -- tick=game.tick is injected into EVERY response (unless the caller already set
 -- one) so Python-side callers get the current tick for free on any command that
 -- already returns JSON, instead of needing a SEPARATE RCON round-trip just to
 -- read game.tick (2026-07-04, Zdendys: avoid the redundant query the BC recorder
 -- was making after every action).
-function M.json_response(data)
+-- Optional `cid` (2026-07-05): when a caller passes the companion id, ANY response also
+-- carries `queues` (which async job types are still in flight for that companion), unless
+-- the caller already set data.queues itself. `cid` is a NEW, backward-compatible optional
+-- 2nd parameter -- every one of the ~120 existing single-arg call sites still works
+-- unchanged (Lua gives an unpassed parameter `nil`, not an arity error).
+function M.json_response(data, cid)
   if data.tick == nil then data.tick = game.tick end
+  if cid and data.queues == nil then
+    local qs = M.companion_queue_status(cid)
+    if qs then data.queues = qs end
+  end
   local ok, result = pcall(helpers.table_to_json, data)
   rcon.print(ok and result or '{"error":"JSON failed"}')
 end
