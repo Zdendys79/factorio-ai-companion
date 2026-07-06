@@ -1,4 +1,78 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.26
+Date: 2026-07-06
+  (0.16.26 is a changelog-only update -- adds this file's own missing 0.16.20-0.16.25
+  entries plus a new automated web-publish mechanism (scripts/publish_mod_to_web.sh +
+  .githooks/post-commit) -- no functional change to the mod itself vs 0.16.25.)
+---------------------------------------------------------------------------------------------------
+Version: 0.16.25
+Date: 2026-07-06
+  Bugfixes:
+    - tick_harvest_queues (used by fac_resource_mine, and therefore every Python-side
+      mine_and_wait call) never checked TRUE ~2-tile adjacency to the specific resource
+      entity start_mining_next selected -- only a loose 5-tile check against the original
+      command's (x,y), not the same tile once the queue advanced. Native mining_state
+      silently does nothing at a genuine multi-tile distance even with `selected` correctly
+      set. Reproduced live twice on different maps: harvested stuck at exactly 0,
+      mining_state.mining staying true, game.tick advancing normally, for many real minutes.
+      The same adjacency check (MINE_ADJACENT_RANGE) already existed in the sibling
+      tick_gather_queues (0.16.15) but was never backported here. Fixed: skip an
+      out-of-adjacency current entity to the next candidate, plus a 600-tick stale-progress
+      backstop.
+    - belt_connect's A* (pathfind.lua): with a Manhattan heuristic and 4-directional
+      movement, every tile inside the from/to bounding rectangle shares the same f-score,
+      and the old tie-break (keep whichever equal-f node was found first) made the search
+      fan out breadth-first across nearly the entire rectangle instead of marching toward
+      the goal -- long routes reliably exhausted the 2500-node cap even on open terrain.
+      Fixed the tie-break to prefer the larger-g (closer to goal) node among ties (verified
+      this cannot make the result suboptimal). Also raised MAX_SEARCH_MARGIN 15->40 for
+      longer detours around obstacles (lakes).
+---------------------------------------------------------------------------------------------------
+Version: 0.16.24
+Date: 2026-07-05
+  Bugfixes (external automated review, "cubic dev ai bot"):
+    - q.clearing_target (opportunistic obstacle clearing) was only cleared when the
+      referenced entity became invalid (fully mined/destroyed) -- never when the companion
+      simply walked away from it (redirected to a new target, or follow_player moved
+      elsewhere). Since all new-target acquisition is gated on this field, a still-valid but
+      now-distant target could permanently block the companion from noticing any new,
+      genuinely nearby obstacle for as long as that walking_queue entry lives. Fixed with a
+      distance guard (>6 tiles) that clears the stale reference once the companion has
+      clearly moved on.
+---------------------------------------------------------------------------------------------------
+Version: 0.16.23
+Date: 2026-07-05
+  Bugfixes:
+    - Opportunistic obstacle clearing matched type='simple-entity' for rocks, which is much
+      broader than the 3 rock names actually intended -- it also matches unrelated Space Age
+      content on other planets (Vulcanus volcanic-rock/stromatolite, Fulgora rock/ruins,
+      lithium-iceberg, etc.). Tightened to an explicit named list
+      (big-rock/big-sand-rock/huge-rock).
+---------------------------------------------------------------------------------------------------
+Version: 0.16.22
+Date: 2026-07-05
+  Bugfixes:
+    - Opportunistic obstacle clearing only handled trees, not rocks, and used a one-shot
+      mine call instead of the native sustained mining_state used everywhere else. Fixed to
+      also clear rocks and use the same native-mining pattern.
+---------------------------------------------------------------------------------------------------
+Version: 0.16.21
+Date: 2026-07-05
+  Features:
+    - Extended the free in-flight-queue-status attachment (0.16.20) to 5 more status
+      endpoints (fac_gather_status, fac_fuel_group_status, fac_building_place_status,
+      fac_belt_connect_status, fac_item_craft_status, fac_action_attack_status).
+---------------------------------------------------------------------------------------------------
+Version: 0.16.20
+Date: 2026-07-05
+  Features:
+    - RCON is request/response only, a mod can never push a message on its own -- but the
+      response to whatever command Python happens to send next can now carry the completion
+      status of OTHER in-flight async jobs for free. New companion_queue_status(cid)
+      summarizes which of the 8 per-companion queues currently have an entry for this
+      companion; wired into fac_companion_position and fac_resource_mine_status (the two
+      endpoints Python's blocking-poll loops already call every 1-2s).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.18
 Date: 2026-07-04
   Bugfixes:
