@@ -160,6 +160,53 @@ function M.tick_harvest_queues()
       return true
     end
 
+    -- TRUE adjacency check (2026-07-05, Zdendys live-caught: harvest queue froze forever at
+    -- "harvested=0, mining=true" on TWO different maps/positions, game.tick advancing normally,
+    -- companion stationary, `selected` correctly set to a valid resource entity). Root cause:
+    -- the companion was within MINING_RANGE (5) of q.position (the original command's x,y) but
+    -- NOT within the ~2-tile MINE_ADJACENT_RANGE of the SPECIFIC entity start_mining_next
+    -- selected -- native mining_state silently does nothing at that distance even with
+    -- `selected` set (see this file's own MINE_ADJACENT_RANGE comment above). This exact
+    -- adjacency check was already added to tick_gather_queues on 2026-07-03 (below, "mine"
+    -- state) but never backported to tick_harvest_queues, which is what fac_resource_mine /
+    -- Python's mine_and_wait actually uses -- and Python's own go_to() "arrived" tolerance
+    -- (MINE_DIST=4.5) is looser than this mod's true ~2-tile requirement, so a caller can
+    -- easily "arrive" while still being just out of native mining range. Treat an
+    -- out-of-adjacency current entity the same as a depleted one: skip it and try the next
+    -- candidate in q.entities, instead of spinning on it forever.
+    local cur_entity = q.current and q.current.entity
+    if cur_entity and cur_entity.valid and
+       u.distance(c.entity.position, cur_entity.position) > MINE_ADJACENT_RANGE then
+      if #q.entities > 0 and q.entities[1] == cur_entity then table.remove(q.entities, 1) end
+      q.current = nil
+      if not M.start_mining_next(cid) then
+        c.entity.mining_state = {mining = false}
+        u.log_error(string.format(
+          "harvest queue for companion %d ended short (%d/%d %s): no candidate entity was ever " ..
+          "within true mining adjacency (%d tiles) -- caller likely approached with too loose a " ..
+          "tolerance", cid, q.harvested, q.target, q.resource_name or "?", MINE_ADJACENT_RANGE),
+          "harvest_queue")
+        return true
+      end
+      return false   -- fresh candidate selected -- re-check adjacency/progress next tick
+    end
+
+    -- Stale-progress backstop (defense in depth, mirrors the bounded-deadline requirement
+    -- already enforced for every other queue type in this mod -- walking/gather/fuel/craft/
+    -- build/belt/combat): if harvested hasn't moved for a bounded number of ticks despite
+    -- passing every check above, terminate rather than hang indefinitely on some future/
+    -- unknown stall this adjacency fix doesn't cover.
+    q.stale_ticks = (q.last_harvested == q.harvested) and (q.stale_ticks or 0) + TICK_INTERVAL or 0
+    q.last_harvested = q.harvested
+    if q.stale_ticks > 600 then
+      c.entity.mining_state = {mining = false}
+      u.log_error(string.format(
+        "harvest queue for companion %d ended short (%d/%d %s): no progress for %d ticks despite " ..
+        "passing all reachability checks -- unknown stall", cid, q.harvested, q.target,
+        q.resource_name or "?", q.stale_ticks), "harvest_queue")
+      return true
+    end
+
     -- NATIVE mining (Zdendys 2026-07-03: "pouzit proste nativni schopnosti postavy"): the
     -- engine itself runs the mining cycle once mining_state is set in start_mining_next --
     -- same speed, same animation, same extraction as a real player holding the mine button.

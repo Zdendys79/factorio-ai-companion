@@ -10,7 +10,21 @@
 -- fast instead of burning the RCON command's time budget.
 local M = {}
 
-local MAX_SEARCH_MARGIN = 15     -- tiles of slack around the from/to bounding box
+-- MAX_SEARCH_MARGIN raised 15->40 (2026-07-05, Zdendys live-caught: a diagnostic sweep of
+-- 7 distances/shapes on ONE fresh map found a NON-monotonic success pattern by bounding-box
+-- area -- e.g. a 2340-tile-area route failed "no path" while a LARGER 7018-tile-area route
+-- on the SAME map succeeded -- inconsistent with a pure node-budget explanation (which would
+-- predict smaller-area routes succeed more reliably than larger ones). This points to a real
+-- obstacle (most likely a lake, since this mod's map-gen deliberately favors a nearby water
+-- body for the power plant) that some specific routes need to detour around by MORE than the
+-- old 15-tile margin, independent of how many nodes the search budget allows -- no margin
+-- increase can be substituted for by a bigger MAX_NODES, since a blocked tile just outside
+-- the bounding box is never even a candidate node regardless of budget. 40 gives real
+-- clearance for a sizeable lake without exploding the search area unreasonably (the
+-- companion's own tie-break fix, added the same day, already lets the search converge
+-- toward the goal instead of fanning out across the whole box, so a wider margin shouldn't
+-- by itself blow the existing MAX_NODES budget for the common case).
+local MAX_SEARCH_MARGIN = 40     -- tiles of slack around the from/to bounding box
 local MAX_NODES = 2500           -- hard cap on A* expansions (bounded, no infinite loop)
 
 local function tile_key(x, y) return x .. ":" .. y end
@@ -77,10 +91,26 @@ function M.find_path(surf, from, to, force)
   local expansions = 0
 
   while #open > 0 and expansions < MAX_NODES do
-    -- pop lowest-f (linear scan -- MAX_NODES bounds worst case; a real priority queue
-    -- isn't worth the complexity for the short corridors this command targets)
-    local bi, bf = 1, open[1].f
-    for i = 2, #open do if open[i].f < bf then bi, bf = i, open[i].f end end
+    -- Pop lowest-f (linear scan -- MAX_NODES bounds worst case; a real priority queue
+    -- isn't worth the complexity for the short corridors this command targets), tie-
+    -- breaking toward the LARGER g (2026-07-05, Zdendys live-caught: a 134-tile route
+    -- reported "no path" despite there being no water/cliffs in the way -- root cause:
+    -- with a Manhattan heuristic and 4-directional movement, every tile inside the
+    -- from/to bounding rectangle has the SAME f = g+h (the whole rectangle is one tied
+    -- plateau), and the old tie-break ("keep whichever equal-f node was found first")
+    -- made the search fan out breadth-first across nearly the ENTIRE rectangle before
+    -- ever reaching the goal corner -- for a 121x58 box that's ~7000 tiles against a
+    -- 2500-node cap, guaranteeing a false "no path" on a fully open field. Preferring
+    -- the larger-g (equivalently smaller-h, i.e. closer to the goal) node among ties
+    -- biases expansion to march toward the target instead of radiating outward evenly,
+    -- without changing A*'s optimality guarantee at all (ties by definition share the
+    -- same f, so picking a different one among them cannot produce a worse-than-optimal
+    -- final path -- see the state_key/goal-test comments below, unaffected by this).
+    local bi, bf, bg = 1, open[1].f, open[1].g
+    for i = 2, #open do
+      local o = open[i]
+      if o.f < bf or (o.f == bf and o.g > bg) then bi, bf, bg = i, o.f, o.g end
+    end
     local cur = table.remove(open, bi)
     local ck = state_key(cur.x, cur.y, cur.dir)
     if not visited[ck] then
