@@ -31,42 +31,18 @@ commands.add_command("fac_regenerate_map", nil, function(cmd)
 
     local force = game.forces.player
     local spawn = force.get_spawn_position(surf)
-    -- map_gen_settings only affects chunks generated AFTER this point (existing ones
-    -- keep their old terrain) -- delete the chunks around spawn to force them to
-    -- regenerate with the new seed. R=4 chunks (~128 tiles, 81 chunks total) -- lowered
-    -- from an initial R=8 (2026-07-06 live test: 289 chunks at R=8 never finished
-    -- generating within 30s of real time even with force_generate_chunk_requests(), so
-    -- is_chunk_generated at spawn stayed false the whole time) -- still comfortably
-    -- covers the opening's IMMEDIATE needs (coal/stone/iron typically found within 100
-    -- tiles); anything beyond this ring keeps using the OLD seed's terrain, which is
-    -- fine since decide()'s own resource-search radii extend further out regardless.
-    local ccx, ccy = math.floor(spawn.x / 32), math.floor(spawn.y / 32)
-    local R = 4
-    for cx = -R, R do
-      for cy = -R, R do
-        pcall(function() surf.delete_chunk({ccx + cx, ccy + cy}) end)
-      end
-    end
-    -- ONE combined request_to_generate_chunks(spawn, R) call never actually completed
-    -- live (confirmed 2026-07-06: is_chunk_generated at spawn stayed false for 100+
-    -- real seconds at both R=8 and R=4) -- but requesting a SINGLE chunk at a time
-    -- (radius=0/1 per call) completed IMMEDIATELY in isolated live testing. Requesting
-    -- per-chunk individually, exactly like the delete loop above, instead of one bulk
-    -- radius call.
-    for cx = -R, R do
-      for cy = -R, R do
-        surf.request_to_generate_chunks({(ccx + cx) * 32, (ccy + cy) * 32}, 0)
-      end
-    end
-    surf.force_generate_chunk_requests()
-
-    -- Chunk generation is ASYNCHRONOUS even after force_generate_chunk_requests()
-    -- (confirmed live, 2026-07-06: is_chunk_generated at spawn was still false
-    -- immediately after this call returned) -- spawning the crash site here would try
-    -- to place entities on not-yet-real terrain and silently do nothing. Remember
-    -- WHERE to spawn it and let fac_regenerate_map_status (polled by the caller) do the
-    -- actual spawn once the chunk is confirmed ready, instead of guessing a fixed delay.
-    storage.pending_crash_site = {surface_index = surf.index, x = spawn.x, y = spawn.y}
+    -- Deleting+re-requesting the spawn chunks in THIS SAME call (right after changing
+    -- map_gen_settings.seed above) never completed live no matter the radius or
+    -- request granularity (confirmed 2026-07-06: is_chunk_generated at spawn stayed
+    -- false for 100+ real seconds) -- yet the IDENTICAL delete+request steps run
+    -- STANDALONE against an already-settled surface (i.e. at least one tick after the
+    -- seed change) completed instantly every time tested, including the exact spawn
+    -- chunk itself. So the delete+request work is deliberately NOT done here -- only
+    -- recorded as pending -- and actually performed on fac_regenerate_map_status's
+    -- FIRST poll instead, which the caller only calls after at least one RCON
+    -- round-trip (>=1 tick) has passed since this command returned.
+    storage.pending_crash_site = {surface_index = surf.index, x = spawn.x, y = spawn.y,
+                                   requested = false}
 
     u.json_response({regenerated = true, seed = mgs.seed})
   end)
@@ -80,6 +56,36 @@ commands.add_command("fac_regenerate_map_status", nil, function(cmd)
       return
     end
     local surf = game.surfaces[pending.surface_index]
+
+    if not pending.requested then
+      -- FIRST poll after fac_regenerate_map: now do the delete+regenerate-request work
+      -- (see the comment in fac_regenerate_map for why it's deferred to here instead of
+      -- running immediately after the seed change). R=4 chunks (~128 tiles, 81 chunks
+      -- total) -- comfortably covers the opening's IMMEDIATE needs (coal/stone/iron
+      -- typically found within 100 tiles); anything beyond this ring keeps using the
+      -- OLD seed's terrain, which is fine since decide()'s own resource-search radii
+      -- extend further out regardless.
+      local ccx, ccy = math.floor(pending.x / 32), math.floor(pending.y / 32)
+      local R = 4
+      for cx = -R, R do
+        for cy = -R, R do
+          pcall(function() surf.delete_chunk({ccx + cx, ccy + cy}) end)
+        end
+      end
+      -- Per-chunk requests (radius=0 each), not one bulk request_to_generate_chunks(
+      -- pos, R) call -- the bulk form never completed live even standalone, but
+      -- individual per-chunk requests did every time tested.
+      for cx = -R, R do
+        for cy = -R, R do
+          surf.request_to_generate_chunks({(ccx + cx) * 32, (ccy + cy) * 32}, 0)
+        end
+      end
+      surf.force_generate_chunk_requests()
+      pending.requested = true
+      u.json_response({done = false, generating = true})
+      return
+    end
+
     local cx, cy = math.floor(pending.x / 32), math.floor(pending.y / 32)
     if not surf.is_chunk_generated({cx, cy}) then
       u.json_response({done = false, generating = true})
