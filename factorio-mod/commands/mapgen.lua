@@ -47,7 +47,17 @@ commands.add_command("fac_regenerate_map", nil, function(cmd)
         pcall(function() surf.delete_chunk({ccx + cx, ccy + cy}) end)
       end
     end
-    surf.request_to_generate_chunks(spawn, R)
+    -- ONE combined request_to_generate_chunks(spawn, R) call never actually completed
+    -- live (confirmed 2026-07-06: is_chunk_generated at spawn stayed false for 100+
+    -- real seconds at both R=8 and R=4) -- but requesting a SINGLE chunk at a time
+    -- (radius=0/1 per call) completed IMMEDIATELY in isolated live testing. Requesting
+    -- per-chunk individually, exactly like the delete loop above, instead of one bulk
+    -- radius call.
+    for cx = -R, R do
+      for cy = -R, R do
+        surf.request_to_generate_chunks({(ccx + cx) * 32, (ccy + cy) * 32}, 0)
+      end
+    end
     surf.force_generate_chunk_requests()
 
     -- Chunk generation is ASYNCHRONOUS even after force_generate_chunk_requests()
