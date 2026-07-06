@@ -18,17 +18,30 @@ commands.add_command("fac_regenerate_map", nil, function(cmd)
   u.safe_command(function()
     local surf = game.surfaces[1]
     local mgs = surf.map_gen_settings
-    mgs.seed = math.random(0, 4000000000)
+    -- Prefer a caller-supplied seed ("seed=12345") over math.random(): Factorio's own
+    -- RNG turned out to produce the IDENTICAL value across separate fresh server
+    -- restarts (confirmed live, 2026-07-06 -- two independent restarts both produced
+    -- seed 1428491079), so it isn't actually varying run-to-run the way a real random
+    -- source would. The caller (serve_watch.py) generates a genuinely random seed in
+    -- Python instead and passes it explicitly; math.random() stays as a fallback only
+    -- for direct/manual invocation.
+    local req_seed = cmd.parameter and cmd.parameter:match("seed=(%d+)")
+    mgs.seed = req_seed and tonumber(req_seed) or math.random(0, 4000000000)
     surf.map_gen_settings = mgs
 
     local force = game.forces.player
     local spawn = force.get_spawn_position(surf)
     -- map_gen_settings only affects chunks generated AFTER this point (existing ones
     -- keep their old terrain) -- delete the chunks around spawn to force them to
-    -- regenerate with the new seed. R=8 chunks (~256 tiles) comfortably covers the
-    -- opening's whole operating radius (wreck salvage alone searches up to 150 tiles).
+    -- regenerate with the new seed. R=4 chunks (~128 tiles, 81 chunks total) -- lowered
+    -- from an initial R=8 (2026-07-06 live test: 289 chunks at R=8 never finished
+    -- generating within 30s of real time even with force_generate_chunk_requests(), so
+    -- is_chunk_generated at spawn stayed false the whole time) -- still comfortably
+    -- covers the opening's IMMEDIATE needs (coal/stone/iron typically found within 100
+    -- tiles); anything beyond this ring keeps using the OLD seed's terrain, which is
+    -- fine since decide()'s own resource-search radii extend further out regardless.
     local ccx, ccy = math.floor(spawn.x / 32), math.floor(spawn.y / 32)
-    local R = 8
+    local R = 4
     for cx = -R, R do
       for cy = -R, R do
         pcall(function() surf.delete_chunk({ccx + cx, ccy + cy}) end)
