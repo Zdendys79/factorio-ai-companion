@@ -25,6 +25,12 @@ local function valid_companion(id)
   return c and c.entity and c.entity.valid and c
 end
 
+-- Universal stale-progress backstop threshold (2026-07-06, Zdendys: "to bychom mohli
+-- udelat jako obecny fallback na vsechny akce" -- then: "jestli uz tam nekde je 600
+-- ticku, tak dame taky 600!", matching tick_harvest_queues's own existing stale-progress
+-- constant below, for one consistent number project-wide).
+local UNIVERSAL_STALE_TICKS = 600
+
 -- Generic queue processor - eliminates repetition across all tick functions
 local function process_queue(queue_name, processor)
   local queues = storage[queue_name]
@@ -36,8 +42,42 @@ local function process_queue(queue_name, processor)
     if not c then
       to_remove[#to_remove + 1] = cid
     else
-      local should_remove = processor(cid, q, c)
-      if should_remove then to_remove[#to_remove + 1] = cid end
+      -- UNIVERSAL stale-progress backstop, ONE level above every queue type's own
+      -- specific checks (2026-07-06, Zdendys: "obecny fallback na vsechny akce" -- if
+      -- NEITHER the companion's total inventory item count NOR its position has changed
+      -- in UNIVERSAL_STALE_TICKS ticks, whatever this queue is doing isn't making real
+      -- progress, regardless of queue type or the specific reason -- including cases
+      -- where the queue-specific logic never even runs, or a bug like the orphaned-
+      -- mining one found earlier tonight where a queue got silently dropped elsewhere
+      -- without ever reaching this check). Position is checked TOGETHER with item count
+      -- (not item count alone) so a long, genuinely-in-progress walk toward a distant
+      -- target -- which changes position but not inventory -- is correctly NOT flagged
+      -- as stuck; only a companion that is BOTH stationary AND not gaining/losing items
+      -- counts as truly stuck. Tracked ON the queue entry itself (q._stale_*), so
+      -- concurrent queues on the same companion (e.g. walking + harvesting) don't
+      -- interfere with each other's own staleness tracking.
+      local total = c.entity.get_inventory(defines.inventory.character_main).get_item_count()
+      local pos = c.entity.position
+      local moved = q._stale_pos and (u.distance(q._stale_pos, pos) > 0.1)
+      if q._stale_total == total and q._stale_pos and not moved then
+        q._stale_ticks = (q._stale_ticks or 0) + TICK_INTERVAL
+      else
+        q._stale_total = total
+        q._stale_pos = {x = pos.x, y = pos.y}
+        q._stale_ticks = 0
+      end
+      if q._stale_ticks > UNIVERSAL_STALE_TICKS then
+        u.log_error(string.format(
+          "%s queue for companion %d force-stopped: neither inventory count nor " ..
+          "position changed in %d ticks -- no real progress regardless of queue-" ..
+          "specific state", queue_name, cid, q._stale_ticks), queue_name)
+        c.entity.mining_state = {mining = false}
+        c.entity.walking_state = {walking = false}
+        to_remove[#to_remove + 1] = cid
+      else
+        local should_remove = processor(cid, q, c)
+        if should_remove then to_remove[#to_remove + 1] = cid end
+      end
     end
   end
 
