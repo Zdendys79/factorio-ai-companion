@@ -287,6 +287,50 @@ function M.stop_harvest(cid)
   return {stopped = true, harvested = harvested}
 end
 
+-- ============ ORPHANED MINING SAFETY NET ============
+-- Defense in depth (2026-07-06, Zdendys live-caught: a companion mined a single stone
+-- tile CONTINUOUSLY for 10+ minutes -- stone climbing from ~144 to 335+ -- while BOTH
+-- storage.harvest_queues and storage.gather_queues were confirmed completely EMPTY for
+-- every companion id (checked via direct RCON query, no race). Every normal completion
+-- path in tick_harvest_queues/tick_gather_queues explicitly sets mining_state=false
+-- before returning, but process_queue's own early-exit branch (when valid_companion(cid)
+-- returns falsy) removes the queue entry WITHOUT ever calling the processor callback --
+-- so if a companion's registry entry ever goes missing while its physical character
+-- entity and native mining_state persist (exact trigger not fully pinned down this
+-- session), nothing is left to ever stop it; the engine just keeps mining the same tile
+-- forever, completely untracked. Regardless of the precise trigger, nothing should ever
+-- be able to mine with zero tracking -- this backstop periodically scans every
+-- COMPANION (non-player) character actually mining and stops any that isn't accounted
+-- for by an in-flight harvest/gather queue, mirroring the stale-progress backstop
+-- pattern tick_harvest_queues already uses internally, one level up (whole-mod scan,
+-- not per-queue). `not e.player` excludes real human-controlled characters (e.g. Zdendys
+-- connected and mining by hand) -- this must NEVER touch a player's own actions.
+local ORPHAN_CHECK_INTERVAL = 300  -- ~5s at 60 UPS -- a backstop, not time-critical
+
+function M.tick_orphan_mining_cleanup()
+  if (game.tick % ORPHAN_CHECK_INTERVAL) ~= 0 then return end
+  local tracked = {}
+  for cid in pairs(storage.harvest_queues or {}) do
+    local c = valid_companion(cid)
+    if c then tracked[c.entity.unit_number] = true end
+  end
+  for cid in pairs(storage.gather_queues or {}) do
+    local c = valid_companion(cid)
+    if c then tracked[c.entity.unit_number] = true end
+  end
+  for _, surface in pairs(game.surfaces) do
+    for _, e in ipairs(surface.find_entities_filtered{type = "character"}) do
+      if e.valid and not e.player and e.mining_state.mining and not tracked[e.unit_number] then
+        e.mining_state = {mining = false}
+        u.log_error(string.format(
+          "orphan mining stopped: character #%d at (%.0f,%.0f) was mining with no " ..
+          "tracking harvest/gather queue (likely a stale companion registry)",
+          e.unit_number, e.position.x, e.position.y), "orphan_mining")
+      end
+    end
+  end
+end
+
 -- ============ GATHER (autonomous: find reachable patch -> walk -> mine to target) ============
 -- Self-contained composite: the mod finds the nearest REACHABLE + SAFE patch of `resource`, walks the
 -- companion within reach, and mines it NATIVELY via character.mining_state (same speed/animation/
