@@ -56,9 +56,19 @@ local function process_queue(queue_name, processor)
       -- counts as truly stuck. Tracked ON the queue entry itself (q._stale_*), so
       -- concurrent queues on the same companion (e.g. walking + harvesting) don't
       -- interfere with each other's own staleness tracking.
+      -- moved threshold raised 0.1 -> 5 tiles (2026-07-06, Zdendys live-caught: "zmena
+      -- pozice znamena alespon o 5" -- control.lua's own perpendicular-bypass mechanism
+      -- shuffles the companion sideways in small steps while stuck against a large
+      -- obstacle, which satisfied the old near-zero threshold on almost every check,
+      -- continuously resetting _stale_pos to the CURRENT position and defeating this
+      -- entire backstop (confirmed live: stuck against the big wreck's collision for 3+
+      -- minutes, this check never fired). At 5 tiles, small shuffle movements stay
+      -- within range of the ORIGINAL reference point (so _stale_pos does NOT get
+      -- updated and stale_ticks keeps accumulating correctly); only cumulative movement
+      -- that actually clears 5 tiles counts as real progress and resets the counter.
       local total = c.entity.get_inventory(defines.inventory.character_main).get_item_count()
       local pos = c.entity.position
-      local moved = q._stale_pos and (u.distance(q._stale_pos, pos) > 0.1)
+      local moved = q._stale_pos and (u.distance(q._stale_pos, pos) > 5)
       if q._stale_total == total and q._stale_pos and not moved then
         q._stale_ticks = (q._stale_ticks or 0) + TICK_INTERVAL
       else
