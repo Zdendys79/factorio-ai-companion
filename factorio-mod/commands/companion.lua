@@ -20,10 +20,28 @@ commands.add_command("fac_companion_list", nil, function(cmd)
   end)
 end)
 
+-- Standard new-player starting kit (2026-07-06, Zdendys live-checked his own actual
+-- Space Age crash-landing start and gave the exact, authoritative list: "pri spusteni
+-- ma postava pouze: wood=1, pistol=1, firearm-magazine=2, burner-mining-drill=1,
+-- stone-furnace=1" -- base game's own freeplay.lua created_items() has DIFFERENT counts
+-- (iron-plate=8, firearm-magazine=10) and includes iron-plate at all, but that script is
+-- not what Space Age's crash-landing scenario actually uses -- this exact list is
+-- Zdendys's direct, live observation, not a file read, and takes priority over it).
+-- A companion spawned via surface.create_entity bypasses the normal on_player_created
+-- flow entirely, so nothing else ever grants even this much.
+local STARTING_ITEMS = {
+  ["wood"] = 1,
+  ["pistol"] = 1,
+  ["firearm-magazine"] = 2,
+  ["burner-mining-drill"] = 1,
+  ["stone-furnace"] = 1,
+}
+
 commands.add_command("fac_companion_spawn", nil, function(cmd)
   u.safe_command(function()
     local param = cmd.parameter or ""
     local req_id = tonumber(param:match("id=(%d+)"))
+    local req_name = param:match("name=(%S+)")
     if req_id and storage.companions[req_id] then
       local c = storage.companions[req_id]
       if c.entity and c.entity.valid then u.json_response({status = "exists", id = req_id}); return end
@@ -44,10 +62,21 @@ commands.add_command("fac_companion_spawn", nil, function(cmd)
     if e then
       local color = u.get_companion_color(id)
       e.color = color
-      storage.companions[id] = {entity = e, color = color, label = u.render_label(e, "#" .. id, color), spawned_tick = game.tick}
+      local name = req_name or ("#" .. id)
+      -- Standard new-player starting kit (real, not a cheat -- exactly what a fresh
+      -- freeplay game grants any player character; this companion just never went
+      -- through that normal on_player_created flow to receive it automatically).
+      local inv = e.get_inventory(defines.inventory.character_main)
+      if inv then
+        for item, count in pairs(STARTING_ITEMS) do
+          inv.insert{name = item, count = count}
+        end
+      end
+      storage.companions[id] = {entity = e, color = color, name = name,
+                                label = u.render_label(e, name, color), spawned_tick = game.tick}
       if storage.dead_companions then storage.dead_companions[id] = nil end  -- (re)spawned -> no longer dead
-      game.print("[#" .. id .. " spawned]", u.print_color(color))
-      u.json_response({spawned = true, id = id})
+      game.print("[" .. name .. " spawned]", u.print_color(color))
+      u.json_response({spawned = true, id = id, name = name})
     else u.error_response("Failed to spawn") end
   end)
 end)
