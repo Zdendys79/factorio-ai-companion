@@ -212,10 +212,23 @@ local function run_pick_orientation(c, t, step)
     elseif off[1] > 0 then simple_dir = 1
     else simple_dir = 3 end
     local real_dir = u.dir_map[simple_dir]
+    -- opposite_direction (2026-07-07, coal_pair): two SAME-type entities (e.g. two
+    -- burner-mining-drills) facing EACH OTHER so each one's mined output auto-feeds
+    -- the other's fuel inventory (real vanilla mechanic, no cheat -- matches the
+    -- already-live-verified geometry in spatial_bc.py's _build_coal_drill_pair).
+    -- Without this the secondary would default to facing north regardless of which
+    -- side it's on, which is wrong for a drill (though harmless for a directionless
+    -- chest/furnace) and would also make its OWN can_place_entity check below use
+    -- the wrong footprint if that entity's collision box isn't rotation-symmetric.
+    local secondary_dir = real_dir
+    if step.opposite_direction then
+      secondary_dir = u.dir_map[(simple_dir + 2) % 4]
+    end
     if surf.can_place_entity{name = step.primary, position = {x = t.ctx.px, y = t.ctx.py}, direction = real_dir, force = c.entity.force}
-       and surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, force = c.entity.force} then
+       and surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, direction = secondary_dir, force = c.entity.force} then
       t.ctx.sx, t.ctx.sy = sx, sy
       t.ctx.dir = real_dir
+      t.ctx.dir2 = secondary_dir
       -- Kept alongside sx/sy so the primary's "place" step can RECOMPUTE the
       -- secondary's position once the primary's REAL (possibly snapped) placed
       -- position is known -- see the note where offset_dx/dy is consumed below.
@@ -331,7 +344,8 @@ function M.tick()
         -- there is no later "building" state to catch it) -- fail_task here or the
         -- task would sit stuck in "acting" forever with active_step never cleared.
         local pos = step_target_pos(t, step)
-        local r = queues.start_build(cid, step.entity, pos, t.ctx.dir or 0)
+        local place_dir = (step.which == "secondary" and t.ctx.dir2) or t.ctx.dir or 0
+        local r = queues.start_build(cid, step.entity, pos, place_dir)
         if r.error then
           fail_task(active.task_id, r.error)
           storage.active_step[cid] = nil
