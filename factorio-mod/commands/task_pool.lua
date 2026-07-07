@@ -21,18 +21,36 @@
 -- the mechanism Zdendys actually described tonight (pool/reservation/priority),
 -- not a from-scratch reimplementation of every existing procurement macro.
 --
--- Step vocabulary (v1 -- exactly what iron_drill/stone_drill need, not yet a
--- fully general DSL):
+-- Step vocabulary (v1 -- exactly what iron_drill/stone_drill/coal_pair/coal_pair
+-- upgrade need, not yet a fully general DSL):
 --   {type="find_patch", resource=NAME}                 -> ctx.px, ctx.py
 --   {type="verify_tile", resource=NAME}                -> aborts task if patch gone
---   {type="pick_orientation", primary=ENTITY, secondary=ENTITY, offsets={{dx,dy},...}}
---                                                       -> ctx.sx, ctx.sy, ctx.dir
---   {type="place", which="primary"|"secondary", entity=NAME}
---   {type="fuel", which="primary"|"secondary", item=NAME, count=N}
+--   {type="pick_orientation", primary=ENTITY, secondary=ENTITY, offsets={{dx,dy},...},
+--                             opposite_direction=true|nil}
+--                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
+--   {type="place", which=/x,y/ref=, entity=NAME, dir=N}
+--   {type="remove", which=/x,y/ref=, entity=NAME}
+--   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
+--   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
+--                                                       -> ctx.saved[save_as]
 --
--- "which" addresses WHERE a place/fuel step acts: "primary" = ctx.px/py (the
--- patch position itself, i.e. the drill), "secondary" = ctx.sx/sy (the paired
--- furnace/chest position found by pick_orientation).
+-- Every place/fuel/remove/read_drop_position step resolves ITS OWN target
+-- position the SAME way (step_target_pos), trying in order: explicit {x=,y=}
+-- (caller precomputed it) > {ref=NAME} (a position an earlier read_drop_position
+-- step in THIS task saved under that name) > which="primary"|"secondary" (ctx.px/
+-- py or ctx.sx/sy, from find_patch/pick_orientation earlier in this task).
+--
+-- read_drop_position (2026-07-07, coal_pair upgrade task) reads an entity's LIVE
+-- LuaEntity.drop_position -- the engine's own already-rotated absolute output
+-- position -- rather than reimplementing vector_to_place_result rotation math on
+-- the Python side (a real, verified-via-doc field; deliberately not guessed).
+-- Lets a task place a chest/container exactly where an EXISTING drill's mined
+-- output actually lands, whatever direction that drill happens to face.
+--
+-- "place" also accepts an explicit simple-0-3 `dir` (bypassing ctx.dir/dir2,
+-- which only exist when a pick_orientation step ran earlier in this task) --
+-- needed when the caller precomputed the whole layout itself with no
+-- pick_orientation step at all.
 
 local u = require("commands.init")
 local queues = require("commands.queues")
@@ -53,6 +71,14 @@ end
 
 -- ---- needs derivation + reservation ledger ----
 
+-- "remove" steps (2026-07-07, coal_pair upgrade task) SUPPLY an item the task's
+-- OWN later "place" steps then consume (e.g. picking up the 2 existing coal_pair
+-- drills before repositioning them) -- netted against place/fuel demand here so
+-- a task that fully supplies its own materials doesn't show a needs deficit for
+-- items it was never actually short on. Without this, such a task would never
+-- become "ready" (task_ready() gates on needs being empty) and its own remove
+-- steps -- the very thing that would supply what it "needs" -- could never run:
+-- a real catch-22, not just an inefficiency.
 local function derive_needs(steps)
   local needs = {}
   for _, s in ipairs(steps) do
@@ -60,7 +86,12 @@ local function derive_needs(steps)
       needs[s.entity] = (needs[s.entity] or 0) + 1
     elseif s.type == "fuel" then
       needs[s.item] = (needs[s.item] or 0) + (s.count or 1)
+    elseif s.type == "remove" then
+      needs[s.entity] = (needs[s.entity] or 0) - 1
     end
+  end
+  for item, count in pairs(needs) do
+    if count <= 0 then needs[item] = nil end
   end
   return needs
 end
@@ -149,8 +180,29 @@ end
 -- Returns the world position a given step will act at (nil if the step doesn't
 -- need a specific position -- e.g. find_patch/verify_tile/pick_orientation run
 -- instantly wherever the companion currently stands).
+--
+-- Absolute x/y (2026-07-07, coal_pair upgrade task): a step MAY specify its own
+-- explicit {x=, y=} instead of relying on ctx.px/py or ctx.sx/sy -- lets the
+-- PYTHON side precompute a whole multi-entity layout itself (e.g. a drill's
+-- known drop_position, queried once and reused for several later steps) rather
+-- than needing pick_orientation's primary/secondary/offset model extended to
+-- cover more than 2 positions. Checked FIRST so it overrides which= when both
+-- are present (they never should be, but explicit coordinates are the more
+-- specific/intentional choice if a step somehow carries both).
 local function step_target_pos(t, step)
-  if step.type == "place" or step.type == "fuel" then
+  if step.x and step.y then return {x = step.x, y = step.y} end
+  -- ref (2026-07-07, coal_pair upgrade task): a step MAY target a position saved
+  -- earlier in ctx.saved by a "read_drop_position" step (e.g. a drill's engine-
+  -- computed, already-rotated drop_position -- see that step's own comment for
+  -- why this is queried live instead of reimplementing vector_to_place_result
+  -- rotation math on the Python side).
+  if step.ref and t.ctx.saved and t.ctx.saved[step.ref] then return t.ctx.saved[step.ref] end
+  -- 2026-07-07, live-caught: "read_drop_position" was missing from this type
+  -- list, so its which="primary"/"secondary" never resolved (fell straight
+  -- through to `return nil`) -- failed with "no source position resolved" on
+  -- its very first live run despite drills placing correctly just before it.
+  if step.type == "place" or step.type == "fuel" or step.type == "remove"
+     or step.type == "read_drop_position" then
     if step.which == "primary" and t.ctx.px then return {x = t.ctx.px, y = t.ctx.py} end
     if step.which == "secondary" and t.ctx.sx then return {x = t.ctx.sx, y = t.ctx.sy} end
   end
@@ -166,6 +218,28 @@ local function task_ready(t)
 end
 
 -- ---- synchronous (non-walking) step execution ----
+
+-- read_drop_position (2026-07-07, coal_pair upgrade task): reads an entity's
+-- LIVE, engine-computed LuaEntity.drop_position (the already-rotated absolute
+-- world position where it drops mined/crafted output, per its ACTUAL placed
+-- direction) rather than reimplementing the prototype's vector_to_place_result
+-- rotation math on the Python side -- avoids a whole class of rotation-sign
+-- mistakes for a value the engine already computes authoritatively. Looks for
+-- the entity at whatever position step_target_pos resolves for THIS step
+-- (which=/x,y/ref, same addressing every other step uses), stores the result
+-- in ctx.saved[step.save_as] for a LATER step to target via {ref=save_as}.
+local function run_read_drop_position(c, t, step)
+  local pos = step_target_pos(t, step)
+  if not pos then return false, "read_drop_position: no source position resolved" end
+  local es = c.entity.surface.find_entities_filtered{
+    name = step.entity, position = pos, radius = 1}
+  if #es == 0 then return false, "read_drop_position: no " .. tostring(step.entity) .. " found at source" end
+  local dp = es[1].drop_position
+  if not dp then return false, "read_drop_position: entity has no drop_position" end
+  t.ctx.saved = t.ctx.saved or {}
+  t.ctx.saved[step.save_as] = {x = dp.x, y = dp.y}
+  return true
+end
 
 local function run_find_patch(c, t, step)
   local surf = c.entity.surface
@@ -344,7 +418,16 @@ function M.tick()
         -- there is no later "building" state to catch it) -- fail_task here or the
         -- task would sit stuck in "acting" forever with active_step never cleared.
         local pos = step_target_pos(t, step)
-        local place_dir = (step.which == "secondary" and t.ctx.dir2) or t.ctx.dir or 0
+        -- Explicit step.dir (simple 0-3, 2026-07-07 coal_pair upgrade) overrides
+        -- ctx.dir/dir2 when the caller precomputed the whole layout itself (no
+        -- pick_orientation step at all for this task) -- translated the SAME way
+        -- pick_orientation does, so callers use the identical simple convention.
+        local place_dir
+        if step.dir ~= nil then
+          place_dir = u.dir_map[step.dir]
+        else
+          place_dir = (step.which == "secondary" and t.ctx.dir2) or t.ctx.dir or 0
+        end
         local r = queues.start_build(cid, step.entity, pos, place_dir)
         if r.error then
           fail_task(active.task_id, r.error)
@@ -353,6 +436,26 @@ function M.tick()
           -- Poll build_queues to completion via the SEPARATE "building" state
           -- below (own stale-progress backstop, same as every other queue type).
           active.state = "building"
+        end
+      elseif step.type == "remove" then
+        -- Pick up an existing entity (2026-07-07, coal_pair upgrade task: reuses
+        -- the 2 ALREADY-BUILT coal_pair drills rather than crafting new ones --
+        -- Zdendys: "zvedne obe vrtacky, nemusi je vyrabet"). Uses the SAME
+        -- native-mine pattern already proven in commands/building.lua's
+        -- fac_mine_entity (target.mine{inventory=...}, success measured by
+        -- inventory count actually increasing -- mine{} leaves the entity INTACT
+        -- if the inventory can't hold the result, no silent item loss/no cheat).
+        local pos = step_target_pos(t, step)
+        local es = c.entity.surface.find_entities_filtered{
+          name = step.entity, position = pos, radius = 1}
+        if #es == 0 then
+          ok, err = false, "no " .. step.entity .. " found to remove at target"
+        else
+          local inv = c.entity.get_main_inventory()
+          local before = inv.get_item_count()
+          es[1].mine{inventory = inv}
+          ok = (inv.get_item_count() - before) > 0
+          err = ok and nil or "could not mine (inventory full?)"
         end
       elseif step.type == "fuel" then
         local pos = step_target_pos(t, step)
@@ -389,6 +492,8 @@ function M.tick()
         ok, err = run_verify_tile(c, t, step)
       elseif step.type == "pick_orientation" then
         ok, err = run_pick_orientation(c, t, step)
+      elseif step.type == "read_drop_position" then
+        ok, err = run_read_drop_position(c, t, step)
       else
         ok, err = false, "unknown step type " .. tostring(step.type)
       end
