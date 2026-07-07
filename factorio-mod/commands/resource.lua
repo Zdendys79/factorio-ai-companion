@@ -79,16 +79,28 @@ end)
 -- AUTONOMOUS gather: the mod itself finds the nearest REACHABLE + SAFE patch, walks the companion
 -- there, and mines to `count` (native 1-unit mining), moving to the next patch as tiles deplete.
 -- Replaces the Python find_nearest + go_to + start_harvest + poll glue -- "what the mod can do itself".
--- Usage: /fac_gather <id> <resource> <count>  ; poll /fac_gather_status <id>
+-- Usage: /fac_gather <id> <resource> <count> [exclude]  ; poll /fac_gather_status <id>
+-- exclude (2026-07-07, optional 4th arg): "x1:y1,x2:y2,..." -- positions the CALLER already
+-- knows are unreachable/exhausted (e.g. spatial_bc.py's persistent per-resource
+-- resource_exclude, accumulated across the whole episode) -- skipped from the very first
+-- patch search instead of being silently re-discovered.
 commands.add_command("fac_gather", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+(%S+)%s+(%d+)$", cmd.parameter)
+    local args = u.parse_args("^(%S+)%s+(%S+)%s+(%d+)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local resource = args[2] and (normalize[args[2]] or args[2]) or nil
     local count = tonumber(args[3])
-    if not resource or not count then u.error_response("Usage: fac_gather <id> <resource> <count>"); return end
-    local result = queues.start_gather(id, resource, count)
+    if not resource or not count then u.error_response("Usage: fac_gather <id> <resource> <count> [exclude]"); return end
+    local exclude = nil
+    if args[4] and args[4] ~= "" then
+      exclude = {}
+      for pair in args[4]:gmatch("[^,]+") do
+        local ex, ey = pair:match("^(%-?%d+):(%-?%d+)$")
+        if ex and ey then exclude[#exclude + 1] = {x = tonumber(ex), y = tonumber(ey)} end
+      end
+    end
+    local result = queues.start_gather(id, resource, count, exclude)
     if result.error then u.json_response({id = id, error = result.error})
     else u.json_response({id = id, gathering = true, resource = resource, target = count}) end
   end)

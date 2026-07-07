@@ -404,10 +404,30 @@ local function find_reachable_resource(surf, from, resource, blacklist)
   return nil
 end
 
-function M.start_gather(cid, resource, count)
+function M.start_gather(cid, resource, count, exclude)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
-  storage.gather_queues[cid] = {resource = resource, target = count, state = "find", last_mine_tick = 0}
+  -- exclude (2026-07-07, Zdendys/Claude: replacing the Python-side manual
+  -- goto_resource()+mine_and_wait() flow, which needed its OWN distance-vs-
+  -- MINE_DIST guessing purely to know "did I arrive" -- a guessed threshold
+  -- that kept landing on the wrong side of the mod's real MINE_ADJACENT_RANGE
+  -- boundary across 3 separate live-caught bugs today. gather() already does
+  -- the whole walk+adjacency+mine cycle server-side with no Python distance
+  -- math at all; the ONE thing it was missing to fully replace goto_resource
+  -- was a way for the CALLER to say "skip these positions, already proven
+  -- unreachable/exhausted this episode" -- goto_resource's own persistent
+  -- per-resource exclude list (spatial_bc.py's resource_exclude). Optional
+  -- list of {x=,y=} tables, seeded into q.blacklist UPFRONT using the SAME
+  -- tile-key format find_reachable_resource/tick_gather_queues already use
+  -- internally for patches THIS queue discovers unreachable on its own.
+  local blacklist = {}
+  if exclude then
+    for _, p in ipairs(exclude) do
+      blacklist[_tile_key(p)] = true
+    end
+  end
+  storage.gather_queues[cid] = {resource = resource, target = count, state = "find",
+    last_mine_tick = 0, blacklist = blacklist}
   return {started = true, resource = resource, target = count}
 end
 
@@ -537,7 +557,16 @@ function M.get_gather_status(cid)
   if not q then return {active = false} end
   local c = valid_companion(cid)
   local have = (c and q.product) and c.entity.get_main_inventory().get_item_count(q.product) - (q.start_count or 0) or 0
-  return {active = true, resource = q.resource, target = q.target, gathered = have, state = q.state}
+  -- blacklist tile-keys (2026-07-07): lets the Python caller fold any patch THIS
+  -- run discovered unreachable into its OWN persistent exclude list, so a LATER
+  -- gather() call (this queue is per-call, not per-episode) doesn't waste an
+  -- approach_deadline cycle re-discovering the same dead patch.
+  local bl = {}
+  if q.blacklist then
+    for k in pairs(q.blacklist) do bl[#bl + 1] = k end
+  end
+  return {active = true, resource = q.resource, target = q.target, gathered = have,
+    state = q.state, blacklist = bl}
 end
 
 -- ============ FUEL GROUP (autonomous: walk to each burner in range -> top up fuel) ============
