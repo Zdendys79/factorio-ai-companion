@@ -22,17 +22,36 @@
 -- not a from-scratch reimplementation of every existing procurement macro.
 --
 -- Step vocabulary (v1 -- exactly what iron_drill/stone_drill/coal_pair/coal_pair
--- upgrade need, not yet a fully general DSL):
+-- upgrade/furnace-upgrade need, not yet a fully general DSL):
 --   {type="find_patch", resource=NAME}                 -> ctx.px, ctx.py
+--   {type="find_existing", entity=NAME, radius=N}       -> ctx.px, ctx.py
 --   {type="verify_tile", resource=NAME}                -> aborts task if patch gone
 --   {type="pick_orientation", primary=ENTITY, secondary=ENTITY, offsets={{dx,dy},...},
---                             opposite_direction=true|nil}
+--                             opposite_direction=true|nil, primary_exists=true|nil,
+--                             secondary_resource=NAME|nil}
 --                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
 --   {type="place", which=/x,y/ref=, entity=NAME, dir=N}
 --   {type="remove", which=/x,y/ref=, entity=NAME}
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
 --                                                       -> ctx.saved[save_as]
+--
+-- find_existing (2026-07-07, furnace-upgrade task): locates an ALREADY-PLACED
+-- entity by name nearest the companion's CURRENT position (radius search, no
+-- ore/resource patch involved) and sets ctx.px/py to it -- for a task that
+-- upgrades something already built (e.g. adding a drill next to a lone
+-- bootstrap furnace, Zdendys: "je to stejne jako postaveni noveho paru, ale
+-- pec uz tu je, staci k ni pridat vrtacku") rather than starting from a raw
+-- resource tile like find_patch does.
+--
+-- pick_orientation's primary_exists (2026-07-07, furnace-upgrade task): when
+-- true, the primary (at ctx.px/py, e.g. an EXISTING furnace from find_existing)
+-- is NOT can_place_entity-checked or re-placed -- it's already there. Only the
+-- secondary's (e.g. a NEW drill's) candidate offset is checked/placed. Pairs
+-- with secondary_resource=NAME to ALSO require that offset tile actually have
+-- that resource underneath (a drill next to an existing furnace still needs
+-- REAL ore there, same as run_verify_tile checks for the primary elsewhere) --
+-- without this a candidate could pass can_place_entity yet sit on bare ground.
 --
 -- Every place/fuel/remove/read_drop_position step resolves ITS OWN target
 -- position the SAME way (step_target_pos), trying in order: explicit {x=,y=}
@@ -241,6 +260,25 @@ local function run_read_drop_position(c, t, step)
   return true
 end
 
+-- find_existing (2026-07-07, furnace-upgrade task): see step vocabulary note
+-- above -- locates an already-placed entity (not a resource patch) nearest the
+-- companion, for a task that adds to something already built.
+local function run_find_existing(c, t, step)
+  local surf = c.entity.surface
+  local es = surf.find_entities_filtered{
+    name = step.entity, position = c.entity.position, radius = step.radius or 400}
+  local best, best_d = nil, math.huge
+  for _, e in ipairs(es) do
+    if e.valid then
+      local d = u.distance(e.position, c.entity.position)
+      if d < best_d then best, best_d = e, d end
+    end
+  end
+  if not best then return false, "no existing " .. step.entity .. " found" end
+  t.ctx.px, t.ctx.py = best.position.x, best.position.y
+  return true
+end
+
 local function run_find_patch(c, t, step)
   local surf = c.entity.surface
   local es = surf.find_entities_filtered{name = step.resource, position = c.entity.position, radius = 400}
@@ -298,7 +336,24 @@ local function run_pick_orientation(c, t, step)
     if step.opposite_direction then
       secondary_dir = u.dir_map[(simple_dir + 2) % 4]
     end
-    if surf.can_place_entity{name = step.primary, position = {x = t.ctx.px, y = t.ctx.py}, direction = real_dir, force = c.entity.force}
+    -- primary_exists (2026-07-07, furnace-upgrade task): the primary is an
+    -- ALREADY-PLACED entity (e.g. from find_existing) -- it's not being placed
+    -- by this task, so it must NOT be can_place_entity-checked (it already
+    -- occupies that spot; checking would always fail against itself).
+    local primary_ok = step.primary_exists or
+      surf.can_place_entity{name = step.primary, position = {x = t.ctx.px, y = t.ctx.py}, direction = real_dir, force = c.entity.force}
+    -- secondary_resource (2026-07-07, furnace-upgrade task): the secondary's
+    -- candidate tile must ALSO have this resource underneath (e.g. a new drill
+    -- next to an existing furnace still needs REAL ore there) -- otherwise a
+    -- tile that merely passes can_place_entity but sits on bare ground would be
+    -- silently accepted, matching the same real-ore requirement run_verify_tile
+    -- already enforces for a find_patch-derived primary.
+    local secondary_resource_ok = true
+    if step.secondary_resource then
+      local ore = surf.find_entities_filtered{name = step.secondary_resource, position = {x = sx, y = sy}, radius = 1}
+      secondary_resource_ok = #ore > 0
+    end
+    if primary_ok and secondary_resource_ok
        and surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, direction = secondary_dir, force = c.entity.force} then
       t.ctx.sx, t.ctx.sy = sx, sy
       t.ctx.dir = real_dir
@@ -306,6 +361,8 @@ local function run_pick_orientation(c, t, step)
       -- Kept alongside sx/sy so the primary's "place" step can RECOMPUTE the
       -- secondary's position once the primary's REAL (possibly snapped) placed
       -- position is known -- see the note where offset_dx/dy is consumed below.
+      -- (Not relevant when primary_exists -- there is no primary "place" step
+      -- to recompute anything from, the furnace's position never changes.)
       t.ctx.offset_dx, t.ctx.offset_dy = off[1], off[2]
       return true
     end
@@ -488,6 +545,8 @@ function M.tick()
         end
       elseif step.type == "find_patch" then
         ok, err = run_find_patch(c, t, step)
+      elseif step.type == "find_existing" then
+        ok, err = run_find_existing(c, t, step)
       elseif step.type == "verify_tile" then
         ok, err = run_verify_tile(c, t, step)
       elseif step.type == "pick_orientation" then
