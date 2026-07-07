@@ -2,6 +2,7 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local spectate = require("commands.spectate")
+local task_pool = require("commands.task_pool")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -31,6 +32,7 @@ local function init_storage()
   storage.companion_markers = storage.companion_markers or {}
   storage.path_requests = storage.path_requests or {}
   queues.init()
+  task_pool.init()
 end
 
 local function cleanup_messages()
@@ -154,6 +156,7 @@ require("commands.mapgen")
 require("commands.move")
 require("commands.research")
 require("commands.resource")
+require("commands.task")
 require("commands.world")
 require("commands.combat")
 require("commands.help")
@@ -459,4 +462,5 @@ script.on_nth_tick(5, function(ev)
   guard_tick("walking", process_walking_queues,     ev.tick)
   guard_tick("spectate", spectate.tick_spectators,  ev.tick)
   guard_tick("orphan_mining", queues.tick_orphan_mining_cleanup, ev.tick)
+  guard_tick("task_pool", task_pool.tick, ev.tick)
 end)
