@@ -31,7 +31,7 @@
 --                             opposite_direction=true|nil, primary_exists=true|nil,
 --                             secondary_resource=NAME|nil}
 --                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
---   {type="place", which=/x,y/ref=, entity=NAME, dir=N}
+--   {type="place", which=/x,y/ref/candidates={{x=,y=,dir=},...}, entity=NAME, dir=N}
 --   {type="remove", which=/x,y/ref=, entity=NAME}
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
@@ -56,9 +56,21 @@
 --
 -- Every place/fuel/remove/read_drop_position step resolves ITS OWN target
 -- position the SAME way (step_target_pos), trying in order: explicit {x=,y=}
--- (caller precomputed it) > {ref=NAME} (a position an earlier read_drop_position
--- step in THIS task saved under that name) > which="primary"|"secondary" (ctx.px/
--- py or ctx.sx/sy, from find_patch/pick_orientation earlier in this task).
+-- (caller precomputed it) > candidates[1] (nominal walking target only -- see
+-- "place"'s own candidates note for actual placement resolution) > {ref=NAME}
+-- (a position an earlier read_drop_position step in THIS task saved under that
+-- name) > which="primary"|"secondary" (ctx.px/py or ctx.sx/sy, from find_patch/
+-- pick_orientation earlier in this task).
+--
+-- "place"'s candidates (2026-07-07, live-caught TWICE across separate runs: a
+-- single precomputed position -- e.g. an inserter placed exactly 1 tile from a
+-- chest's read_drop_position -- can intermittently fail with "Cannot place
+-- (collision)" from sub-tile snap variance at that specific spot, even though
+-- the SAME code succeeds on a different map). An optional list of {x=,y=,dir=}
+-- alternatives lets the caller offer a few nearby fallback spots; the FIRST one
+-- that passes can_place_entity at "acting" time is used -- mirrors
+-- pick_orientation's own try-candidates-in-order robustness, applied to a
+-- single free-standing placement instead of a primary/secondary pair.
 --
 -- read_drop_position (2026-07-07, coal_pair upgrade task) reads an entity's LIVE
 -- LuaEntity.drop_position -- the engine's own already-rotated absolute output
@@ -211,6 +223,15 @@ end
 -- specific/intentional choice if a step somehow carries both).
 local function step_target_pos(t, step)
   if step.x and step.y then return {x = step.x, y = step.y} end
+  -- candidates (2026-07-07): use the FIRST candidate as the nominal walking/
+  -- scheduling target -- they cluster close together (fallback alternatives
+  -- for the SAME intended spot), so any one of them is a fine approximation
+  -- for "is the companion roughly there yet" even though run_pick_orientation-
+  -- style candidate resolution (which one actually gets placed) only happens
+  -- once the "acting" state is reached.
+  if step.candidates and step.candidates[1] then
+    return {x = step.candidates[1].x, y = step.candidates[1].y}
+  end
   -- ref (2026-07-07, coal_pair upgrade task): a step MAY target a position saved
   -- earlier in ctx.saved by a "read_drop_position" step (e.g. a drill's engine-
   -- computed, already-rotated drop_position -- see that step's own comment for
@@ -498,6 +519,32 @@ function M.tick()
           place_dir = u.dir_map[step.dir]
         else
           place_dir = (step.which == "secondary" and t.ctx.dir2) or t.ctx.dir or 0
+        end
+        -- candidates (2026-07-07, live-caught): a SINGLE precomputed {x,y,dir}
+        -- position (e.g. an inserter placed 1 tile from a chest read via
+        -- read_drop_position) can intermittently collide -- observed twice
+        -- across separate live runs with the EXACT same code on different maps
+        -- (sub-tile snap variance at that specific spot, not a logic bug). An
+        -- optional list of {x=,y=,dir=} alternatives lets the caller offer a
+        -- few nearby fallback spots; the FIRST one that passes can_place_entity
+        -- is used, mirroring pick_orientation's own try-candidates-in-order
+        -- robustness instead of committing to one fixed spot with no recourse.
+        if step.candidates then
+          local surf = c.entity.surface
+          local chosen = nil
+          for _, cand in ipairs(step.candidates) do
+            local cdir = u.dir_map[cand.dir or 0]
+            if surf.can_place_entity{name = step.entity, position = {x = cand.x, y = cand.y}, direction = cdir, force = c.entity.force} then
+              chosen = {x = cand.x, y = cand.y, dir = cdir}
+              break
+            end
+          end
+          if not chosen then
+            fail_task(active.task_id, "no candidate position free for " .. step.entity)
+            storage.active_step[cid] = nil
+            goto continue
+          end
+          pos, place_dir = {x = chosen.x, y = chosen.y}, chosen.dir
         end
         local r = queues.start_build(cid, step.entity, pos, place_dir)
         if r.error then
