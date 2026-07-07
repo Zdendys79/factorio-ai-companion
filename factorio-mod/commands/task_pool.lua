@@ -29,7 +29,8 @@
 --   {type="verify_tile", resource=NAME}                -> aborts task if patch gone
 --   {type="pick_orientation", primary=ENTITY, secondary=ENTITY, offsets={{dx,dy},...},
 --                             opposite_direction=true|nil, primary_exists=true|nil,
---                             secondary_resource=NAME|nil}
+--                             secondary_resource=NAME|nil,
+--                             ignore_entities_at={{x=,y=},...}|nil}
 --                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
 --   {type="place", which=/x,y/ref/candidates={{x=,y=,dir=},...}, entity=NAME, dir=N}
 --   {type="remove", which=/x,y/ref=, entity=NAME}
@@ -53,6 +54,16 @@
 -- that resource underneath (a drill next to an existing furnace still needs
 -- REAL ore there, same as run_verify_tile checks for the primary elsewhere) --
 -- without this a candidate could pass can_place_entity yet sit on bare ground.
+--
+-- pick_orientation's ignore_entities_at (2026-07-07, coal_pair v1->v2 upgrade safety
+-- fix): for an UPGRADE task that will "remove" existing entities and rebuild wider at
+-- the SAME anchor, checking the wider candidates BEFORE removing anything can suffer
+-- FALSE rejections (the still-present old entities' collision boxes can overlap a
+-- wider candidate's footprint). Pass the old entities' known {x=,y=} positions here --
+-- they get teleported far away, checked, and teleported back, all within this single
+-- call (no player-visible flicker, no tick where they're actually gone) -- letting the
+-- caller verify a rebuild position is valid BEFORE ever issuing a "remove" step, so a
+-- failed pick_orientation never leaves a working setup mid-demolished.
 --
 -- Every place/fuel/remove/read_drop_position step resolves ITS OWN target
 -- position the SAME way (step_target_pos), trying in order: explicit {x=,y=}
@@ -337,8 +348,53 @@ local function run_verify_tile(c, t, step)
   return true
 end
 
+-- Forward-declared (defined below run_pick_orientation) so both stay `local` --
+-- Lua resolves the call inside run_pick_orientation at CALL time, by which point
+-- this upvalue has been assigned, same pattern as the rest of this module.
+local run_pick_orientation_checks
+
 local function run_pick_orientation(c, t, step)
   local surf = c.entity.surface
+  -- ignore_entities_at (2026-07-07, coal_pair v1->v2 upgrade safety fix, Zdendys:
+  -- "nejdriv oprav bezpecnost, nez se upgrade zapoji do produkce"): the coal_pair
+  -- upgrade's step order is remove-both-old-drills THEN pick_orientation+place-wider.
+  -- If pick_orientation found no valid wider spot, the old drills would ALREADY be
+  -- gone by the time it fails -- turning a working self-fed pair into a broken one
+  -- (live-observed collision-fail rate ~2/5 on this exact geometry, task #35).
+  -- Reordering pick_orientation BEFORE remove isn't enough on its own: a wider
+  -- candidate's collision box can overlap where the STILL-PRESENT old drill sits
+  -- (e.g. gap=2 old secondary at distance 2 overlaps a gap=4 new secondary's
+  -- footprint at the boundary), causing a FALSE rejection of a spot that would
+  -- actually be fine once the old drill is gone.
+  --
+  -- Fix: temporarily teleport the named entities at these known positions far away,
+  -- run the REAL can_place_entity checks (reusing the engine's own authoritative
+  -- collision/tile logic instead of reimplementing it), then teleport them back to
+  -- their exact original position -- all within this single synchronous call, so
+  -- there is no player-visible flicker and no tick where they're actually gone.
+  -- This lets the caller verify a rebuild position BEFORE issuing any "remove" step,
+  -- eliminating the regression risk entirely (verify-before-destroy, not just
+  -- reordered-but-still-racy).
+  local moved = {}
+  if step.ignore_entities_at then
+    for _, p in ipairs(step.ignore_entities_at) do
+      local es = surf.find_entities_filtered{position = {x = p.x, y = p.y}, radius = 0.5}
+      for _, e in ipairs(es) do
+        if e.valid then
+          moved[#moved + 1] = {entity = e, pos = {x = e.position.x, y = e.position.y}}
+          e.teleport({x = e.position.x + 10000, y = e.position.y + 10000})
+        end
+      end
+    end
+  end
+  local ok, err = run_pick_orientation_checks(c, t, step, surf)
+  for _, m in ipairs(moved) do
+    if m.entity.valid then m.entity.teleport(m.pos) end
+  end
+  return ok, err
+end
+
+run_pick_orientation_checks = function(c, t, step, surf)
   for _, off in ipairs(step.offsets) do
     local sx, sy = t.ctx.px + off[1], t.ctx.py + off[2]
     -- Compute the REAL defines.direction value BEFORE checking can_place_entity
