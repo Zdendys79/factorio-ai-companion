@@ -25,6 +25,7 @@
 -- upgrade/furnace-upgrade need, not yet a fully general DSL):
 --   {type="find_patch", resource=NAME}                 -> ctx.px, ctx.py
 --   {type="find_existing", entity=NAME, radius=N}       -> ctx.px, ctx.py
+--   {type="set_position", x=, y=}                       -> ctx.px, ctx.py
 --   {type="verify_tile", resource=NAME}                -> aborts task if patch gone
 --   {type="pick_orientation", primary=ENTITY, secondary=ENTITY, offsets={{dx,dy},...},
 --                             opposite_direction=true|nil, primary_exists=true|nil,
@@ -276,6 +277,19 @@ local function run_find_existing(c, t, step)
   end
   if not best then return false, "no existing " .. step.entity .. " found" end
   t.ctx.px, t.ctx.py = best.position.x, best.position.y
+  return true
+end
+
+-- set_position (2026-07-07, coal_pair upgrade variant A -- reusing an EXISTING
+-- pair's own drills): sets ctx.px/py directly from caller-supplied coordinates,
+-- e.g. a task_id's OWN drill1 position (known from an EARLIER task's completed
+-- ctx, read back via fac_task_status) as the anchor for a fresh pick_orientation
+-- pass AFTER removing both original drills -- there is nothing left to
+-- find_existing on once they're gone, and re-running find_patch could land on
+-- a DIFFERENT ore tile than the one this pair was already built on.
+local function run_set_position(c, t, step)
+  if not (step.x and step.y) then return false, "set_position: x/y required" end
+  t.ctx.px, t.ctx.py = step.x, step.y
   return true
 end
 
@@ -547,6 +561,8 @@ function M.tick()
         ok, err = run_find_patch(c, t, step)
       elseif step.type == "find_existing" then
         ok, err = run_find_existing(c, t, step)
+      elseif step.type == "set_position" then
+        ok, err = run_set_position(c, t, step)
       elseif step.type == "verify_tile" then
         ok, err = run_verify_tile(c, t, step)
       elseif step.type == "pick_orientation" then
