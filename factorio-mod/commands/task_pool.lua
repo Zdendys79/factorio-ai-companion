@@ -140,6 +140,7 @@ function M.get_task_status(task_id)
     cursor = t.cursor,
     total_steps = #t.steps,
     needs = t.needs,
+    ctx = t.ctx,  -- px/py/sx/sy/dir: useful for diagnosing placement failures externally
   }
 end
 
@@ -215,6 +216,10 @@ local function run_pick_orientation(c, t, step)
        and surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, force = c.entity.force} then
       t.ctx.sx, t.ctx.sy = sx, sy
       t.ctx.dir = real_dir
+      -- Kept alongside sx/sy so the primary's "place" step can RECOMPUTE the
+      -- secondary's position once the primary's REAL (possibly snapped) placed
+      -- position is known -- see the note where offset_dx/dy is consumed below.
+      t.ctx.offset_dx, t.ctx.offset_dy = off[1], off[2]
       return true
     end
   end
@@ -394,6 +399,23 @@ function M.tick()
       if st.active then
         goto continue  -- still building, check again next tick
       elseif st.placed then
+        -- Sync ctx to the REAL placed position (2026-07-07, live-caught): create_entity
+        -- can snap a 2x2 entity to a different grid alignment than the 1x1 ore tile
+        -- position find_patch recorded (observed: requested (46.5,-185.5), actually
+        -- landed at (47,-185)). If this was the PRIMARY and a secondary offset was
+        -- already chosen (pick_orientation ran before this), recompute sx/sy from the
+        -- REAL px/py so the secondary's own place step doesn't overlap the primary's
+        -- true footprint -- fuel steps use step_target_pos too, so this must happen
+        -- before either later step's target position is read.
+        if step.which == "primary" and st.position then
+          t.ctx.px, t.ctx.py = st.position.x, st.position.y
+          if t.ctx.offset_dx then
+            t.ctx.sx = t.ctx.px + t.ctx.offset_dx
+            t.ctx.sy = t.ctx.py + t.ctx.offset_dy
+          end
+        elseif step.which == "secondary" and st.position then
+          t.ctx.sx, t.ctx.sy = st.position.x, st.position.y
+        end
         t.cursor = t.cursor + 1
         storage.active_step[cid] = nil
         if t.cursor > #t.steps then complete_task(active.task_id) end

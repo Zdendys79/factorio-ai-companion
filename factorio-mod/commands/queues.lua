@@ -819,7 +819,15 @@ function M.start_build(cid, entity_name, position, direction)
     direction = dir,
     approach = approach,
     state = "approaching",
-    tick_start = game.tick
+    tick_start = game.tick,
+    -- Bounded deadline for the approach walk (2026-07-07, live-caught via
+    -- task_pool.lua: a companion that couldn't physically reach the build target
+    -- left this queue stuck in "approaching" forever -- CLAUDE.md checklist item
+    -- #3, this was the ONE async queue in this file missing the deadline every
+    -- other one (tick_gather_queues/tick_fuel_queues/belt_connect) already has).
+    -- Same distance-scaled formula as those: 25 ticks/tile, floor 1800.
+    approach_deadline = game.tick + math.max(1800, math.floor(
+      u.distance(c.entity.position, approach) * 25)),
   }
 
   return {started = true, entity = entity_name, position = position, state = "approaching"}
@@ -840,10 +848,24 @@ function M.tick_build_queues()
 
     -- APPROACHING: wait until character is within build reach of target
     if q.state == "approaching" then
+      -- Nil-safe heal for a build_queues entry persisted by an OLDER mod version
+      -- (before approach_deadline existed): give it a fresh deadline instead of
+      -- either failing it instantly (bare "or 0" would make game.tick>=0 true on
+      -- the very next check) or leaving it to hang forever (mirrors the identical
+      -- fix already applied to belt_connect's own walking-with-deadline entries).
+      if not q.approach_deadline then
+        q.approach_deadline = game.tick + math.max(1800, math.floor(
+          u.distance(c.entity.position, q.position) * 25))
+      end
       if u.distance(c.entity.position, q.position) <= reach then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "clearing"
+      elseif game.tick >= q.approach_deadline then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.failed = "cannot reach build target (" .. q.position.x .. "," .. q.position.y .. ")"
+        q.state = "failed"
       end
       return false
     end
@@ -894,8 +916,30 @@ function M.tick_build_queues()
         force = c.entity.force
       }
       -- Only keep the building if a real item was actually consumed; else remove it (no free build).
-      if placed and c.entity.remove_item{name = q.entity, count = 1} < 1 then placed.destroy() end
-      if not placed then q.failed = "create_entity returned nil"; q.state = "failed"; return false end
+      local destroyed = false
+      if placed and c.entity.remove_item{name = q.entity, count = 1} < 1 then
+        placed.destroy()
+        destroyed = true
+      end
+      if not placed then
+        q.failed = "create_entity returned nil"
+        q.state = "failed"
+        return false
+      end
+      if destroyed then
+        q.failed = "item consumed before placement could complete"
+        q.state = "failed"
+        return false
+      end
+      -- Capture the REAL post-snap position (2026-07-07, live-caught via task_pool.lua):
+      -- create_entity does NOT always place at the exact requested q.position -- Factorio
+      -- snaps an entity to its own valid grid alignment (e.g. a 2x2 drill requested at a
+      -- 1x1 ore tile's half-tile-centered position (46.5,-185.5) actually landed at
+      -- (47,-185), a 0.5-tile shift in both axes). A caller that computes a SECOND
+      -- entity's position as an offset from the ORIGINAL requested q.position (not the
+      -- real one) can end up overlapping the first entity's real footprint. (placed is
+      -- guaranteed valid here -- the destroyed case returned above already.)
+      q.placed_position = {x = placed.position.x, y = placed.position.y}
       q.state = "done"
       return false
     end
@@ -914,7 +958,7 @@ function M.get_build_status(cid)
   -- happened as {"placed": true}.
   if q.state == "done" then
     storage.build_queues[cid] = nil
-    return {active = false, placed = true}
+    return {active = false, placed = true, position = q.placed_position}
   end
   if q.state == "failed" then
     storage.build_queues[cid] = nil
