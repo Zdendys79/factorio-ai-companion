@@ -448,7 +448,20 @@ function M.tick_gather_queues()
 
     if q.state == "find" then
       local e = find_reachable_resource(surf, c.entity.position, q.resource, q.blacklist)
-      if not e then return true end   -- no reachable patch left -> done, return what we have
+      if not e then
+        -- Bounded retry (2026-07-08, live-caught: gather("coal") returned {gathered=0,
+        -- done=true, blacklist=[]} on the VERY FIRST check on one fresh map -- 5
+        -- follow-up trials with the same map-gen settings all found 400-600+ reachable
+        -- coal patches, ruling out "genuinely no coal nearby" as the norm. A transient
+        -- miss here (e.g. this companion's own position not yet settled right after
+        -- spawn, or some other momentary condition) previously gave up PERMANENTLY on
+        -- the very first empty result with no second look at all -- same class of fix
+        -- as the collision-retry above, just for "found nothing" instead of "found
+        -- something blocked".
+        q.find_retry_deadline = q.find_retry_deadline or (game.tick + 300)
+        if game.tick < q.find_retry_deadline then return false end
+        return true   -- no reachable patch left after retrying -> done, return what we have
+      end
       local mp = e.prototype.mineable_properties
       if not (mp and mp.products and mp.products[1]) then
         -- Non-standard resource (no item product, e.g. a fluid-only patch) -- blacklist this
