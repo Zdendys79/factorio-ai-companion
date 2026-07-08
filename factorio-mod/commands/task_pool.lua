@@ -394,6 +394,41 @@ local function run_pick_orientation(c, t, step)
   return ok, err
 end
 
+-- Temporarily remove tree/simple-entity (rock) obstacles from an entity's footprint
+-- so a can_place_entity check reflects what queues.lua's clear_build_area will ACTUALLY
+-- leave behind at build time, not raw ground-truth right now (2026-07-08, task #47,
+-- Zdendys: "Při stavbě nemůže být nic obklopeno stromy, MOD má za úkol před stavbou
+-- plochu očistit!" -- pick_orientation was rejecting candidates over trees/rocks that
+-- the build step removes anyway, live-caught: "no free orientation (all sides
+-- blocked)" on an ore patch with a single nearby tree). Mirrors clear_build_area's OWN
+-- area computation (queues.lua) exactly, and the existing ignore_entities_at
+-- teleport-and-restore pattern above -- reusing the engine's real collision check
+-- instead of reimplementing "is this a removable obstacle" logic separately.
+local function clear_natural_obstacles(surf, entity_name, position)
+  local proto = prototypes.entity[entity_name]
+  if not proto or not proto.collision_box then return {} end
+  local bb = proto.collision_box
+  local area = {
+    {x = position.x + bb.left_top.x - 0.5, y = position.y + bb.left_top.y - 0.5},
+    {x = position.x + bb.right_bottom.x + 0.5, y = position.y + bb.right_bottom.y + 0.5}
+  }
+  local moved = {}
+  local obstacles = surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}
+  for _, obs in ipairs(obstacles) do
+    if obs.valid then
+      moved[#moved + 1] = {entity = obs, pos = {x = obs.position.x, y = obs.position.y}}
+      obs.teleport({x = obs.position.x + 10000, y = obs.position.y + 10000})
+    end
+  end
+  return moved
+end
+
+local function restore_moved(moved)
+  for _, m in ipairs(moved) do
+    if m.entity.valid then m.entity.teleport(m.pos) end
+  end
+end
+
 run_pick_orientation_checks = function(c, t, step, surf)
   -- Per-candidate diagnostic (2026-07-08, task #47, live-caught: "no free orientation
   -- (all sides blocked)" on an ore patch that LOOKED like it had room -- the only
@@ -438,8 +473,11 @@ run_pick_orientation_checks = function(c, t, step, surf)
     -- ALREADY-PLACED entity (e.g. from find_existing) -- it's not being placed
     -- by this task, so it must NOT be can_place_entity-checked (it already
     -- occupies that spot; checking would always fail against itself).
+    local primary_moved = not step.primary_exists and
+      clear_natural_obstacles(surf, step.primary, {x = t.ctx.px, y = t.ctx.py}) or {}
     local primary_ok = step.primary_exists or
       surf.can_place_entity{name = step.primary, position = {x = t.ctx.px, y = t.ctx.py}, direction = real_dir, force = c.entity.force}
+    restore_moved(primary_moved)
     -- secondary_resource (2026-07-07, furnace-upgrade task): the secondary's
     -- candidate tile must ALSO have this resource underneath (e.g. a new drill
     -- next to an existing furnace still needs REAL ore there) -- otherwise a
@@ -451,7 +489,9 @@ run_pick_orientation_checks = function(c, t, step, surf)
       local ore = surf.find_entities_filtered{name = step.secondary_resource, position = {x = sx, y = sy}, radius = 1}
       secondary_resource_ok = #ore > 0
     end
+    local secondary_moved = clear_natural_obstacles(surf, step.secondary, {x = sx, y = sy})
     local secondary_ok = surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, direction = secondary_dir, force = c.entity.force}
+    restore_moved(secondary_moved)
     if primary_ok and secondary_resource_ok and secondary_ok then
       t.ctx.sx, t.ctx.sy = sx, sy
       t.ctx.dir = real_dir
