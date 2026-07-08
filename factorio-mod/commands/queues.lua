@@ -401,6 +401,32 @@ local function find_reachable_resource(surf, from, resource, blacklist)
       return e
     end
   end
+  -- Diagnostic (2026-07-08, live-caught: gather("coal",5) stalled ~42 real seconds with
+  -- 0 gathered on one live run, despite an isolated repro of the identical call
+  -- completing in ~2s -- no code difference found between the two paths, so the
+  -- CAUSE must be map/entity-state-specific to that one run. This logs exactly WHY
+  -- the search came up empty (zero candidates at all vs. every candidate rejected by
+  -- a specific filter), so the next occurrence shows the real reason instead of just
+  -- "gathered 0" with no further clue. Zdendys: "Pokud je něco 'nedosažitelné' je to
+  -- bug! NIKDY chyba mapy!" -- this is a diagnostic-only addition, no behavior change.
+  local total = #ores
+  local depleted, blacklisted, near_spawner, no_stand_pos = 0, 0, 0, 0
+  for _, e in ipairs(ores) do
+    if e.valid then
+      if (e.amount or 0) <= 0 then depleted = depleted + 1
+      elseif blacklist and blacklist[_tile_key(e.position)] then blacklisted = blacklisted + 1
+      elseif surf.count_entities_filtered{type = "unit-spawner", position = e.position, radius = 20} > 0 then
+        near_spawner = near_spawner + 1
+      elseif not surf.find_non_colliding_position("character", e.position, 2.5, 0.5) then
+        no_stand_pos = no_stand_pos + 1
+      end
+    end
+  end
+  u.log_error(string.format(
+    "find_reachable_resource: no usable %s within 400 tiles of (%.1f,%.1f) -- total=%d "
+    .. "depleted=%d blacklisted=%d near_spawner=%d no_stand_pos=%d",
+    resource, from.x, from.y, total, depleted, blacklisted, near_spawner, no_stand_pos),
+    "gather_queue")
   return nil
 end
 
