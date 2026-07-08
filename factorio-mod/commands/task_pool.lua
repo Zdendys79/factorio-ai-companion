@@ -725,8 +725,24 @@ function M.tick()
   end
 
   -- Companion(s) currently idle -> pick the next (task, step) to start.
+  -- MUST also check storage.walking_queues[cid] is empty, not just active_step[cid]
+  -- (2026-07-08, Zdendys live-caught via a movement/distance statistics review: "could
+  -- not reach furnace" firing even at trivial distances like 12-18 tiles, proving this
+  -- was never about map layout). active_step[cid] only tracks whether the TASK POOL
+  -- itself is driving this companion -- it says nothing about an UNRELATED walk Python
+  -- may have just started via /fac_move_to (e.g. spatial_bc.py's go_to() for furnace
+  -- servicing, iron_drill upgrade, etc.), which sets storage.walking_queues[cid]
+  -- directly without ever touching active_step[cid]. Without this guard, THIS loop
+  -- runs every tick and, the moment a task-pool task is ready to walk somewhere, freely
+  -- overwrites storage.walking_queues[cid] mid-flight -- silently discarding whatever
+  -- unrelated destination Python had just set, so the companion walks toward the
+  -- task-pool's target instead while Python's wait_arrive() keeps blocking on a
+  -- destination she was never actually walking to anymore. Confirmed live: coal_pair's
+  -- task-pool build was active in the SAME window as a failed "could not reach furnace"
+  -- iron_drill-upgrade go_to(), at a distance (12-18 tiles) trivially walkable otherwise.
   for cid, c in pairs(storage.companions or {}) do
-    if c.entity and c.entity.valid and not storage.active_step[cid] then
+    if c.entity and c.entity.valid and not storage.active_step[cid]
+       and not storage.walking_queues[cid] then
       local task_id = pick_next(cid, c)
       if task_id then
         local t = storage.tasks[task_id]
