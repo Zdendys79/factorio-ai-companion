@@ -909,8 +909,40 @@ function M.tick_build_queues()
       -- NOT reject overlaps, so without this the async build could stack a building on
       -- top of another (observed: output furnace overlapping the drill by one row).
       -- Refuse instead of force-overlapping; the caller verifies via entity presence.
+      -- This check already runs IMMEDIATELY before create_entity below (same tick, same
+      -- function call, zero movement in between) -- the gap task #35 actually needed
+      -- closed was never "check happens too early", it was "check fails once -> give up
+      -- immediately, no retry at all" (unlike task_pool.lua's OWN candidates check,
+      -- which already retries for 60 ticks -- see that fix, commit 464185f -- this was
+      -- the one remaining unprotected collision check task #35's own investigation
+      -- found). 2026-07-08, Zdendys: "ať je ověření těsně před stavbou, bez jakéhokoli
+      -- pohybu" (the check IS already right before the build with no movement -- what
+      -- was missing was giving a TRANSIENT collision a chance to clear before failing
+      -- the whole task over it). Bounded retry IN PLACE (no re-approach, no step-away --
+      -- she's already within reach and isn't moved here), same 60-tick budget as the
+      -- task_pool.lua candidates fix, so a genuinely permanent collision still correctly
+      -- fails, just after a few retries instead of the very first check.
       if not surf.can_place_entity{name = q.entity, position = q.position,
                                    direction = q.direction, force = c.entity.force} then
+        q.collision_retry_deadline = q.collision_retry_deadline or (game.tick + 60)
+        if game.tick < q.collision_retry_deadline then
+          return false
+        end
+        -- Diagnostic (2026-07-08, task #35): a bare "Cannot place (collision)" carried
+        -- zero forensic info in every prior occurrence -- log what's ACTUALLY at the
+        -- target once retries are exhausted, including whether the companion's own
+        -- body (collision_box {{-0.2,-0.2},{0.2,0.2}}, verified in base game prototype
+        -- data) is the culprit, same "log every retry" lesson as place_pipe()'s own
+        -- diagnostic in demonstrator.py.
+        local near = surf.find_entities_filtered{position = q.position, radius = 1.5}
+        local names = {}
+        for _, e in ipairs(near) do
+          names[#names + 1] = e.name .. (e.unit_number == c.entity.unit_number and "(COMPANION)" or "")
+        end
+        u.log_error(string.format(
+          "build queue: Cannot place %s at (%.1f,%.1f) after %d retry ticks -- nearby: %s",
+          q.entity, q.position.x, q.position.y, 60, table.concat(names, ",")),
+          "build_queue")
         q.failed = "Cannot place (collision)"
         q.state = "failed"
         return false
