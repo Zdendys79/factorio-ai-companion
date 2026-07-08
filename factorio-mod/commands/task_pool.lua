@@ -395,6 +395,13 @@ local function run_pick_orientation(c, t, step)
 end
 
 run_pick_orientation_checks = function(c, t, step, surf)
+  -- Per-candidate diagnostic (2026-07-08, task #47, live-caught: "no free orientation
+  -- (all sides blocked)" on an ore patch that LOOKED like it had room -- the only
+  -- diagnostic available was a dump of entities near the PRIMARY position, not each
+  -- of the actual secondary candidates, so it was impossible to tell whether all 4
+  -- were genuinely blocked or something else was wrong). Collected regardless of
+  -- outcome; only logged if every candidate ultimately fails.
+  local candidate_diag = {}
   for _, off in ipairs(step.offsets) do
     local sx, sy = t.ctx.px + off[1], t.ctx.py + off[2]
     -- Compute the REAL defines.direction value BEFORE checking can_place_entity
@@ -444,8 +451,8 @@ run_pick_orientation_checks = function(c, t, step, surf)
       local ore = surf.find_entities_filtered{name = step.secondary_resource, position = {x = sx, y = sy}, radius = 1}
       secondary_resource_ok = #ore > 0
     end
-    if primary_ok and secondary_resource_ok
-       and surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, direction = secondary_dir, force = c.entity.force} then
+    local secondary_ok = surf.can_place_entity{name = step.secondary, position = {x = sx, y = sy}, direction = secondary_dir, force = c.entity.force}
+    if primary_ok and secondary_resource_ok and secondary_ok then
       t.ctx.sx, t.ctx.sy = sx, sy
       t.ctx.dir = real_dir
       t.ctx.dir2 = secondary_dir
@@ -457,7 +464,18 @@ run_pick_orientation_checks = function(c, t, step, surf)
       t.ctx.offset_dx, t.ctx.offset_dy = off[1], off[2]
       return true
     end
+    -- Diagnostic: WHY this specific candidate failed, plus what's actually there.
+    local near = surf.find_entities_filtered{position = {x = sx, y = sy}, radius = 1.5}
+    local names = {}
+    for _, e in ipairs(near) do names[#names + 1] = e.name end
+    candidate_diag[#candidate_diag + 1] = string.format(
+      "off(%d,%d)@(%.1f,%.1f) primary_ok=%s secondary_resource_ok=%s secondary_ok=%s nearby=[%s]",
+      off[1], off[2], sx, sy, tostring(primary_ok), tostring(secondary_resource_ok),
+      tostring(secondary_ok), table.concat(names, ","))
   end
+  u.log_error("pick_orientation: no free orientation for " .. step.secondary ..
+    " around (" .. t.ctx.px .. "," .. t.ctx.py .. ") -- " .. table.concat(candidate_diag, " | "),
+    "pick_orientation")
   return false, "no free orientation (all sides blocked)"
 end
 
