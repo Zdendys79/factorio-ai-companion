@@ -24,8 +24,23 @@ local M = {}
 -- companion's own tie-break fix, added the same day, already lets the search converge
 -- toward the goal instead of fanning out across the whole box, so a wider margin shouldn't
 -- by itself blow the existing MAX_NODES budget for the common case).
-local MAX_SEARCH_MARGIN = 40     -- tiles of slack around the from/to bounding box
-local MAX_NODES = 2500           -- hard cap on A* expansions (bounded, no infinite loop)
+local MAX_SEARCH_MARGIN = 60     -- tiles of slack around the from/to bounding box (2026-07-08,
+-- raised 40->60, Zdendys: "vetsina vody nelze podejit" -- a genuinely wide lake needs real
+-- room to route around, not just underground-belt's 5-tile max span (see UNDERGROUND_MAX_
+-- DISTANCE below); 40 already got raised once for the same reason (see history above) and
+-- live-caught tonight (bc_0708night1) still hit "no path" on a ~93-tile route.
+local MAX_NODES = 4000           -- hard cap on A* expansions (bounded, no infinite loop) -- raised
+-- 2500->4000 alongside the margin increase so the larger search area doesn't just make the
+-- SAME "no path" failure happen after burning more of the budget with no detour room to show
+-- for it -- both numbers need to move together.
+
+-- Shore buffer (2026-07-08, Zdendys: "vodu obcházet alespon ve vzdalenosti 5-10 od brehu"):
+-- a SOFT cost, not a hard block, added to any tile within SHORE_BUFFER of a water tile, so
+-- the route PREFERS to stay clear of the coast when a choice exists (leaves room for the
+-- power plant's own shore-adjacent structures, and avoids a corridor that hugs the water's
+-- edge for its whole length) without making an unavoidable coast-hugging stretch impossible.
+local SHORE_BUFFER = 8
+local SHORE_PENALTY = 3
 
 local function tile_key(x, y) return x .. ":" .. y end
 -- State key for the SEARCH bookkeeping (visited/gscore/came_from) MUST include the arrival
@@ -67,6 +82,27 @@ local DIRS = {
   {dx = 0, dy = 1, dir = defines.direction.south}, {dx = 0, dy = -1, dir = defines.direction.north},
 }
 
+-- Memoized "is there water within SHORE_BUFFER tiles" check, same caching pattern as
+-- make_is_blocked above (count_tiles_filtered is a real engine call). A single area query
+-- per newly-discovered tile, not a hard block -- see SHORE_PENALTY comment above.
+local function make_near_water(surf)
+  local cache = {}
+  return function(x, y)
+    local key = tile_key(x, y)
+    local cached = cache[key]
+    if cached ~= nil then return cached end
+    -- Same water-tile name set used elsewhere in this mod (e.g. demonstrator.py's own
+    -- terrain surveys) -- shallow-water/mud variants are still unwalkable-for-belts water,
+    -- not just "water"/"deepwater".
+    local near = surf.count_tiles_filtered{
+      area = {{x - SHORE_BUFFER, y - SHORE_BUFFER}, {x + SHORE_BUFFER, y + SHORE_BUFFER}},
+      name = {"water", "deepwater", "water-shallow", "water-mud"}
+    } > 0
+    cache[key] = near
+    return near
+  end
+end
+
 -- 4-directional A* (belts are axis-aligned). Returns an ordered list of
 -- {x, y, dir} (dir = the direction of travel INTO that tile, nil for the start tile),
 -- or nil if no route was found within the search budget.
@@ -78,6 +114,7 @@ function M.find_path(surf, from, to, force)
   local miny = math.min(fy, ty) - MAX_SEARCH_MARGIN
   local maxy = math.max(fy, ty) + MAX_SEARCH_MARGIN
   local is_blocked = make_is_blocked(surf, force)
+  local near_water = make_near_water(surf)
   -- The start tile is seeded directly into `open` (never evaluated as a "neighbor"),
   -- so it needs its own explicit check for the same reason the destination tile does.
   if is_blocked(fx, fy) then return nil end
@@ -138,7 +175,8 @@ function M.find_path(surf, from, to, force)
           -- the corridor terminate ON ore, contradicting the avoid-resource-tiles rule.
           if not is_blocked(nx, ny) then
             local turn_penalty = (cur.dir and cur.dir ~= d.dir) and 0.5 or 0
-            local ng = cur.g + 1 + turn_penalty
+            local shore_penalty = near_water(nx, ny) and SHORE_PENALTY or 0
+            local ng = cur.g + 1 + turn_penalty + shore_penalty
             local nk = state_key(nx, ny, d.dir)
             if ng < (gscore[nk] or math.huge) then
               gscore[nk] = ng
