@@ -939,9 +939,15 @@ function M.tick_build_queues()
         for _, e in ipairs(near) do
           names[#names + 1] = e.name .. (e.unit_number == c.entity.unit_number and "(COMPANION)" or "")
         end
+        -- Tile check (2026-07-08, live-caught same night as this fix): a first live
+        -- occurrence showed NO entity/companion overlap at all (AABB boxes computed
+        -- by hand, 0.44-tile gap) -- can_place_entity also rejects unbuildable TILES
+        -- (water, out-of-map), which find_entities_filtered can never reveal since
+        -- tiles aren't entities. Logging the tile name closes that blind spot.
+        local tile = surf.get_tile(math.floor(q.position.x), math.floor(q.position.y))
         u.log_error(string.format(
-          "build queue: Cannot place %s at (%.1f,%.1f) after %d retry ticks -- nearby: %s",
-          q.entity, q.position.x, q.position.y, 60, table.concat(names, ",")),
+          "build queue: Cannot place %s at (%.1f,%.1f) tile=%s after %d retry ticks -- nearby: %s",
+          q.entity, q.position.x, q.position.y, tile and tile.name or "?", 60, table.concat(names, ",")),
           "build_queue")
         q.failed = "Cannot place (collision)"
         q.state = "failed"
