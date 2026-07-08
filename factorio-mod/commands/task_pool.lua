@@ -596,6 +596,23 @@ function M.tick()
             end
           end
           if not chosen then
+            -- Bounded retry across ticks (2026-07-08, task #35) instead of failing on
+            -- the FIRST check: live-observed "no candidate position free" 3x across
+            -- separate runs with the exact same code on different maps, leading
+            -- hypothesis being a transient/settling-timing collision (sub-tile snap
+            -- variance, or a moment where something else briefly occupies the tile)
+            -- rather than a genuine permanent block. can_place_entity is re-evaluated
+            -- fresh every tick (no caching here), so simply trying again on a LATER
+            -- tick gives a transient blocker a real chance to clear before giving up
+            -- -- same "bounded deadline, not instant give-up" pattern already used for
+            -- approach_deadline elsewhere in this file. 60 ticks is deliberately short
+            -- (this is meant to catch a passing moment, not wait out a real block) --
+            -- a genuinely permanent collision still correctly fails, just after a
+            -- few retries instead of zero.
+            active.candidate_retry_deadline = active.candidate_retry_deadline or (game.tick + 60)
+            if game.tick < active.candidate_retry_deadline then
+              goto continue
+            end
             fail_task(active.task_id, "no candidate position free for " .. step.entity)
             storage.active_step[cid] = nil
             goto continue
