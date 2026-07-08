@@ -539,6 +539,15 @@ local function refresh_needs()
   end
 end
 
+-- 2026-07-08, task #42: true if cid is busy in gather/fuel/build/belt_queues (see the
+-- "Extended" comment at this function's call site below for the full rationale).
+local function busy_elsewhere(cid)
+  return (storage.gather_queues and storage.gather_queues[cid])
+      or (storage.fuel_queues and storage.fuel_queues[cid])
+      or (storage.build_queues and storage.build_queues[cid])
+      or (storage.belt_queues and storage.belt_queues[cid])
+end
+
 function M.tick()
   refresh_needs()
   for cid, active in pairs(storage.active_step) do
@@ -757,9 +766,22 @@ function M.tick()
   -- destination she was never actually walking to anymore. Confirmed live: coal_pair's
   -- task-pool build was active in the SAME window as a failed "could not reach furnace"
   -- iron_drill-upgrade go_to(), at a distance (12-18 tiles) trivially walkable otherwise.
+  -- Extended (2026-07-08, task #42, same session as the walking_queues fix above):
+  -- walking_queues[cid] alone only protects the WALKING phase of gather/fuel/build/
+  -- belt_queues -- once one of those arrives and moves on to its own "acting" phase
+  -- (mining, fueling, placing), walking_queues[cid] clears (arrival) while the
+  -- companion is STILL busy for that subsystem's purposes. Without also checking
+  -- these, the task pool could grab a companion mid-mine/mid-fuel/mid-build from a
+  -- direct (non-task-pool) command and redirect her walking_queues[cid] to its own
+  -- target, corrupting that other queue's in-progress state. None of these are set
+  -- by the task pool itself (task_pool.lua never calls start_gather/start_fuel_group/
+  -- start_belt_connect, and start_build's task-pool-internal use is guarded
+  -- separately at the fac_building_place_start command level, not here), so this
+  -- check is one-directional and safe: it only ever holds off task_pool for a
+  -- companion genuinely busy elsewhere.
   for cid, c in pairs(storage.companions or {}) do
     if c.entity and c.entity.valid and not storage.active_step[cid]
-       and not storage.walking_queues[cid] then
+       and not storage.walking_queues[cid] and not busy_elsewhere(cid) then
       local task_id = pick_next(cid, c)
       if task_id then
         local t = storage.tasks[task_id]
