@@ -342,6 +342,16 @@ commands.add_command("fac_building_place_start", nil, function(cmd)
     local args = u.parse_args("^(%S+)%s+(%S+)%s+(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
+    -- Task-pool-ownership guard at the DIRECT command entry point (2026-07-08, task
+    -- #42) -- NOT inside queues.start_build itself, which task_pool.lua's own "place"
+    -- step also calls internally WHILE active_step[id] is legitimately set for that
+    -- very call; guarding inside start_build would reject the task pool's own use.
+    -- This only blocks an EXTERNAL (direct Python) build request from hijacking a
+    -- companion the task pool currently owns, mirroring fac_move_to's guard.
+    if storage.active_step and storage.active_step[id] then
+      u.error_response("companion busy with an active task-pool step")
+      return
+    end
     local entity = args[2]
     local x, y = tonumber(args[3]), tonumber(args[4])
     local dir = args[5] ~= "" and defines.direction[args[5]] or defines.direction.north

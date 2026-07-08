@@ -407,6 +407,16 @@ end
 function M.start_gather(cid, resource, count, exclude)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
+  -- Don't steal this companion from an ACTIVE task-pool step (2026-07-08, task #42,
+  -- generalizing move.lua's fac_move_to guard from earlier tonight to the other
+  -- storage.walking_queues[cid] writers): task_pool.lua's tick() drives a companion
+  -- toward its own step targets independently of whatever Python is doing right now:
+  -- an unguarded gather() call here would silently overwrite that in-progress walk the
+  -- same way direct move_to() used to. Reject instead -- Python callers already retry
+  -- on their own next cycle when a dispatch is refused.
+  if storage.active_step and storage.active_step[cid] then
+    return {error = "companion busy with an active task-pool step"}
+  end
   -- exclude (2026-07-07, Zdendys/Claude: replacing the Python-side manual
   -- goto_resource()+mine_and_wait() flow, which needed its OWN distance-vs-
   -- MINE_DIST guessing purely to know "did I arrive" -- a guessed threshold
@@ -602,6 +612,10 @@ end
 function M.start_fuel_group(cid, per, radius)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
+  -- Same task-pool-ownership guard as start_gather above (2026-07-08, task #42).
+  if storage.active_step and storage.active_step[cid] then
+    return {error = "companion busy with an active task-pool step"}
+  end
   storage.fuel_queues[cid] = {per = per or 20, radius = radius or 200, state = "find",
                               blacklist = {}, served = {}, fueled = 0, machines = 0}
   return {started = true, per = per or 20, radius = radius or 200}
@@ -1018,6 +1032,12 @@ end
 function M.start_belt_connect(cid, from_pos, to_pos)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
+  -- Same task-pool-ownership guard as start_gather/start_fuel_group (2026-07-08, task
+  -- #42) -- safe here (unlike start_build) since task_pool.lua never calls
+  -- start_belt_connect internally, only the direct fac_belt_connect command does.
+  if storage.active_step and storage.active_step[cid] then
+    return {error = "companion busy with an active task-pool step"}
+  end
   local surf = c.entity.surface
   local force = c.entity.force
 
