@@ -77,10 +77,22 @@ local function process_queue(queue_name, processor)
         q._stale_ticks = 0
       end
       if q._stale_ticks > UNIVERSAL_STALE_TICKS then
+        -- Diagnostic (2026-07-09, live-caught: gather("iron-ore") force-stopped this
+        -- way ~40% of the time on longer-distance patches with NO further clue why --
+        -- this generic backstop is shared across every queue type, so it never
+        -- recorded WHERE the companion actually got stuck or what she was walking
+        -- toward. q.state/q.entity_pos/q.target are nil-safe reads: present on
+        -- gather_queues (state, entity_pos) and several others (target for a walk
+        -- destination), simply absent (and harmlessly omitted from the message) on
+        -- queue types that don't use that field.
         u.log_error(string.format(
           "%s queue for companion %d force-stopped: neither inventory count nor " ..
           "position changed in %d ticks -- no real progress regardless of queue-" ..
-          "specific state", queue_name, cid, q._stale_ticks), queue_name)
+          "specific state -- stuck_at=(%.1f,%.1f) queue_state=%s entity_pos=%s target=%s",
+          queue_name, cid, q._stale_ticks, pos.x, pos.y, tostring(q.state),
+          q.entity_pos and string.format("(%.1f,%.1f)", q.entity_pos.x, q.entity_pos.y) or "nil",
+          q.target and string.format("(%.1f,%.1f)", q.target.x, q.target.y) or "nil"),
+          queue_name)
         c.entity.mining_state = {mining = false}
         c.entity.walking_state = {walking = false}
         to_remove[#to_remove + 1] = cid
