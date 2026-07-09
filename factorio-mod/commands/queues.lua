@@ -78,20 +78,34 @@ local function process_queue(queue_name, processor)
       end
       if q._stale_ticks > UNIVERSAL_STALE_TICKS then
         -- Diagnostic (2026-07-09, live-caught: gather("iron-ore") force-stopped this
-        -- way ~40% of the time on longer-distance patches with NO further clue why --
-        -- this generic backstop is shared across every queue type, so it never
-        -- recorded WHERE the companion actually got stuck or what she was walking
-        -- toward. q.state/q.entity_pos/q.target are nil-safe reads: present on
-        -- gather_queues (state, entity_pos) and several others (target for a walk
-        -- destination), simply absent (and harmlessly omitted from the message) on
-        -- queue types that don't use that field.
+        -- way intermittently with NO further clue why -- this generic backstop is
+        -- shared across every queue type, so it never recorded WHERE the companion
+        -- actually got stuck or what she was walking toward. q.state/q.entity_pos/
+        -- q.target are nil-safe reads: present on SOME queue types, absent (and
+        -- harmlessly omitted) on others -- but their TYPE also varies by queue type
+        -- (e.g. gather_queues' own q.target is the target ITEM COUNT, a plain number,
+        -- NOT a position -- unlike walking-style queues where target IS a position
+        -- table). Live-caught the FIRST time this fired: an unguarded string.format
+        -- assuming q.target.x/.y crashed with "attempt to index field 'target' (a
+        -- number value)", silently swallowed by guard_tick's own pcall every tick
+        -- thereafter -- which ALSO meant the mining_state/walking_state reset and
+        -- to_remove cleanup below NEVER RAN, since the crash happened before reaching
+        -- them, leaving the stuck queue entry (and the crash) recurring every tick
+        -- indefinitely instead of actually force-stopping anything. fmt_maybe_pos
+        -- checks the real type before formatting, so this can never crash regardless
+        -- of what shape a given queue type's field happens to be.
+        local function fmt_maybe_pos(v)
+          if type(v) == "table" and v.x and v.y then
+            return string.format("(%.1f,%.1f)", v.x, v.y)
+          end
+          return tostring(v)
+        end
         u.log_error(string.format(
           "%s queue for companion %d force-stopped: neither inventory count nor " ..
           "position changed in %d ticks -- no real progress regardless of queue-" ..
           "specific state -- stuck_at=(%.1f,%.1f) queue_state=%s entity_pos=%s target=%s",
           queue_name, cid, q._stale_ticks, pos.x, pos.y, tostring(q.state),
-          q.entity_pos and string.format("(%.1f,%.1f)", q.entity_pos.x, q.entity_pos.y) or "nil",
-          q.target and string.format("(%.1f,%.1f)", q.target.x, q.target.y) or "nil"),
+          fmt_maybe_pos(q.entity_pos), fmt_maybe_pos(q.target)),
           queue_name)
         c.entity.mining_state = {mining = false}
         c.entity.walking_state = {walking = false}
