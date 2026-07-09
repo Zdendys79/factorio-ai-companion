@@ -144,6 +144,23 @@ local function release_reservations(t)
     storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - count)
   end
   t.reserved = {}
+  -- reservation_epoch (2026-07-09, root-caused via careful live log re-analysis, task
+  -- pool investigation): refresh_needs() below only re-checks a task's needs when
+  -- THAT COMPANION's raw inventory total changes -- it has no way to notice that a
+  -- DIFFERENT task's release_reservations() call just freed up stock in the shared
+  -- storage.reserved pool. Live-caught: task 1 (coal_pair) held a reservation on
+  -- burner-mining-drill while task 2 (iron_drill_upgrade) was submitted concurrently
+  -- with an outstanding need for the SAME item; by the time task 1 completed and
+  -- released its reservation, the companion's inventory total had ALREADY stopped
+  -- changing (a freshly-crafted drill sat idle in inventory, nothing else moved
+  -- afterward) -- so refresh_needs() never re-evaluated task 2's needs again, even
+  -- though the reservation blocking it had long since cleared, and the task sat
+  -- "active" forever with a perfectly available drill sitting unused in inventory
+  -- (confirmed live: episode's final inventory dump showed burner-mining-drill=1).
+  -- A global epoch counter, bumped on every release, lets refresh_needs() detect
+  -- "some reservation freed up, worth re-checking every pending task" independent of
+  -- whether inventory itself moved this tick.
+  storage.reservation_epoch = (storage.reservation_epoch or 0) + 1
 end
 
 local function fail_task(task_id, reason)
@@ -569,13 +586,24 @@ local function refresh_needs()
   if #ids == 0 then return end
   table.sort(ids)
   storage.inv_count_cache = storage.inv_count_cache or {}
+  -- reservation_epoch check (2026-07-09, see release_reservations' own comment for the
+  -- full live-caught symptom): a task's needs must be re-evaluated not just when ITS
+  -- OWN companion's inventory total changes, but also whenever ANY task anywhere
+  -- released a reservation -- that release alone can be exactly what makes previously
+  -- unavailable stock available now, with zero accompanying inventory-total change
+  -- for THIS companion. epoch_changed is true at most once per actual release (cheap),
+  -- and forces the full inv-count-mismatch bypass below for every pending task this
+  -- call, exactly once.
+  local epoch = storage.reservation_epoch or 0
+  local epoch_changed = (storage.last_seen_reservation_epoch or -1) ~= epoch
+  storage.last_seen_reservation_epoch = epoch
   for _, task_id in ipairs(ids) do
     local t = storage.tasks[task_id]
     local c = u.get_companion(t.cid)
     if c then
       local inv = c.entity.get_main_inventory()
       local total = inv.get_item_count()
-      if storage.inv_count_cache[t.cid] ~= total then
+      if storage.inv_count_cache[t.cid] ~= total or epoch_changed then
         storage.inv_count_cache[t.cid] = total
         for item, deficit in pairs(t.needs) do
           local have = inv.get_item_count(item)
