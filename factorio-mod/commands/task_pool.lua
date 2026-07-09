@@ -933,6 +933,14 @@ function M.get_diag(cid)
     busy_fuel = (storage.fuel_queues and storage.fuel_queues[cid]) and true or false,
     busy_build = (storage.build_queues and storage.build_queues[cid]) and true or false,
     busy_belt = (storage.belt_queues and storage.belt_queues[cid]) and true or false,
+    -- 3 queue types added 2026-07-09 (task #46, "faster error diagnosis"): get_diag
+    -- otherwise silently omitted these 3 of the 7 async queue types that
+    -- companion_queue_status (init.lua) already knows about, so a companion stuck
+    -- specifically on a harvest/craft/combat queue looked indistinguishable from
+    -- "not busy at all" through this diagnostic.
+    busy_harvest = (storage.harvest_queues and storage.harvest_queues[cid]) and true or false,
+    busy_craft = (storage.craft_queues and storage.craft_queues[cid]) and true or false,
+    busy_combat = (storage.combat_queues and storage.combat_queues[cid]) and true or false,
   }
   if active and active.task_id then
     local t = storage.tasks[active.task_id]
@@ -941,6 +949,23 @@ function M.get_diag(cid)
                   needs = t.needs, step_type = t.steps[t.cursor] and t.steps[t.cursor].type}
     end
   end
+  -- Merge in gather's own richer engine-level diagnostics (state/selected/
+  -- mining_state_mining/entity_pos, added 2026-07-09 for the #41 stall investigation)
+  -- so a stuck-on-gather companion doesn't need a SEPARATE /fac_gather_status round
+  -- trip on top of this call (task #46).
+  if out.busy_gather then
+    out.gather = queues.get_gather_status(cid)
+  end
+  -- Last few entries of the errors ring buffer (task #46): surfaces recent silent
+  -- pcall failures (u.error_response/u.log_error, storage.errors, capped 50 total)
+  -- right alongside the queue/task state that was active when they happened, instead
+  -- of needing a separate /fac_get_errors call and manually correlating timestamps.
+  -- Capped at 5 here (not all 50) to keep this diagnostic response focused on what's
+  -- actionable RIGHT NOW rather than dumping the whole history every time.
+  local errs = storage.errors or {}
+  local recent = {}
+  for i = math.max(1, #errs - 4), #errs do recent[#recent + 1] = errs[i] end
+  out.recent_errors = recent
   return out
 end
 
