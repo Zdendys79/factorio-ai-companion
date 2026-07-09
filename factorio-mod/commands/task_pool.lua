@@ -619,6 +619,16 @@ function M.tick()
       if not storage.walking_queues[cid] then
         -- Arrived (or walking_queue was never set for a non-walk step) -> act.
         active.state = "acting"
+      elseif active.approach_deadline and game.tick >= active.approach_deadline then
+        -- Bounded give-up (2026-07-08/09, task-pool's OWN walking phase previously had
+        -- NO deadline at all -- see the dispatch site's own comment for the live
+        -- symptom this caused). Mirrors queues.lua's identical "cannot reach -> fail
+        -- and let the caller retry/relocate" pattern instead of spinning forever.
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        fail_task(active.task_id, "could not reach step target (walking timed out)")
+        storage.active_step[cid] = nil
+        goto continue
       else
         goto continue  -- still walking, check again next tick
       end
@@ -847,7 +857,25 @@ function M.tick()
         local pos = step_target_pos(t, step)
         if pos and u.distance(c.entity.position, pos) > WALK_REACH then
           storage.walking_queues[cid] = {target = pos}
-          storage.active_step[cid] = {task_id = task_id, state = "walking"}
+          -- approach_deadline (2026-07-08/09, live-caught: run_reactive's own new
+          -- async-pending stale-exemption -- added specifically to stop penalizing
+          -- LEGITIMATE in-flight task-pool work -- immediately started firing its
+          -- "task-pool work pending for 40 actions with no resolution" backstop
+          -- repeatedly, live, meaning this "walking" state genuinely never resolves
+          -- on its own sometimes). Root cause: unlike EVERY OTHER queue type in this
+          -- codebase (queues.lua's tick_gather_queues/tick_fuel_queues/
+          -- tick_build_queues, pathfind.lua's belt_connect walk), this generic
+          -- task-pool "walking" state (tick()'s own handler right above) had NO
+          -- deadline at all -- if storage.walking_queues[cid] never clears (a
+          -- persistently blocked approach, or some other queue silently claiming the
+          -- companion mid-walk), active.state just sits at "walking" forever, the
+          -- task never transitions to done/failed, and Python's own task_status()
+          -- poll waits indefinitely. Distance-scaled exactly like
+          -- tick_gather_queues' own q.approach_deadline (25 ticks/tile, floor 1800)
+          -- for consistency with the rest of the codebase's convention.
+          local walk_deadline = game.tick + math.max(1800, math.floor(u.distance(c.entity.position, pos) * 25))
+          storage.active_step[cid] = {task_id = task_id, state = "walking",
+                                       approach_deadline = walk_deadline}
         else
           storage.active_step[cid] = {task_id = task_id, state = "acting"}
         end
