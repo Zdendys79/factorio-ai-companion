@@ -37,3 +37,14 @@ commands.add_command("fac_task_status", nil, function(cmd)
     u.json_response(task_pool.get_task_status(task_id))
   end)
 end)
+
+-- Usage: /fac_task_pool_diag <cid>
+-- Read-only diagnostic (2026-07-09): dumps active_step/task/walking_queue/busy_elsewhere
+-- state for a companion, to root-cause a stuck task-pool job without guessing.
+commands.add_command("fac_task_pool_diag", nil, function(cmd)
+  u.safe_command(function()
+    local id = u.find_companion(cmd.parameter)
+    if not id then u.not_found(); return end
+    u.json_response(task_pool.get_diag(id))
+  end)
+end)

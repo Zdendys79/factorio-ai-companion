@@ -884,4 +884,36 @@ function M.tick()
   end
 end
 
+-- Diagnostic (2026-07-09, task pool investigation): dumps everything relevant to WHY a
+-- companion's task-pool work might be stuck -- active_step state/deadline, the task's
+-- own status/cursor/needs, walking_queues entry, and the busy_elsewhere flags -- in one
+-- call, so a live stall can be root-caused without guessing from static code reading.
+-- Read-only, no side effects.
+function M.get_diag(cid)
+  local active = storage.active_step and storage.active_step[cid]
+  local out = {
+    active_step = active and {
+      task_id = active.task_id, state = active.state,
+      approach_deadline = active.approach_deadline,
+      ticks_until_deadline = active.approach_deadline and (active.approach_deadline - game.tick) or nil,
+      candidate_retry_deadline = active.candidate_retry_deadline,
+    } or nil,
+    walking_queue = storage.walking_queues and storage.walking_queues[cid] and {
+      target = storage.walking_queues[cid].target,
+    } or nil,
+    busy_gather = (storage.gather_queues and storage.gather_queues[cid]) and true or false,
+    busy_fuel = (storage.fuel_queues and storage.fuel_queues[cid]) and true or false,
+    busy_build = (storage.build_queues and storage.build_queues[cid]) and true or false,
+    busy_belt = (storage.belt_queues and storage.belt_queues[cid]) and true or false,
+  }
+  if active and active.task_id then
+    local t = storage.tasks[active.task_id]
+    if t then
+      out.task = {status = t.status, cursor = t.cursor, total_steps = #t.steps,
+                  needs = t.needs, step_type = t.steps[t.cursor] and t.steps[t.cursor].type}
+    end
+  end
+  return out
+end
+
 return M
