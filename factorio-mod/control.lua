@@ -261,9 +261,33 @@ script.on_event(defines.events.on_script_path_request_finished, function(ev)
   if ev.path and #ev.path > 0 then
     q.path = ev.path           -- array of {position=, needs_destroy_to_reach=}
     q.path_idx = 1
+    -- DIAGNOSTIC (task #49, 2026-07-09): needs_destroy_to_reach is stored above but was
+    -- NEVER consulted anywhere in process_walking_queues -- if the pathfinder's route
+    -- requires destroying something (a rock too big for the generic radius=2/4
+    -- tree/rock scan, or a cliff, which needs explosives rather than mining_state) at a
+    -- waypoint, the mod would just aim at that waypoint's position forever with no code
+    -- path to act on it. Logging (not yet fixing) to confirm/refute this live before
+    -- writing a fix, per this project's own mandatory live-verify-before-fixing rule.
+    for _, wp in ipairs(ev.path) do
+      if wp.needs_destroy_to_reach then
+        u.log_error(string.format(
+          "walking path for companion %d needs_destroy_to_reach near (%.1f,%.1f) -- "
+          .. "NOT currently acted on, character will likely get stuck here", cid,
+          wp.position.x, wp.position.y), "walk_path_needs_destroy")
+        break
+      end
+    end
   else
     q.path = nil               -- no route found / try later -> straight-line fallback
     q.path_failed_tick = game.tick
+    -- DIAGNOSTIC (task #49, 2026-07-09): distinguishes "pathfinder genuinely found no
+    -- route" (this branch) from "needs to destroy something" (above) and from "still
+    -- pending" -- the three collapse into identical straight-line+bypass behavior today,
+    -- but have very different real causes/fixes.
+    u.log_error(string.format(
+      "walking path request for companion %d returned NO PATH (target=(%.1f,%.1f))",
+      cid, q.target and q.target.x or -1, q.target and q.target.y or -1),
+      "walk_path_no_path")
   end
 end)
 
@@ -377,6 +401,41 @@ local function process_walking_queues()
         end
         if q.path[q.path_idx] then
           goal = q.path[q.path_idx].position
+          -- Proactively clear a FLAGGED waypoint's obstacle (task #49, 2026-07-09):
+          -- needs_destroy_to_reach was stored on q.path entries since this was written
+          -- but never consulted anywhere -- confirmed live (test_walk_stuck_diag.py)
+          -- that the pathfinder DOES set this flag in real play. The generic reach=2/4
+          -- stuck-clearing above only searches near the CHARACTER's current position,
+          -- which may never trigger if the flagged waypoint is still several tiles
+          -- ahead and the character isn't yet "stuck" by the moved<0.3 measure -- search
+          -- right at the WAYPOINT instead, so a mineable tree/rock blocking it gets
+          -- targeted before the character ever walks into it.
+          if q.path[q.path_idx].needs_destroy_to_reach and not q.clearing_target then
+            local blockers = find_clearable_obstacles(e.surface, goal, 2)
+            if blockers[1] then
+              q.clearing_target = blockers[1]
+              e.selected = blockers[1]
+              e.mining_state = {mining = true, position = blockers[1].position}
+              -- Positive-path diagnostic (task #49, 2026-07-09): without this, a run
+              -- where the flag fires AND gets successfully cleared looks IDENTICAL to a
+              -- run where it never fired at all (both show 0 walk_path_* log entries) --
+              -- logged so live verification can actually distinguish "never triggered"
+              -- from "triggered and this fix handled it".
+              u.log_error(string.format(
+                "walking path for companion %d needs_destroy_to_reach at (%.1f,%.1f) -- "
+                .. "found %s, clearing it now", cid, goal.x, goal.y, blockers[1].name),
+                "walk_path_clearing")
+            else
+              -- Flagged but no mineable tree/rock found there -- most likely a cliff,
+              -- which needs cliff-explosives (a separate mechanic, not handled here).
+              -- Logged distinctly so this stays a visible, trackable case instead of
+              -- silently stalling with no diagnostic trail.
+              u.log_error(string.format(
+                "walking path for companion %d needs_destroy_to_reach at (%.1f,%.1f) but "
+                .. "no mineable tree/rock found there -- likely a cliff (needs explosives, "
+                .. "not yet handled)", cid, goal.x, goal.y), "walk_path_unclearable")
+            end
+          end
         else
           q.path = nil  -- consumed all waypoints; head straight to final target
         end
