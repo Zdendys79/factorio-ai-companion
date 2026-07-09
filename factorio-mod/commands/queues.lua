@@ -597,6 +597,23 @@ function M.tick_gather_queues()
         c.entity.mining_state = {mining = false}
         q.state = "find"; return false
       end
+      -- DIAGNOSTIC TRACE (2026-07-09, task #41 investigation -- purely additive, NOT a
+      -- behavior change): tests the hypothesis that `res` (re-derived from scratch every
+      -- tick, see the loop above) could flip between near-tied candidates on consecutive
+      -- ticks, re-triggering the `selected` reassignment below in a way that might
+      -- interrupt the engine's mining swing -- the same failure SHAPE as the already-fixed
+      -- "re-setting mining_state every tick" bug documented below, but for `selected`
+      -- instead. Logs ONLY on the tick `res` actually changes identity while still mining
+      -- the same patch (not the first tick, not real patch-exhaustion/find transitions
+      -- above, which already returned) -- should stay rare/bounded even if the hypothesis
+      -- is correct, safe to leave in for live investigation of the #41 stall.
+      local res_key = _tile_key(res.position)
+      if q.last_res_key and q.last_res_key ~= res_key then
+        u.log_error(string.format(
+          "gather mine-state: selected entity changed mid-mine %s -> %s (best_d=%.2f, tick=%d)",
+          q.last_res_key, res_key, best_d, game.tick), "gather_trace")
+      end
+      q.last_res_key = res_key
       -- NATIVE mining (Zdendys 2026-07-03: "pouzit proste nativni schopnosti postavy"):
       -- setting mining_state lets the GAME ENGINE run the whole cycle -- same speed,
       -- animation, and extraction as a real player holding the mine button. No more manual
