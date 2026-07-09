@@ -640,8 +640,21 @@ function M.get_gather_status(cid)
   if q.blacklist then
     for k in pairs(q.blacklist) do bl[#bl + 1] = k end
   end
+  -- ENGINE-level mining diagnostics (2026-07-09, iron-ore gather-stall investigation):
+  -- q.state="mine" alone doesn't reveal whether the ENGINE actually has a valid
+  -- selected/mining_state -- exposing the real character.selected/mining_state lets a
+  -- live poll catch the exact tick things diverge (e.g. selected pointing at something
+  -- other than the intended resource, or mining_state.mining reading false/true
+  -- unexpectedly) instead of only learning about a stall after the fact via the
+  -- generic force-stop backstop.
+  local selected_name, mining = nil, nil
+  if c then
+    selected_name = c.entity.selected and c.entity.selected.name or nil
+    mining = c.entity.mining_state and c.entity.mining_state.mining or false
+  end
   return {active = true, resource = q.resource, target = q.target, gathered = have,
-    state = q.state, blacklist = bl}
+    state = q.state, blacklist = bl, entity_pos = q.entity_pos,
+    selected = selected_name, mining_state_mining = mining}
 end
 
 -- ============ FUEL GROUP (autonomous: walk to each burner in range -> top up fuel) ============
