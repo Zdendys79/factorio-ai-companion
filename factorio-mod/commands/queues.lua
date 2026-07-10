@@ -1174,7 +1174,7 @@ function M.start_belt_connect(cid, from_pos, to_pos)
   local surf = c.entity.surface
   local force = c.entity.force
 
-  local path = pathfind.find_path(surf, from_pos, to_pos, force)
+  local path, reason = pathfind.find_path(surf, from_pos, to_pos, force)
   if not path then
     -- No walkable route at all within the search budget -- try a direct underground-belt
     -- pair across the gap (only when it's a straight axis-aligned hop within the yellow
@@ -1189,7 +1189,11 @@ function M.start_belt_connect(cid, from_pos, to_pos)
         {x = tx, y = ty, dir = step_dir({x = fx, y = fy}, {x = tx, y = ty}), underground = "exit"},
       }
     else
-      return {error = "no path"}
+      -- `reason` distinguishes WHY find_path failed (task #43 diagnostic follow-up,
+      -- 2026-07-10): "start-blocked" / "dest-blocked" / "budget-exhausted". Additive
+      -- only -- `error` stays exactly "no path" so every existing caller checking
+      -- `.get("error")` for truthiness is unaffected.
+      return {error = "no path", reason = reason or "budget-exhausted"}
     end
   else
     -- Recompute each tile's direction as OUTGOING (toward the next tile), not the A*
