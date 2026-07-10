@@ -122,9 +122,24 @@ end
 -- become "ready" (task_ready() gates on needs being empty) and its own remove
 -- steps -- the very thing that would supply what it "needs" -- could never run:
 -- a real catch-22, not just an inefficiency.
-local function derive_needs(steps)
+--
+-- upto (2026-07-10, root-caused via live get_diag()/task_status() polling,
+-- "upgrade_iron_furnace task-pool stall" -- NOT the earlier, already-fixed
+-- concurrent-submission race): defaults to the WHOLE step list (unchanged caller
+-- behavior for submit_task/refresh_needs' own reservation bookkeeping), but
+-- task_ready() below passes t.cursor to get only the needs of steps executed SO
+-- FAR (1..cursor) -- see that function's own comment for why this distinction is
+-- the actual fix.
+local function derive_needs(steps, upto)
   local needs = {}
-  for _, s in ipairs(steps) do
+  -- min()'d against #steps (defensive, 2026-07-10): task_ready() passes t.cursor,
+  -- which SHOULD never exceed #steps while a task is still "active" (M.tick()
+  -- calls complete_task() the moment cursor advances past the last step) -- but
+  -- indexing steps[i] out of range would silently return nil and crash the very
+  -- next line (s.type) rather than degrade gracefully, so this costs nothing and
+  -- removes that risk entirely regardless of whether the invariant ever holds.
+  for i = 1, math.min(upto or #steps, #steps) do
+    local s = steps[i]
     if s.type == "place" then
       needs[s.entity] = (needs[s.entity] or 0) + 1
     elseif s.type == "fuel" then
@@ -278,12 +293,37 @@ local function step_target_pos(t, step)
   return nil
 end
 
--- A task's CURRENT step is ready to run if every item it will consume is fully
--- reserved for THIS task already (needs table only tracks the deficit -- once a
--- deficit item arrives in inventory, a later tick's reservation top-up, done in
--- M.tick(), clears it from `needs`).
+-- A task's CURRENT step is ready to run if every item consumed by steps UP TO AND
+-- INCLUDING the current cursor is already reserved for THIS task (2026-07-10,
+-- root-caused via live reproduction: get_diag()/task_status() polling of a
+-- deliberately-starved, UNCONTESTED single submission -- scripts/
+-- repro_starved_upgrade.py-class test -- showed a task sit at cursor=1
+-- ('find_existing', which consumes nothing at all) for 60+ real seconds with
+-- active_step=nil and every busy_* flag False: genuinely idle, not blocked by
+-- ANY other queue or task -- while t.needs showed {coal=10}, a requirement that
+-- belongs ONLY to the task's LAST step, 'fuel'). The PREVIOUS version of this
+-- function gated readiness on `next(t.needs) == nil` -- t.needs is the WHOLE
+-- TASK's aggregate deficit across EVERY step, so a task whose LAST step needs a
+-- still-scarce item could never even attempt its FIRST step, no matter how
+-- unrelated that first step's own requirements are. Recomputing the deficit for
+-- only steps[1..cursor] and comparing against t.reserved (this task's own
+-- cumulative claim, monotonically non-decreasing until release_reservations() at
+-- completion/failure -- unaffected by this change) lets a task make every bit of
+-- progress it genuinely can right now, and block ONLY once it reaches the
+-- specific step that needs the still-missing item -- exactly how a real
+-- single-threaded worker would behave. This is a DIFFERENT bug from the
+-- concurrent-submission race fixed earlier the same day (spatial_bc.py's
+-- task_pool_busy / reactive_expert.py's is_task_pool guard, which stops a SECOND
+-- task from being submitted while another is active) -- this one reproduces with
+-- exactly ONE task submitted, no competing submission at all.
 local function task_ready(t)
-  return next(t.needs) == nil
+  local needed_so_far = derive_needs(t.steps, t.cursor)
+  for item, count in pairs(needed_so_far) do
+    if (t.reserved[item] or 0) < count then
+      return false
+    end
+  end
+  return true
 end
 
 -- ---- synchronous (non-walking) step execution ----
