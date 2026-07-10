@@ -105,7 +105,11 @@ end
 
 -- 4-directional A* (belts are axis-aligned). Returns an ordered list of
 -- {x, y, dir} (dir = the direction of travel INTO that tile, nil for the start tile),
--- or nil if no route was found within the search budget.
+-- or nil if no route was found within the search budget. On nil, a second string
+-- return value distinguishes WHY (2026-07-10, task #43 diagnostic follow-up):
+-- "start-blocked" / "dest-blocked" / "budget-exhausted" -- callers that only capture
+-- one return value (`local path = pathfind.find_path(...)`) are unaffected, per Lua's
+-- own multi-return semantics (extra return values are simply discarded).
 function M.find_path(surf, from, to, force)
   local fx, fy = math.floor(from.x), math.floor(from.y)
   local tx, ty = math.floor(to.x), math.floor(to.y)
@@ -117,7 +121,17 @@ function M.find_path(surf, from, to, force)
   local near_water = make_near_water(surf)
   -- The start tile is seeded directly into `open` (never evaluated as a "neighbor"),
   -- so it needs its own explicit check for the same reason the destination tile does.
-  if is_blocked(fx, fy) then return nil end
+  if is_blocked(fx, fy) then return nil, "start-blocked" end
+  -- Destination-blocked check (2026-07-10, task #43 diagnostic follow-up): without this,
+  -- a destination sitting on water/a resource/anything is_blocked rejects can NEVER be
+  -- added to `open` (it's only ever validated as a side effect of neighbor-expansion
+  -- below), so the search silently exhausts the whole budget before returning nil --
+  -- indistinguishable from a genuine "too far/obstacle-heavy" failure. Checking it here
+  -- fails fast AND tags the result with a distinguishable reason. `is_blocked` is a
+  -- memoized per-call closure (see make_is_blocked above), so this extra call just
+  -- seeds the (tx,ty) cache entry early -- no different from it being queried later
+  -- during normal expansion, no stale-cache risk.
+  if is_blocked(tx, ty) then return nil, "dest-blocked" end
 
   local function h(x, y) return math.abs(tx - x) + math.abs(ty - y) end
 
@@ -188,7 +202,7 @@ function M.find_path(surf, from, to, force)
       end
     end
   end
-  return nil   -- no path found within the search budget
+  return nil, "budget-exhausted"   -- no path found within the search budget
 end
 
 return M
