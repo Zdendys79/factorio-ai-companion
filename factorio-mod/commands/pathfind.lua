@@ -29,7 +29,7 @@ local MAX_SEARCH_MARGIN = 60     -- tiles of slack around the from/to bounding b
 -- room to route around, not just underground-belt's 5-tile max span (see UNDERGROUND_MAX_
 -- DISTANCE below); 40 already got raised once for the same reason (see history above) and
 -- live-caught tonight (bc_0708night1) still hit "no path" on a ~93-tile route.
-local MAX_NODES = 16000          -- hard cap on A* expansions (bounded, no infinite loop) -- raised
+local MAX_NODES = 128000         -- hard cap on A* expansions (bounded, no infinite loop) -- raised
 -- 2500->4000 alongside the margin increase so the larger search area doesn't just make the
 -- SAME "no path" failure happen after burning more of the budget with no detour room to show
 -- for it -- both numbers need to move together.
@@ -110,6 +110,60 @@ local MAX_NODES = 16000          -- hard cap on A* expansions (bounded, no infin
 -- sweep_max_nodes_real_scenarios.lua (offline replay+sweep) for the full methodology --
 -- neither is committed to this repo (the harness lives in factorio-ai's scratchpad and the
 -- capture script in the factorio-ai repo's scripts/, not factorio-ai-companion).
+--
+-- RAISED 16000->128000 (2026-07-10/11, task #43 CONTINUATION, LONG-THIN shape): a live run
+-- (test_stage_b_wiring_postcoalanchor.log) hit belt_connect(54,2)->(-94,-14) failing "no
+-- path"/"budget-exhausted" 3 separate times -- dx=-148, dy=-16 (~164 Manhattan), a long,
+-- THIN bounding box (268x136=~36448 tiles at MAX_SEARCH_MARGIN=60) SMALLER by area than the
+-- diagonal routes just confirmed above to succeed at 16000 (~45369 tiles each) -- i.e. a
+-- genuinely DIFFERENT failure shape, not just "the same problem in a bigger box." Captured
+-- REAL is_blocked()/near_water() data (factorio-ai's scripts/capture_pathfind_longthin_
+-- scenarios.py, mirroring the diagonal capture script's method) for 8 GENUINELY failing
+-- (reason=="budget-exhausted") long-thin routes (dx~148-150, dy~16-20, matching the real
+-- failing route's ratio) across 3 INDEPENDENT fresh maps -- not just 2, since long-thin
+-- failures turned out much RARER per-map than the diagonal case: only 3 of 11 distinct maps
+-- tried produced ANY long-thin "budget-exhausted" result at all (the other 8 maps' 64
+-- long-thin attempts all either pathfound successfully or only hit "Insufficient belt
+-- items", i.e. pathfinding itself succeeded). Captured at CAPTURE_MARGIN=120 (double the
+-- then-current MAX_SEARCH_MARGIN=60) specifically so the offline sweep could ALSO test
+-- MAX_SEARCH_MARGIN independently of MAX_NODES against the exact same real geometry
+-- (factorio-ai's scratchpad sweep_longthin_real_scenarios.lua), instrumented to additionally
+-- surface, on every failure, the raw (expansions, #open-at-exit) the search already computes
+-- internally but never returned before -- distinguishing NODE-CAP-BOUND (expansions==cap,
+-- more budget could help) from MARGIN-BOUND (open list emptied before reaching cap, only a
+-- wider box could help). Result: at margin=60 (current), swept cap in {16000 [then-current],
+-- 32000, 64000, 128000} -- 0/8 scenarios succeed at 16000 (every one hits expansions==16000
+-- exactly, matching each one's live "budget-exhausted" origin); 6/8 succeed at 32000; 7/8 at
+-- 64000; 8/8 (ALL) succeed at 128000. EVERY failing row across all 8 scenarios showed
+-- expansions==cap exactly (never open==0 before reaching cap) -- this shape's failures are
+-- ENTIRELY node-cap-bound, NEVER margin-bound, in everything captured. Separately swept
+-- MAX_SEARCH_MARGIN in {60, 90, 120} at each cap: the result (found/not-found, ms, and path
+-- length when found) was IDENTICAL across all 3 margins for every single scenario/cap
+-- combination -- margin measurably had ZERO effect on this shape's outcome. This directly
+-- answers this task's own open question (a long-thin box's small vertical slack COULD in
+-- principle force a wider detour) with real evidence: it does NOT, for any of the 8 real
+-- routes captured -- MAX_SEARCH_MARGIN=60 is left unchanged. Real wall-clock cost (lua5.3
+-- os.clock()): 212-253ms at cap=16000 (full exhaustion, all 8 failing, across all 8
+-- scenarios x 3 margins), up to ~1249-1261ms for the single hardest scenario at
+-- cap=128000 (still ~48x below the RCON client's 60s socket timeout) -- cost scales
+-- roughly linearly with cap, no evidence of the heap's per-node cost exploding at this
+-- larger size. Raised MAX_NODES to 128000, the smallest of
+-- the 4 candidates that cleared 100% of what was captured (same selection rule as the 16000
+-- decision above). Caveat, same discipline as above: this is 8 real samples across 3 maps
+-- for the EXACT captured geometry, not a guarantee every possible long-thin route succeeds
+-- at 128000 -- if a future live run still hits "budget-exhausted" on a route that is neither
+-- this long-thin shape nor the earlier diagonal shape, the right next step is to capture
+-- THAT case specifically, not guess a bigger number again. Live-verified end-to-end
+-- afterward (factorio-ai's scripts/live_verify_longthin_fix.py, mirroring
+-- live_verify_diagonal_fix.py's own pattern): reloaded the 3 actual captured maps
+-- (AI-pfltcapture1/2/16.zip) with the fixed mod and re-issued the identical belt_connect
+-- calls that previously returned "budget-exhausted" -- all 8/8 now return a found path
+-- (checked via the same "reason ~= budget-exhausted" criterion the diagonal verify script
+-- used; each call actually reported "Insufficient belt items" instead, confirming
+-- pathfinding itself succeeded -- expected, this diagnostic never provisions belts). Real
+-- live wall-clock cost: 512-2225ms per call (full engine + RCON round-trip, naturally
+-- higher than the offline lua5.3-only measurements above) -- still far below the RCON
+-- client's 60s socket timeout.
 
 -- Shore buffer (2026-07-08, Zdendys: "vodu obcházet alespon ve vzdalenosti 5-10 od brehu"):
 -- a SOFT cost, not a hard block, added to any tile within SHORE_BUFFER of a water tile, so
