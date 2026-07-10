@@ -29,10 +29,47 @@ local MAX_SEARCH_MARGIN = 60     -- tiles of slack around the from/to bounding b
 -- room to route around, not just underground-belt's 5-tile max span (see UNDERGROUND_MAX_
 -- DISTANCE below); 40 already got raised once for the same reason (see history above) and
 -- live-caught tonight (bc_0708night1) still hit "no path" on a ~93-tile route.
-local MAX_NODES = 4000           -- hard cap on A* expansions (bounded, no infinite loop) -- raised
+local MAX_NODES = 8000           -- hard cap on A* expansions (bounded, no infinite loop) -- raised
 -- 2500->4000 alongside the margin increase so the larger search area doesn't just make the
 -- SAME "no path" failure happen after burning more of the budget with no detour room to show
 -- for it -- both numbers need to move together.
+--
+-- Raised 4000->8000 (2026-07-10, task #43, alongside the open-list binary-heap change
+-- above -- NOT a standalone "just raise the number again" tweak, this project's own
+-- established anti-pattern; done because the heap made a larger cap cheap AND there is
+-- real, reproducible offline evidence the bigger cap alone fixes a genuine failure --
+-- see the correction below, though, for what this evidence does NOT yet cover). Offline
+-- `lua5.3` measurements (scratchpad harness, not committed -- see task report) on the
+-- exact worst case this number governs (search must exhaust the ENTIRE node budget,
+-- e.g. a genuinely unreachable/heavily-obstacle-laden target): the OLD linear-scan pop
+-- cost ~108-119ms at 4000 nodes and would have cost ~227ms at 8000 (measured directly,
+-- reproduced independently twice more during adversarial verify) -- doubling the budget
+-- under the old algorithm would have meaningfully increased real cost. With the heap,
+-- 8000 nodes costs only ~45-51ms -- LESS than the OLD code's own cost at the SMALLER
+-- 4000 cap. Separately, a synthetic ~130-tile route over deliberately scattered
+-- obstacles (12% blocked terrain) hit "budget-exhausted" at 4000 nodes despite a real
+-- 143-tile path existing just beyond that cutoff -- raising to 8000 found it, at no
+-- measurable extra cost. This synthetic case is real, reproducible evidence for the cap
+-- bump on its own terms.
+--
+-- CORRECTION (2026-07-10, same day, caught during adversarial verify): an earlier draft
+-- of this comment additionally claimed the live scripts/test_belt_connect_dest_diag.py
+-- diagnostic "confirmed" this fix by going from 4/8 to 5/8 genuine pathfinds -- that
+-- claim was overclaimed and has been removed. The two runs used two DIFFERENT sets of 8
+-- fresh random maps; the delta is a single flipped sample, and this project's OWN memory
+-- already documents an earlier 1/8->4/8 jump on this same diagnostic with ZERO relevant
+-- code change, i.e. within normal map-to-map noise for n=8. All 3 remaining failures in
+-- the post-bump run were the diagonal-direction targets (~182-186 tile Manhattan
+-- distance, ~45000-tile bounding box at the current MAX_SEARCH_MARGIN=60) -- this
+-- failure class is NOT confirmed fixed by this change and remains OPEN. The heap's own
+-- ~5x per-node speedup means a much larger cap is now cheap to try (measured: 32000
+-- nodes costs only ~192ms, far below the RCON client's 60s socket timeout in
+-- src/rcon_client.py) -- but raising it further needs its own real evidence (a
+-- larger-sample or fixed-seed diagnostic run), not another guessed number. Left as the
+-- concrete next step for task #43. MAX_SEARCH_MARGIN is intentionally NOT touched here
+-- (it was raised previously for an unrelated geometric reason, routing room around real
+-- obstacles like lakes, not a node-budget concern; nothing measured this session bears
+-- on whether it separately needs to change).
 
 -- Shore buffer (2026-07-08, Zdendys: "vodu obcházet alespon ve vzdalenosti 5-10 od brehu"):
 -- a SOFT cost, not a hard block, added to any tile within SHORE_BUFFER of a water tile, so
@@ -103,6 +140,83 @@ local function make_near_water(surf)
   end
 end
 
+-- Binary min-heap for the A* open list (2026-07-10, task #43 perf follow-up).
+-- The OLD code popped the lowest-f node via a LINEAR SCAN over the entire `open`
+-- array on every iteration -- with MAX_NODES=4000 and up to 4 pushes per
+-- expansion, `open` can grow into the thousands, making every pop O(|open|) and
+-- the whole search roughly O(n^2) instead of the O(n log n) a proper priority
+-- queue gives. Lua has no built-in decrease-key heap, so this uses the standard
+-- "lazy deletion" pattern: a state can be pushed multiple times (once per
+-- successful relaxation -- the OLD linear-scan code already relied on this too,
+-- since it never removed a stale `open` entry on relaxation either, only ever
+-- appended a fresh one), and the existing `visited[state_key]` check (unchanged,
+-- right after `heap_pop` at the call site below) discards a stale duplicate the
+-- first time it's popped after its state has already been expanded via a
+-- fresher, cheaper entry. This is safe BECAUSE edge costs are non-negative: each
+-- successive relaxation of the same state produces a STRICTLY smaller g (the
+-- `ng < gscore[nk]` guard below enforces this), and since h() depends only on
+-- position (not on which relaxation produced the entry), a strictly smaller g
+-- means a strictly smaller f too -- so the freshest (cheapest) entry for any
+-- given state ALWAYS has the smallest f among all of that state's own entries,
+-- and is therefore ALWAYS popped before any of its own staler duplicates,
+-- regardless of push order. This is the exact same property the old linear scan
+-- already depended on (it too just picked the global-minimum f/g node each
+-- iteration, oblivious to which entries were "stale") -- a pure performance
+-- change, not a new correctness assumption.
+--
+-- Comparator: lowest f first; among equal f, prefer LARGER g (2026-07-05
+-- tie-break, see the historical comment preserved at the call site below --
+-- unchanged, still biases the search to march toward the goal instead of
+-- fanning out on a plateau); among equal f AND equal g (a real tie between two
+-- distinct nodes), prefer whichever was pushed FIRST (`seq`, a monotonically
+-- increasing push counter) -- this exactly reproduces the old linear scan's own
+-- de-facto tie-break (it iterated `open` in insertion order and only overwrote
+-- its running-best on a STRICT `<`, so among full ties the earliest-inserted
+-- entry always won), so the heap's pop order is IDENTICAL to the old scan's pop
+-- order at every single step, not just "equally optimal" -- same algorithm
+-- trace, same expansions count, same final path, for any given input.
+local function heap_less(a, b)
+  if a.f ~= b.f then return a.f < b.f end
+  if a.g ~= b.g then return a.g > b.g end
+  return a.seq < b.seq
+end
+
+local function heap_push(heap, node)
+  heap[#heap + 1] = node
+  local i = #heap
+  while i > 1 do
+    local parent = math.floor(i / 2)
+    if heap_less(heap[i], heap[parent]) then
+      heap[i], heap[parent] = heap[parent], heap[i]
+      i = parent
+    else
+      break
+    end
+  end
+end
+
+-- Pops and returns the minimum element (per heap_less above). Caller must only
+-- call this on a non-empty heap (the while loop at the call site below already
+-- guards on `#open > 0` before calling, matching the old code's own guard).
+local function heap_pop(heap)
+  local n = #heap
+  local top = heap[1]
+  heap[1] = heap[n]
+  heap[n] = nil
+  n = n - 1
+  local i = 1
+  while true do
+    local left, right = i * 2, i * 2 + 1
+    local smallest = i
+    if left <= n and heap_less(heap[left], heap[smallest]) then smallest = left end
+    if right <= n and heap_less(heap[right], heap[smallest]) then smallest = right end
+    if smallest == i then break end
+    heap[i], heap[smallest] = heap[smallest], heap[i]
+    i = smallest
+  end
+  return top
+end
+
 -- 4-directional A* (belts are axis-aligned). Returns an ordered list of
 -- {x, y, dir} (dir = the direction of travel INTO that tile, nil for the start tile),
 -- or nil if no route was found within the search budget. On nil, a second string
@@ -135,34 +249,33 @@ function M.find_path(surf, from, to, force)
 
   local function h(x, y) return math.abs(tx - x) + math.abs(ty - y) end
 
-  local open = {{x = fx, y = fy, dir = nil, g = 0, f = h(fx, fy)}}
+  local open = {}
+  local seq = 0                           -- monotonic push counter, see heap_less above
+  seq = seq + 1
+  heap_push(open, {x = fx, y = fy, dir = nil, g = 0, f = h(fx, fy), seq = seq})
   local came_from = {}                    -- state_key -> predecessor node
   local gscore = {[state_key(fx, fy, nil)] = 0}
   local visited = {}
   local expansions = 0
 
   while #open > 0 and expansions < MAX_NODES do
-    -- Pop lowest-f (linear scan -- MAX_NODES bounds worst case; a real priority queue
-    -- isn't worth the complexity for the short corridors this command targets), tie-
-    -- breaking toward the LARGER g (2026-07-05, Zdendys live-caught: a 134-tile route
-    -- reported "no path" despite there being no water/cliffs in the way -- root cause:
-    -- with a Manhattan heuristic and 4-directional movement, every tile inside the
-    -- from/to bounding rectangle has the SAME f = g+h (the whole rectangle is one tied
-    -- plateau), and the old tie-break ("keep whichever equal-f node was found first")
-    -- made the search fan out breadth-first across nearly the ENTIRE rectangle before
-    -- ever reaching the goal corner -- for a 121x58 box that's ~7000 tiles against a
+    -- Pop lowest-f via the binary min-heap above (O(log n), see heap_pop/heap_less
+    -- for the full mechanism + why its pop order is provably identical to the OLD
+    -- linear-scan's pop order at every step). Tie-break toward the LARGER g
+    -- (2026-07-05, Zdendys live-caught: a 134-tile route reported "no path" despite
+    -- there being no water/cliffs in the way -- root cause: with a Manhattan
+    -- heuristic and 4-directional movement, every tile inside the from/to bounding
+    -- rectangle has the SAME f = g+h (the whole rectangle is one tied plateau), and
+    -- the old tie-break ("keep whichever equal-f node was found first") made the
+    -- search fan out breadth-first across nearly the ENTIRE rectangle before ever
+    -- reaching the goal corner -- for a 121x58 box that's ~7000 tiles against a
     -- 2500-node cap, guaranteeing a false "no path" on a fully open field. Preferring
     -- the larger-g (equivalently smaller-h, i.e. closer to the goal) node among ties
     -- biases expansion to march toward the target instead of radiating outward evenly,
     -- without changing A*'s optimality guarantee at all (ties by definition share the
     -- same f, so picking a different one among them cannot produce a worse-than-optimal
     -- final path -- see the state_key/goal-test comments below, unaffected by this).
-    local bi, bf, bg = 1, open[1].f, open[1].g
-    for i = 2, #open do
-      local o = open[i]
-      if o.f < bf or (o.f == bf and o.g > bg) then bi, bf, bg = i, o.f, o.g end
-    end
-    local cur = table.remove(open, bi)
+    local cur = heap_pop(open)
     local ck = state_key(cur.x, cur.y, cur.dir)
     if not visited[ck] then
       visited[ck] = true
@@ -195,7 +308,8 @@ function M.find_path(surf, from, to, force)
             if ng < (gscore[nk] or math.huge) then
               gscore[nk] = ng
               came_from[nk] = cur
-              open[#open + 1] = {x = nx, y = ny, dir = d.dir, g = ng, f = ng + h(nx, ny)}
+              seq = seq + 1
+              heap_push(open, {x = nx, y = ny, dir = d.dir, g = ng, f = ng + h(nx, ny), seq = seq})
             end
           end
         end
