@@ -29,7 +29,7 @@ local MAX_SEARCH_MARGIN = 60     -- tiles of slack around the from/to bounding b
 -- room to route around, not just underground-belt's 5-tile max span (see UNDERGROUND_MAX_
 -- DISTANCE below); 40 already got raised once for the same reason (see history above) and
 -- live-caught tonight (bc_0708night1) still hit "no path" on a ~93-tile route.
-local MAX_NODES = 8000           -- hard cap on A* expansions (bounded, no infinite loop) -- raised
+local MAX_NODES = 16000          -- hard cap on A* expansions (bounded, no infinite loop) -- raised
 -- 2500->4000 alongside the margin increase so the larger search area doesn't just make the
 -- SAME "no path" failure happen after burning more of the budget with no detour room to show
 -- for it -- both numbers need to move together.
@@ -70,6 +70,46 @@ local MAX_NODES = 8000           -- hard cap on A* expansions (bounded, no infin
 -- (it was raised previously for an unrelated geometric reason, routing room around real
 -- obstacles like lakes, not a node-budget concern; nothing measured this session bears
 -- on whether it separately needs to change).
+--
+-- RAISED 8000->16000 (2026-07-10, later same session, task #43 REAL-DATA follow-up): the
+-- live diagnostic-delta approach above was explicitly flagged as inconclusive (a single
+-- flipped sample, indistinguishable from map-to-map noise). Instead of another live
+-- re-roll, this time captured the REAL per-tile is_blocked()/near_water() data (via direct
+-- surf.count_entities_filtered/can_place_entity/find_tiles_filtered calls that mirror this
+-- file's own logic exactly) for 5 GENUINELY failing (reason=="budget-exhausted") diagonal
+-- routes across 2 independent fresh maps (~184-tile Manhattan distance, ~45369-tile
+-- bounding box each -- exactly the failure class flagged above as open), then replayed
+-- that EXACT captured obstacle geometry OFFLINE (no server) through this real source file
+-- (scratchpad harness, MAX_NODES patched via a regex substitution that ASSERTS it actually
+-- changed the byte content -- fixes the exact "silently no-ops once the file already
+-- matches the target value" bug this project's own memory flagged in the sibling
+-- explore_max_nodes.lua/explore_scaling.lua harnesses from earlier the same day) at
+-- candidate caps {8000 [then-current], 16000, 32000, 64000} -- a true PAIRED comparison,
+-- identical obstacle geometry every run, eliminating the map-to-map noise problem entirely.
+-- Result: 0/5 scenarios succeeded at 8000 (matches each one's live "budget-exhausted"
+-- origin, confirming the capture faithfully reproduces what the live search actually saw);
+-- 5/5 succeeded at 16000, EVERY one finding the exact 185-tile path (184 Manhattan distance
+-- + 1 for the start tile itself -- the true zero-detour optimum), with 32000 and 64000
+-- finding the IDENTICAL 185-tile path in every scenario, i.e. 16000 is already the exact
+-- sufficient cap for everything captured, and this evidence does not support going higher.
+-- The optimal path being found comfortably inside the CURRENT MAX_SEARCH_MARGIN=60
+-- bounding box also rules OUT the margin as this failure class's bottleneck -- it was
+-- purely a node-budget shortfall. Measured real wall-clock cost (lua5.3 os.clock(), Python
+-- time.time() around the live-capture RCON calls separately): 219-302ms per scenario at
+-- cap=8000 (full exhaustion, all 5 failing cases) and 229-391ms at cap=16000/32000/64000
+-- (successful, early-exits on reaching the goal) -- higher than the water-FREE synthetic
+-- benchmark quoted above (~45-51ms at 8000) because these are REAL captured maps with real
+-- lakes (up to 1918 water tiles each), so near_water's shore-penalty lookups add real cost
+-- the synthetic case omitted entirely; still 2-3 orders of magnitude below the RCON
+-- client's 60s socket timeout. Caveat, stated plainly rather than overclaimed: this is 5
+-- real samples across 2 maps -- a genuine noise-free paired comparison for the EXACT
+-- geometry captured, not a guarantee every possible diagonal/long route succeeds at
+-- 16000 -- it is simply the smallest of the 4 prescribed candidate values that cleared
+-- 100% of what was captured. See scripts/capture_pathfind_diagonal_scenarios.py (live
+-- capture, factorio-ai repo) and this session's scratchpad's
+-- sweep_max_nodes_real_scenarios.lua (offline replay+sweep) for the full methodology --
+-- neither is committed to this repo (the harness lives in factorio-ai's scratchpad and the
+-- capture script in the factorio-ai repo's scripts/, not factorio-ai-companion).
 
 -- Shore buffer (2026-07-08, Zdendys: "vodu obcházet alespon ve vzdalenosti 5-10 od brehu"):
 -- a SOFT cost, not a hard block, added to any tile within SHORE_BUFFER of a water tile, so
@@ -86,9 +126,10 @@ local function tile_key(x, y) return x .. ":" .. y end
 -- different states -- collapsing them onto one (x,y) key lets whichever is expanded FIRST
 -- permanently block a later, better-oriented arrival at the same g (or even lower cost
 -- overall once its own better-turn continuation is considered), breaking A*'s optimality
--- (cubic dev ai bot, 2026-07-04: worked example with a wall forcing an extra turn). tile_key
--- (position only) is still used for the FINAL path reconstruction lookup, which is fine --
--- that only needs a unique per-node identity, not de-duplication across directions.
+-- (cubic dev ai bot, 2026-07-04: worked example with a wall forcing an extra turn).
+-- (Corrected 2026-07-10, adversarial verify: path reconstruction below also uses
+-- state_key via came_from, not tile_key -- this comment previously claimed otherwise;
+-- tile_key is only ever used by the make_is_blocked/make_near_water caches above.)
 local function state_key(x, y, dir) return x .. ":" .. y .. ":" .. tostring(dir) end
 
 -- Per-run cache: the same neighbor tile is checked from multiple expanded nodes, and
