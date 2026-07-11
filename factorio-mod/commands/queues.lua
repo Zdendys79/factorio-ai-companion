@@ -1568,6 +1568,15 @@ end
 function M.start_combat(cid, target_pos)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
+  -- Ownership guard (2026-07-11, completing task #42 -- the other 4 async subsystems
+  -- got this same guard 2026-07-08 in commit a885b21, "Extend walking_queues[cid]
+  -- ownership guard to gather/fuel/build/belt_queues"; combat was missed then, found
+  -- 2026-07-11 during an end-of-day stale-task audit. Currently dormant in production
+  -- (no Python-side caller exists yet, auto_defend is set but never read), so this
+  -- closes a real but not-yet-live gap before anything wires combat up and hits it.
+  if storage.active_step and storage.active_step[cid] then
+    return {error = "companion busy with an active task-pool step"}
+  end
 
   local enemies = c.entity.surface.find_entities_filtered{
     position = target_pos,
