@@ -143,6 +143,20 @@ commands.add_command("fac_fuel_group_status", nil, function(cmd)
   end)
 end)
 
+-- DIAGNOSTIC (2026-07-11, Mode A/B gather-select-fail investigation -- see queues.lua's
+-- MINE_DIAG_CAP comment for the full mechanism/scope and current findings). Returns the
+-- per-cycle "mine" state trace recorded since the companion last entered a continuous
+-- mine attempt. Kept deliberately (not removed) -- the investigation is still open and
+-- will likely need this again; see queues.lua's comment before removing.
+commands.add_command("fac_mine_diag", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)$", cmd.parameter)
+    local id = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    u.json_response({id = id, samples = queues.get_mine_diag(id)})
+  end)
+end)
+
 commands.add_command("fac_resource_nearest", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(%S+)$", cmd.parameter)

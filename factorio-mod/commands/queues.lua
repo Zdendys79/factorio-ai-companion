@@ -44,6 +44,50 @@ local MINE_ADJACENT_RANGE = 2
 -- pinned down; see scripts/test_gather_select_fail.py's docstring for the full status.
 local SELECT_FAIL_TICKS = 120
 
+-- DIAGNOSTIC (2026-07-11, Mode A/B gather-select-fail investigation -- see
+-- scripts/live_investigate_mode_b.py, scripts/live_investigate_selected_distance.py,
+-- scripts/live_investigate_mode_a_preposition.py, scripts/live_investigate_mode_a_
+-- nearby_obstacles.py). Records a per-cycle (every TICK_INTERVAL=5 ticks -- finer than
+-- any Python-side poll can afford over RCON) sample of mining_state.mining/selected/
+-- walking_state/total-inventory/position while in the "mine" state, fetchable via the
+-- new /fac_mine_diag <cid> command.
+--
+-- STATUS as of 2026-07-11 (KEPT DELIBERATELY, not temporary -- the investigation below
+-- used this instrumentation to make real progress and will likely need it again):
+-- a 20-attempt live batch found best_d<~1.0 tile reliably fails `selected` (0% stick)
+-- while best_d in [1.3,2.0] reliably succeeds (~100% stick) -- but a SURGICAL follow-up
+-- (raw teleport+assign, no queue machinery) showed `selected` sticks fine at EVERY
+-- distance 0.2-2.2 in isolation, and a PRE-TELEPORT follow-up (teleport to the SAME
+-- close distances 0.5-1.9, THEN start the real gather() queue) recorded `selm`=true on
+-- 100% of sampled cycles in all 5 attempts (scripts/live_investigate_mode_a_
+-- preposition.py, /tmp/preposition.log) -- a clean contrast with the near-0% stick rate
+-- typical of a genuine walking-triggered failure -- supporting that the failure is NOT
+-- caused by final distance itself, only by arriving there via the natural multi-tick
+-- WALKING approach. HONEST CAVEAT (adversarial review caught this before commit): all 5
+-- of those attempts nonetheless gathered exactly 14 of the requested 15 (never 15,
+-- across 5 independent random maps) -- a separate, oddly consistent off-by-one
+-- discrepancy, NOT yet investigated, that is almost certainly unrelated to the
+-- selection-stick mechanism (selm stayed 100% throughout) but should not be quietly
+-- read as "5/5 clean passes". A nearby-clearable-obstacle (tree/rock) check
+-- also found NO correlation (fails with 0 obstacles nearby, passes with 0 or 1). Root
+-- cause of what specifically differs between "walked there" and "teleported there"
+-- remains OPEN -- one live-confirmed contributing detail: tick_gather_queues runs
+-- BEFORE process_walking_queues in the same on_nth_tick(5) dispatch (control.lua),
+-- and walking_state is only re-evaluated every TICK_INTERVAL=5 ticks while the ENGINE
+-- keeps applying the last-set walking_state continuously in between -- so natural
+-- arrival can overshoot the intended stopping point by up to ~1 tile of travel per
+-- cycle, which explains the VARIABLE landing distances but not yet the selection
+-- failure mechanism itself. Do not remove this instrumentation without re-reading this
+-- comment; it is cheap (bounded 4000-entry ring buffer, reset every new mine attempt).
+local MINE_DIAG_CAP = 4000
+local function _record_mine_diag(cid, sample)
+  storage.mine_diag = storage.mine_diag or {}
+  local buf = storage.mine_diag[cid]
+  if not buf then buf = {}; storage.mine_diag[cid] = buf end
+  buf[#buf + 1] = sample
+  if #buf > MINE_DIAG_CAP then table.remove(buf, 1) end
+end
+
 -- Validate companion exists and is valid
 local function valid_companion(id)
   local c = u.get_companion(id)
@@ -153,6 +197,15 @@ function M.init()
   storage.build_queues = storage.build_queues or {}
   storage.combat_queues = storage.combat_queues or {}
   storage.belt_queues = storage.belt_queues or {}
+  storage.mine_diag = storage.mine_diag or {}   -- diagnostic, see MINE_DIAG_CAP comment above
+end
+
+-- Diagnostic accessor (Mode A/B gather-select-fail investigation) -- returns the
+-- per-cycle "mine" state trace buffer for `cid` (empty list if none recorded yet, e.g.
+-- never entered "mine").
+function M.get_mine_diag(cid)
+  storage.mine_diag = storage.mine_diag or {}
+  return storage.mine_diag[cid] or {}
 end
 
 -- ============ HARVEST ============
@@ -570,6 +623,8 @@ function M.tick_gather_queues()
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "mine"
+        storage.mine_diag = storage.mine_diag or {}
+        storage.mine_diag[cid] = {}   -- fresh buffer for this new continuous mine attempt (diagnostic)
       elseif game.tick >= (q.approach_deadline or 0) then   -- cannot reach this patch -> blacklist + try next
         q.blacklist = q.blacklist or {}
         -- Blacklist every tile of `resource` within patch range (not just q.entity_pos):
@@ -597,6 +652,19 @@ function M.tick_gather_queues()
         c.entity.mining_state = {mining = false}
         return true   -- target met
       end
+      -- DIAGNOSTIC (Mode A/B gather-select-fail investigation, see MINE_DIAG_CAP comment above): fresh
+      -- read BEFORE this cycle's own logic touches anything, so a sample can reveal
+      -- whether the ENGINE itself flipped mining_state off between our last write and
+      -- now (as opposed to only ever seeing what WE last wrote). Also captures the SAME
+      -- two inputs process_queue's own generic UNIVERSAL_STALE_TICKS backstop uses
+      -- (total inventory count + position) -- tests the hypothesis that some UNRELATED
+      -- inventory/position change could be resetting that backstop's own counter while
+      -- the gather-specific product count stays stuck at 0 (which would explain how a
+      -- Mode-B-shaped stall could run past 600 ticks without the generic backstop
+      -- catching it).
+      local mine_diag_mining_before = c.entity.mining_state and c.entity.mining_state.mining or false
+      local mine_diag_total_inv = inv.get_item_count()   -- same call process_queue's own staleness backstop uses
+      local mine_diag_pos = {x = c.entity.position.x, y = c.entity.position.y}
       -- Pick the NEAREST resource entity to the companion's ACTUAL position, not just any
       -- entity within radius=1 of the originally-recorded q.entity_pos: a resource patch is
       -- many individually-tiled entities ~1 tile apart, so a radius=1 query around q.entity_pos
@@ -696,12 +764,28 @@ function M.tick_gather_queues()
           q.last_res_key = nil
           q.state = "find"
         end
+        _record_mine_diag(cid, {
+          t = game.tick, r = res_key, d = best_d,
+          mb = mine_diag_mining_before,
+          ma = c.entity.mining_state and c.entity.mining_state.mining or false,
+          sel = c.entity.selected and c.entity.selected.name or false,
+          selm = (c.entity.selected == res), w = c.entity.walking_state and c.entity.walking_state.walking or false,
+          g = inv.get_item_count(q.product) - (q.start_count or 0), sft = q.select_fail_ticks or 0,
+          ti = mine_diag_total_inv, pos = mine_diag_pos})
         return false
       end
       q.select_fail_ticks = nil
       if not c.entity.mining_state.mining then
         c.entity.mining_state = {mining = true, position = res.position}
       end
+      _record_mine_diag(cid, {
+        t = game.tick, r = res_key, d = best_d,
+        mb = mine_diag_mining_before,
+        ma = c.entity.mining_state and c.entity.mining_state.mining or false,
+        sel = c.entity.selected and c.entity.selected.name or false,
+        selm = (c.entity.selected == res), w = c.entity.walking_state and c.entity.walking_state.walking or false,
+        g = inv.get_item_count(q.product) - (q.start_count or 0), sft = 0,
+        ti = mine_diag_total_inv, pos = mine_diag_pos})
       return false
     end
     return true
