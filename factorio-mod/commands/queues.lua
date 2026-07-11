@@ -592,6 +592,21 @@ function M.tick_gather_queues()
     local surf = c.entity.surface
     local inv = c.entity.get_main_inventory()
 
+    -- TERMINAL: freeze here until get_gather_status consumes+clears this entry -- same fix
+    -- already applied to build_queues/fuel_queues (see those functions' own "TERMINAL"
+    -- comments above). Returning true immediately on completion used to delete the queue
+    -- in the SAME tick completion was detected, so a Python status poll a moment later saw
+    -- plain "active:false" with NO "gathered" field at all -- gather()'s on_poll callback
+    -- in companion.py then kept reporting whatever "gathered" value it had last observed
+    -- WHILE still active, which is systematically short of the real total whenever the
+    -- final unit(s) are credited to inventory by the engine between one process_queue tick
+    -- and the next, and this very completion sweep removes the queue before any poll can
+    -- ever observe "active:true, gathered:target". Root-caused 2026-07-11 from a
+    -- reproducibly exact target-1 result (never target) across 5 independent live attempts,
+    -- scripts/live_investigate_mode_a_preposition.py, /tmp/preposition.log -- see
+    -- game_progress.md's "gather()-returns-(target-1)" entry for the full trace.
+    if q.state == "done" then return false end
+
     if q.state == "find" then
       local e = find_reachable_resource(surf, c.entity.position, q.resource, q.blacklist)
       if not e then
@@ -606,7 +621,7 @@ function M.tick_gather_queues()
         -- something blocked".
         q.find_retry_deadline = q.find_retry_deadline or (game.tick + 300)
         if game.tick < q.find_retry_deadline then return false end
-        return true   -- no reachable patch left after retrying -> done, return what we have
+        q.state = "done"; return false   -- no reachable patch left after retrying -> done, return what we have
       end
       local mp = e.prototype.mineable_properties
       if not (mp and mp.products and mp.products[1]) then
@@ -693,7 +708,7 @@ function M.tick_gather_queues()
     if q.state == "mine" then
       if inv.get_item_count(q.product) - (q.start_count or 0) >= q.target then
         c.entity.mining_state = {mining = false}
-        return true   -- target met
+        q.state = "done"; return false   -- target met
       end
       -- DIAGNOSTIC (Mode A/B gather-select-fail investigation, see MINE_DIAG_CAP comment above): fresh
       -- read BEFORE this cycle's own logic touches anything, so a sample can reveal
@@ -835,7 +850,7 @@ function M.tick_gather_queues()
   end)
 end
 
-function M.get_gather_status(cid)
+function M.get_gather_status(cid, peek)
   local q = storage.gather_queues[cid]
   if not q then return {active = false} end
   local c = valid_companion(cid)
@@ -859,6 +874,27 @@ function M.get_gather_status(cid)
   if c then
     selected_name = c.entity.selected and c.entity.selected.name or nil
     mining = c.entity.mining_state and c.entity.mining_state.mining or false
+  end
+  -- Terminal state consumed HERE (not by tick_gather_queues) -- same fix as
+  -- get_build_status/get_fuel_status: the final "gathered" count (computed live above from
+  -- the still-intact q.product/q.start_count) must survive at least until a Python poll
+  -- actually reads it, instead of being deleted the same tick completion was detected and
+  -- forcing the caller to fall back on a stale pre-completion value (see the "TERMINAL"
+  -- comment in tick_gather_queues for the full root-cause trace).
+  --
+  -- peek (2026-07-11): task_pool.lua's get_diag() merges this call's result into its own
+  -- explicitly-documented "read-only, no side effects" diagnostic snapshot -- calling this
+  -- in normal (consuming) mode from there would let a mere DIAGNOSTIC read silently clear a
+  -- gather queue's one-and-only terminal "done" read, discarding the final gathered count
+  -- before /fac_gather_status ever got a chance to see it -- the exact same class of bug
+  -- this whole TERMINAL mechanism exists to prevent, just via a different call path. When
+  -- peek is truthy, report the terminal state without consuming it, leaving the real
+  -- /fac_gather_status poll (companion.py's gather()) as the only consumer.
+  if q.state == "done" then
+    if not peek then storage.gather_queues[cid] = nil end
+    return {active = false, resource = q.resource, target = q.target, gathered = have,
+      blacklist = bl, entity_pos = q.entity_pos,
+      selected = selected_name, mining_state_mining = mining}
   end
   return {active = true, resource = q.resource, target = q.target, gathered = have,
     state = q.state, blacklist = bl, entity_pos = q.entity_pos,
