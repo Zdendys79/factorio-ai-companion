@@ -52,6 +52,22 @@ local SELECT_FAIL_TICKS = 120
 -- walking_state/total-inventory/position while in the "mine" state, fetchable via the
 -- new /fac_mine_diag <cid> command.
 --
+-- EXTENSION (2026-07-11, same day, follow-up round): the sampling window now ALSO
+-- covers the preceding "approach" (walking) state, not only "mine" -- previously the
+-- buffer was reset (wiped) only once "mine" began, so every walking-phase tick was
+-- silently discarded before it could ever be observed. This was the completeness
+-- critic's own concrete recommendation from the prior round, aimed specifically at the
+-- still-open question of what differs between a WALKED arrival and a TELEPORTED one
+-- (see the "remains OPEN" paragraph below) -- that transition boundary was entirely
+-- unobserved until now. Samples are tagged `st = "approach"` or `st = "mine"` so a
+-- consumer can split or filter the two phases of one continuous attempt; the buffer
+-- now resets at the START of "approach" (not at the "approach"->"mine" handoff), so one
+-- reset covers one whole continuous walk-then-mine attempt at a single candidate tile.
+-- Purely additive/observational -- no change to any actual mine-state decision logic.
+-- This round did NOT use the extended data to chase the mystery further (by design --
+-- see game_progress.md's 2026-07-11 entry for why); that is left to a dedicated future
+-- session with fresh capacity.
+--
 -- STATUS as of 2026-07-11 (KEPT DELIBERATELY, not temporary -- the investigation below
 -- used this instrumentation to make real progress and will likely need it again):
 -- a 20-attempt live batch found best_d<~1.0 tile reliably fails `selected` (0% stick)
@@ -615,16 +631,43 @@ function M.tick_gather_queues()
       -- adjacency, confirmed live 2026-07-03).
       storage.walking_queues[cid] = {target = surf.find_non_colliding_position("character", e.position, 1, 0.5) or e.position}
       q.state = "approach"
+      -- DIAGNOSTIC (2026-07-11 extension -- see MINE_DIAG_CAP/STATUS comment above):
+      -- the fresh per-attempt mine_diag buffer now starts HERE, at the very beginning
+      -- of the WALKING approach, instead of only once "mine" begins. The open Mode A/B
+      -- investigation's own next concrete step was to observe the walking-to-mine
+      -- transition boundary itself (previously entirely unrecorded, since the old
+      -- reset point discarded every approach-phase tick before any sample of it could
+      -- ever be taken).
+      storage.mine_diag = storage.mine_diag or {}
+      storage.mine_diag[cid] = {}
       return false
     end
 
     if q.state == "approach" then
-      if u.distance(c.entity.position, q.entity_pos) <= MINE_ADJACENT_RANGE then
+      local d_to_target = u.distance(c.entity.position, q.entity_pos)
+      -- DIAGNOSTIC (2026-07-11 extension, see comment at the "find"->"approach"
+      -- transition above): per-cycle sample of the WALKING phase, same cadence
+      -- (every TICK_INTERVAL=5 ticks) and buffer as the "mine" phase's own samples
+      -- below, tagged st="approach" so a consumer can split/filter the two phases of
+      -- one continuous attempt. Reuses q.entity_pos's tile key as `r` (same identity
+      -- format the "mine" phase's `res_key` uses) so the whole trace for one candidate
+      -- -- approach AND mine -- shares one consistent target identifier.
+      _record_mine_diag(cid, {
+        t = game.tick, st = "approach", r = _tile_key(q.entity_pos), d = d_to_target,
+        pos = {x = c.entity.position.x, y = c.entity.position.y},
+        w = c.entity.walking_state and c.entity.walking_state.walking or false,
+        dir = c.entity.walking_state and c.entity.walking_state.direction or false,
+        sel = c.entity.selected and c.entity.selected.name or false,
+        ti = inv.get_item_count(),
+        g = q.product and (inv.get_item_count(q.product) - (q.start_count or 0)) or 0})
+      if d_to_target <= MINE_ADJACENT_RANGE then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "mine"
-        storage.mine_diag = storage.mine_diag or {}
-        storage.mine_diag[cid] = {}   -- fresh buffer for this new continuous mine attempt (diagnostic)
+        -- (mine_diag buffer already started at the "find"->"approach" transition
+        -- above -- 2026-07-11 extension -- so it is deliberately NOT reset again here;
+        -- this keeps the walking-phase trace attached to the mine-phase trace that
+        -- follows, for the SAME candidate, in one continuous buffer.)
       elseif game.tick >= (q.approach_deadline or 0) then   -- cannot reach this patch -> blacklist + try next
         q.blacklist = q.blacklist or {}
         -- Blacklist every tile of `resource` within patch range (not just q.entity_pos):
@@ -765,7 +808,7 @@ function M.tick_gather_queues()
           q.state = "find"
         end
         _record_mine_diag(cid, {
-          t = game.tick, r = res_key, d = best_d,
+          t = game.tick, st = "mine", r = res_key, d = best_d,
           mb = mine_diag_mining_before,
           ma = c.entity.mining_state and c.entity.mining_state.mining or false,
           sel = c.entity.selected and c.entity.selected.name or false,
@@ -779,7 +822,7 @@ function M.tick_gather_queues()
         c.entity.mining_state = {mining = true, position = res.position}
       end
       _record_mine_diag(cid, {
-        t = game.tick, r = res_key, d = best_d,
+        t = game.tick, st = "mine", r = res_key, d = best_d,
         mb = mine_diag_mining_before,
         ma = c.entity.mining_state and c.entity.mining_state.mining or false,
         sel = c.entity.selected and c.entity.selected.name or false,

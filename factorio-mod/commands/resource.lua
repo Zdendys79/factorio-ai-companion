@@ -145,9 +145,11 @@ end)
 
 -- DIAGNOSTIC (2026-07-11, Mode A/B gather-select-fail investigation -- see queues.lua's
 -- MINE_DIAG_CAP comment for the full mechanism/scope and current findings). Returns the
--- per-cycle "mine" state trace recorded since the companion last entered a continuous
--- mine attempt. Kept deliberately (not removed) -- the investigation is still open and
--- will likely need this again; see queues.lua's comment before removing.
+-- per-cycle "approach" (walking) + "mine" state trace recorded since the companion last
+-- started walking toward a candidate resource tile (extended same day to also cover the
+-- walking phase, see queues.lua's EXTENSION comment). Kept deliberately (not removed) --
+-- the investigation is still open and will likely need this again; see queues.lua's
+-- comment before removing.
 commands.add_command("fac_mine_diag", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)$", cmd.parameter)
