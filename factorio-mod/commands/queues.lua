@@ -900,8 +900,23 @@ function M.tick_gather_queues()
             "(best_d=%.2f) -- blacklisting, trying next patch",
             q.resource, res_key, q.select_fail_ticks, best_d), "gather_queue")
           q.blacklist = q.blacklist or {}
+          -- Track exactly which keys THIS sweep adds (2026-07-11, post-commit review
+          -- finding): q.blacklist is a single shared table that ALSO accumulates
+          -- entries from the unrelated approach_deadline branch above (genuinely
+          -- unreachable patches, e.g. across water) and from any caller-seeded
+          -- `exclude` list (start_gather). The respawn trigger below used to wipe
+          -- q.blacklist wholesale on the theory that "the tiles just blacklisted were
+          -- victims of the broken entity" -- true for THIS sweep's own keys, but it
+          -- silently un-blacklisted every OTHER entry too, letting "find" immediately
+          -- re-attempt a patch already proven genuinely unreachable earlier in this
+          -- same gather() call (exactly the wasted-approach_deadline-cycle scenario
+          -- that mechanism exists to prevent). Recording just_blacklisted here lets the
+          -- respawn branch undo ONLY its own additions.
+          local just_blacklisted = {}
           for _, e in ipairs(surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 15}) do
-            q.blacklist[_tile_key(e.position)] = true
+            local key = _tile_key(e.position)
+            q.blacklist[key] = true
+            just_blacklisted[#just_blacklisted + 1] = key
           end
           q.select_fail_ticks = nil
           q.last_res_key = nil
@@ -918,11 +933,12 @@ function M.tick_gather_queues()
           q.select_fail_streak = (q.select_fail_streak or 0) + 1
           if q.select_fail_streak >= SELECT_FAIL_RESPAWN_STREAK then
             if respawn_companion_entity(cid, c) then
-              -- The tiles just blacklisted (this streak) were victims of the
-              -- broken entity, not genuinely unreachable -- give the now-healed
-              -- companion a clean field to search instead of carrying that false
-              -- blacklist forward.
-              q.blacklist = {}
+              -- Only undo THIS sweep's own additions (victims of the broken entity) --
+              -- leave any other pre-existing blacklist entries (approach_deadline
+              -- exclusions, caller-seeded excludes) untouched, see comment above.
+              for _, key in ipairs(just_blacklisted) do
+                q.blacklist[key] = nil
+              end
             end
             q.select_fail_streak = 0
           end
