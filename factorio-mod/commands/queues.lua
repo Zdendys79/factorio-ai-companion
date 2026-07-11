@@ -18,6 +18,31 @@ local MINING_RANGE = 5
 -- multi-tile distance even with `selected` correctly set -- it only actually starts once the
 -- companion is essentially touching the resource tile.
 local MINE_ADJACENT_RANGE = 2
+-- SELECT_FAIL_TICKS (2026-07-11, live-reproduced iron-ore-gather-returns-0 bootstrap
+-- stall, scripts/test_gather_select_fail.py -- see that test + queues.lua's "mine" state
+-- comment below for the full mechanism): `character.selected = <entity>` is documented
+-- (Factorio runtime API, LuaControl::selected) to SILENTLY CLEAR the selection instead of
+-- erroring when the target isn't currently selectable -- confirmed live to happen
+-- INTERMITTENTLY for an otherwise perfectly valid, in-range (well under both
+-- MINE_ADJACENT_RANGE and the character's own 2.7-tile reach_resource_distance),
+-- amount>0 resource tile, with no code-visible cause pinned down (same distance/tile
+-- shape succeeds most of the time). A short, tick-count-based (not distance-scaled)
+-- retry budget before giving up on THIS tile and trying the next candidate -- small
+-- enough to recover fast (a few real seconds even at normal game speed), bounded so it
+-- can never itself hang.
+-- KNOWN LIMITATION (live-verified 2026-07-11, scripts/test_gather_select_fail.py,
+-- select_fail_verify.log): this only self-heals the "selected didn't stick for THIS
+-- one tile" shape. A live repro (scratchpad/r8a.log) also caught a SECOND, structurally
+-- different failure where `selected` sticks correctly and mining_state.mining stays
+-- true continuously for 2500+ ticks at a fine distance, yet gathered stays 0 the whole
+-- time -- this guard does nothing there (selected == res, so the branch below never
+-- fires). Also, in roughly half of live test runs the "didn't stick" failure recurs on
+-- EVERY candidate tried in the session, not just one bad tile -- the blacklist-and-
+-- retry below then burns through the entire reachable field before giving up (fast,
+-- loud failure instead of a silent hang -- real but modest value), which suggests the
+-- true defect may be session-wide rather than per-tile. Root cause of both NOT yet
+-- pinned down; see scripts/test_gather_select_fail.py's docstring for the full status.
+local SELECT_FAIL_TICKS = 120
 
 -- Validate companion exists and is valid
 local function valid_companion(id)
@@ -591,10 +616,12 @@ function M.tick_gather_queues()
       end
       if not res then
         c.entity.mining_state = {mining = false}
+        q.select_fail_ticks = nil   -- leaving "mine" -- don't let a stale count leak into the next tile
         q.state = "find"; return false   -- depleted -> next patch
       end
       if best_d > MINE_ADJACENT_RANGE then
         c.entity.mining_state = {mining = false}
+        q.select_fail_ticks = nil
         q.state = "find"; return false
       end
       -- DIAGNOSTIC TRACE (2026-07-09, task #41 investigation -- purely additive, NOT a
@@ -635,6 +662,43 @@ function M.tick_gather_queues()
       if c.entity.selected ~= res then
         c.entity.selected = res
       end
+      -- SELECTION-DID-NOT-STICK GUARD (2026-07-11, live-reproduced via
+      -- scripts/test_gather_select_fail.py -- root cause of the "gather(iron-ore,N)
+      -- got only 0 (done, ...)" 12x-in-a-row bootstrap-stall bug, live-caught in
+      -- test_stage_b_wiring_recheck1.log): Factorio's own docs (LuaControl::selected)
+      -- say assigning an entity "will select it if it is selectable, otherwise the
+      -- selection is cleared" -- confirmed live that an entirely valid, in-range,
+      -- amount>0 resource tile can INTERMITTENTLY fail to become selected (reads back
+      -- nil) for reasons not pinned down at the script level (the SAME tile/distance
+      -- succeeds most of the time). The OLD code below set mining_state=true
+      -- UNCONDITIONALLY whenever the engine wasn't already mining, regardless of
+      -- whether `selected` actually took -- creating an inert "mining_state.mining=true
+      -- + selected=nil" zombie that silently mines NOTHING (game.speed=8: ~1.2s) until
+      -- process_queue's generic UNIVERSAL_STALE_TICKS=600 backstop finally force-stops
+      -- the WHOLE queue with zero resource-specific diagnostic, reporting
+      -- {gathered=0, done=true} indistinguishable from "nothing left to mine". Gate
+      -- mining_state=true on selection having ACTUALLY stuck, and self-heal exactly
+      -- like the approach_deadline reachability failure above: a short, tick-count
+      -- retry budget (not distance-scaled -- this isn't a walking failure), then
+      -- blacklist this tile's whole neighborhood and try the next candidate.
+      if c.entity.selected ~= res then
+        q.select_fail_ticks = (q.select_fail_ticks or 0) + TICK_INTERVAL
+        if q.select_fail_ticks > SELECT_FAIL_TICKS then
+          u.log_error(string.format(
+            "gather mine-state: %s at %s never became selectable after %d ticks " ..
+            "(best_d=%.2f) -- blacklisting, trying next patch",
+            q.resource, res_key, q.select_fail_ticks, best_d), "gather_queue")
+          q.blacklist = q.blacklist or {}
+          for _, e in ipairs(surf.find_entities_filtered{name = q.resource, position = q.entity_pos, radius = 15}) do
+            q.blacklist[_tile_key(e.position)] = true
+          end
+          q.select_fail_ticks = nil
+          q.last_res_key = nil
+          q.state = "find"
+        end
+        return false
+      end
+      q.select_fail_ticks = nil
       if not c.entity.mining_state.mining then
         c.entity.mining_state = {mining = true, position = res.position}
       end
