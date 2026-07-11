@@ -99,7 +99,10 @@ commands.add_command("fac_regenerate_map_status", nil, function(cmd)
       -- from a clean deletion. Also seed storage.pending_chunks BEFORE requesting, so the
       -- on_chunk_generated handler above can track completion precisely per chunk instead
       -- of relying purely on a single later is_chunk_generated poll.
+      -- Each entry stores {cx,cy} (not just `true`) so the completion check below can
+      -- retry generation for any SPECIFIC chunk still outstanding, not only the spawn one.
       storage.pending_chunks = {}
+      pending.total_chunks = (2 * R + 1) * (2 * R + 1)
       for cx = -R, R do
         for cy = -R, R do
           local ok, err = pcall(function() surf.delete_chunk({ccx + cx, ccy + cy}) end)
@@ -107,7 +110,7 @@ commands.add_command("fac_regenerate_map_status", nil, function(cmd)
             u.log_error("regenerate_map: delete_chunk(" .. (ccx + cx) .. "," .. (ccy + cy)
               .. ") failed: " .. tostring(err), "regenerate_map")
           end
-          storage.pending_chunks[chunk_key(ccx + cx, ccy + cy)] = true
+          storage.pending_chunks[chunk_key(ccx + cx, ccy + cy)] = {cx = ccx + cx, cy = ccy + cy}
         end
       end
       -- Per-chunk requests (radius=0 each), not one bulk request_to_generate_chunks(
@@ -125,15 +128,22 @@ commands.add_command("fac_regenerate_map_status", nil, function(cmd)
       return
     end
 
-    -- Completion check (2026-07-08, 6th attempt): prefer the event-confirmed
-    -- storage.pending_chunks being empty over a single is_chunk_generated poll --
-    -- but cross-check both and LOG if they disagree (e.g. is_chunk_generated says
-    -- true while on_chunk_generated never fired for that chunk, or vice versa),
-    -- since that disagreement itself would be the clearest evidence yet of what
-    -- actually goes wrong here. A stall of 10+ seconds past force_generate_chunk_
-    -- requests() (a documented BLOCKING call per the runtime API docs) with chunks
-    -- STILL pending is itself worth logging -- that call should never leave work
-    -- outstanding this long if it ran to completion.
+    -- Completion check (2026-07-11: fixed a real bug caught live the same day -- the
+    -- previous version only checked the SINGLE spawn chunk was done, then treated the
+    -- WHOLE 81-chunk (R=4) request as finished and unconditionally created the crash
+    -- site, even though storage.pending_chunks (populated for all 81 chunks above,
+    -- cleared per-chunk by the real on_chunk_generated event) could still have OTHER
+    -- chunks outstanding. Live-caught: chunk (-2,0) -- inside the R=4 grid, NOT the
+    -- spawn chunk -- stayed genuinely ungenerated (is_chunk_generated=false) for
+    -- 30000+ ticks after the mod had already declared done=true and spawned the crash
+    -- site, and the companion ended up standing exactly there: zero resources of any
+    -- kind within 400 tiles, a silent "mine coal: no progress for 12 actions -> abort"
+    -- a few actions later with no error anywhere pointing at the real cause. Fix:
+    -- require EVERY requested chunk confirmed generated, not just the spawn one.
+    --
+    -- Keep the original 2026-07-08 spawn-chunk event-vs-poll disagreement check too
+    -- (still valuable in isolation: it pinpoints the exact chunk the crash site will
+    -- use) alongside the new all-chunks check below.
     local cx, cy = math.floor(pending.x / 32), math.floor(pending.y / 32)
     local spawn_key = chunk_key(cx, cy)
     local event_done = storage.pending_chunks == nil or not storage.pending_chunks[spawn_key]
@@ -145,26 +155,46 @@ commands.add_command("fac_regenerate_map_status", nil, function(cmd)
         tostring(poll_done), tostring(event_done), cx, cy, game.tick, pending.request_tick or -1),
         "regenerate_map")
     end
-    if not (event_done and poll_done) then
+
+    -- Self-heal against a missed on_chunk_generated event, generalized to EVERY
+    -- requested chunk (not just spawn): if the engine already reports a chunk
+    -- generated, trust that and clear it rather than retrying it forever.
+    local remaining = {}
+    for key, chunk in pairs(storage.pending_chunks or {}) do
+      if type(chunk) ~= "table" then
+        -- Defensive: an older/pre-fix persisted save could still have a bare `true`
+        -- here instead of {cx,cy} (this table lives in `storage`, which survives
+        -- save/reload). Can't retry a chunk with no known coordinates, so just drop
+        -- it rather than crash on chunk.cx below.
+        storage.pending_chunks[key] = nil
+      elseif surf.is_chunk_generated({chunk.cx, chunk.cy}) then
+        storage.pending_chunks[key] = nil
+      else
+        remaining[#remaining + 1] = chunk
+      end
+    end
+
+    if #remaining > 0 then
       if pending.request_tick and (game.tick - pending.request_tick) > 600 then
         u.log_error(string.format(
-          "regenerate_map: spawn chunk (%d,%d) still not generated %d ticks after "
+          "regenerate_map: %d/%s chunks still not generated %d ticks after "
           .. "force_generate_chunk_requests() -- that call is documented as blocking, "
           .. "so this stall itself is the anomaly worth investigating next",
-          cx, cy, game.tick - pending.request_tick), "regenerate_map")
+          #remaining, tostring(pending.total_chunks), game.tick - pending.request_tick), "regenerate_map")
       end
-      -- RETRY (2026-07-08, 6th attempt, root-caused via live isolation testing):
-      -- confirmed live that is_chunk_generated() reads TRUE immediately within the
-      -- SAME command as force_generate_chunk_requests(), but reverts to FALSE in the
-      -- very next command (just 2 ticks later) and stays false even after 2000+
-      -- ticks of passive waiting -- the "generated" signal does not persist on its
-      -- own. Re-asserting request_to_generate_chunks + force_generate_chunk_requests
-      -- on EVERY poll (not just the first) for chunks still outstanding, instead of
-      -- passively waiting, re-triggers the same transient-success mechanism
-      -- repeatedly -- if it eventually sticks, this converges; if it never can
-      -- stick (a genuine engine limitation), this at minimum keeps retrying instead
-      -- of silently doing nothing for thousands of ticks.
-      surf.request_to_generate_chunks({cx * 32, cy * 32}, 0)
+      -- RETRY (2026-07-08, 6th attempt, root-caused via live isolation testing; now
+      -- applied to EVERY chunk still outstanding, not just spawn): confirmed live that
+      -- is_chunk_generated() reads TRUE immediately within the SAME command as
+      -- force_generate_chunk_requests(), but reverts to FALSE in the very next command
+      -- (just 2 ticks later) and stays false even after 2000+ ticks of passive waiting
+      -- -- the "generated" signal does not persist on its own. Re-asserting the
+      -- request on every poll for every chunk still outstanding, instead of passively
+      -- waiting, re-triggers the same transient-success mechanism repeatedly -- if it
+      -- eventually sticks, this converges; if it never can stick (a genuine engine
+      -- limitation), this at minimum keeps retrying instead of silently doing nothing.
+      for _, chunk in ipairs(remaining) do
+        surf.request_to_generate_chunks({chunk.cx * 32, chunk.cy * 32}, 0)
+      end
       surf.force_generate_chunk_requests()
       -- 2026-07-08 diagnostic (task #22): return the diagnostic fields DIRECTLY in
       -- this response instead of requiring a separate /c query -- discovered live that
@@ -174,11 +204,10 @@ commands.add_command("fac_regenerate_map_status", nil, function(cmd)
       -- query tonight (pending_chunks count, storage.errors, is_chunk_generated) was
       -- silently reading the WRONG storage table the entire time, making them
       -- worthless for diagnosing this mod's real internal state.
-      local pending_n = 0
-      for _ in pairs(storage.pending_chunks or {}) do pending_n = pending_n + 1 end
       local errs = storage.errors or {}
       local last_err = #errs > 0 and errs[#errs].error or nil
-      u.json_response({done = false, generating = true, pending_chunks = pending_n,
+      u.json_response({done = false, generating = true, pending_chunks = #remaining,
+                        total_chunks = pending.total_chunks,
                         event_done = event_done, poll_done = poll_done,
                         ticks_since_request = pending.request_tick and (game.tick - pending.request_tick) or -1,
                         error_count = #errs, last_error = last_err})
