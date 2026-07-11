@@ -722,6 +722,13 @@ function M.tick_gather_queues()
       -- catching it).
       local mine_diag_mining_before = c.entity.mining_state and c.entity.mining_state.mining or false
       local mine_diag_total_inv = inv.get_item_count()   -- same call process_queue's own staleness backstop uses
+      -- 2026-07-11 Mode A/B research pass: `ti` above sums ALL item types, so it can't answer
+      -- "is there room for THIS product" -- can_insert() is the direct engine answer, needed to
+      -- confirm/rule out the 2.0.67 "full inventory silently discards mined output" engine change
+      -- as a Mode B cause. `mining_progress` is the authoritative countdown value itself -- strictly
+      -- better than inferring real accrual from mining_state.mining==true, which only proves the
+      -- engine is ATTEMPTING to mine, not that progress is actually advancing.
+      local mine_diag_can_insert = inv.can_insert({name = q.product, count = 1})
       local mine_diag_pos = {x = c.entity.position.x, y = c.entity.position.y}
       -- Pick the NEAREST resource entity to the companion's ACTUAL position, not just any
       -- entity within radius=1 of the originally-recorded q.entity_pos: a resource patch is
@@ -829,7 +836,8 @@ function M.tick_gather_queues()
           sel = c.entity.selected and c.entity.selected.name or false,
           selm = (c.entity.selected == res), w = c.entity.walking_state and c.entity.walking_state.walking or false,
           g = inv.get_item_count(q.product) - (q.start_count or 0), sft = q.select_fail_ticks or 0,
-          ti = mine_diag_total_inv, pos = mine_diag_pos})
+          ti = mine_diag_total_inv, ci = mine_diag_can_insert, mp = c.entity.mining_progress,
+          pos = mine_diag_pos})
         return false
       end
       q.select_fail_ticks = nil
@@ -843,7 +851,8 @@ function M.tick_gather_queues()
         sel = c.entity.selected and c.entity.selected.name or false,
         selm = (c.entity.selected == res), w = c.entity.walking_state and c.entity.walking_state.walking or false,
         g = inv.get_item_count(q.product) - (q.start_count or 0), sft = 0,
-        ti = mine_diag_total_inv, pos = mine_diag_pos})
+        ti = mine_diag_total_inv, ci = mine_diag_can_insert, mp = c.entity.mining_progress,
+        pos = mine_diag_pos})
       return false
     end
     return true
