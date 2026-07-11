@@ -1,5 +1,6 @@
 -- AI Companion v0.7.0 - Companion commands
 local u = require("commands.init")
+local queues = require("commands.queues")
 
 commands.add_command("fac_companion_list", nil, function(cmd)
   u.safe_command(function()
@@ -105,6 +106,24 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
     storage.walking_queues[id] = nil
     game.print("[#" .. id .. " gone]", u.print_color(u.COLORS.system))
     u.json_response({id = id, disappeared = true, dropped = dropped})
+  end)
+end)
+
+-- Manual escape hatch (2026-07-11, Phase 3 of the mode-a-select-fail investigation --
+-- see queues.lua's SELECT_FAIL_RESPAWN_STREAK/respawn_companion_entity comment for the
+-- full Phase 2 evidence chain this is built on). Destroys the companion's current
+-- character entity and respawns a fresh one under the SAME id, preserving position,
+-- inventory, name and color -- the exact recovery Phase 2 live-verified works when a
+-- companion's entity gets stuck in the "selected never sticks" state. Also usable as a
+-- generic "this companion looks wedged, give it a fresh entity" operator command,
+-- independent of the automatic gather()-side trigger.
+commands.add_command("fac_respawn_entity", nil, function(cmd)
+  u.safe_command(function()
+    local id = u.find_companion(cmd.parameter)
+    if not id then u.not_found(); return end
+    local result = queues.debug_respawn_entity(id)
+    if result.error then u.json_response({id = id, error = result.error})
+    else u.json_response({id = id, respawned = result.respawned}) end
   end)
 end)
 

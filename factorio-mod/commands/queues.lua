@@ -550,6 +550,84 @@ local function find_reachable_resource(surf, from, resource, blacklist)
   return nil
 end
 
+-- SELECT-FAIL ENTITY RESPAWN (2026-07-11, Phase 3 of the mode-a-select-fail
+-- investigation -- see memory/mode_a_select_fail_investigation_2026_07_11.md,
+-- "Phase 2" section, for the full live-tested chain of evidence this is built on).
+-- Phase 2 disambiguated (destroy-old-entity + respawn-same-id) that the "selected
+-- never sticks" failure is NOT caused by any mod tick handler, queue type, or
+-- companion id/registration state -- identical code/id/storage record worked
+-- perfectly the instant the underlying entity was replaced. There is therefore no
+-- "handler clobbering .selected" for THIS fix to stop -- the targeted recovery is
+-- to destroy the entity currently exhibiting the failure and respawn a fresh one
+-- under the same companion id, preserving position/inventory/name/color.
+--
+-- STREAK THRESHOLD REVISED SAME DAY, based on live regression evidence this fix's
+-- OWN first test run produced (see scripts run 2026-07-11 late night, Phase 3):
+-- an initial version required SELECT_FAIL_RESPAWN_STREAK=3 DIFFERENT candidate
+-- tiles to fail in a row before respawning, on the (Phase 2-derived) theory that
+-- one broken entity fails many different tiles identically. Live testing
+-- immediately falsified the THRESHOLD choice (not the mechanism): a real
+-- gather("stone",5) lockout reproduced (25/25 "mine" samples selm=false, entire
+-- reachable stone field blacklisted, gathered=0) on a companion whose entity was
+-- only ~1 real minute old (freshly spawned that same test run, and it had JUST
+-- gathered coal perfectly moments before) -- directly contradicting Phase 2's
+-- "long-lived entity" framing as the ONLY trigger. Worse, the streak=3 threshold
+-- never even fired here: this map's reachable stone was apparently confined to
+-- one patch neighborhood, so find_reachable_resource exhausted to "done" (no
+-- candidates left) after just ONE blacklist episode -- never reaching a 2nd or
+-- 3rd distinct failing tile to accumulate the streak. Across all 6 regression
+-- trials run that night (2 each of coal/stone/iron-ore), the failure signature was
+-- STRICTLY bimodal -- either 0 select-fail samples the whole attempt, or 100% of
+-- samples failing until the SELECT_FAIL_TICKS budget ran out -- never a partial/
+-- occasional miss. That bimodal shape means a single full lockout episode is
+-- already a reliable signal (not noise), so waiting for repeats before recovering
+-- only lets small reachable fields get wiped out first. Lowered to 1: respawn
+-- immediately after the FIRST time SELECT_FAIL_TICKS's own retry budget is
+-- exhausted for any one candidate. This is still an honest MITIGATION for the
+-- observed symptom, not a fix for the underlying engine mystery (WHY selection
+-- becomes unassignable, and why it is not strictly tied to entity age as Phase 2
+-- believed, is still not understood -- see this file's own live-test log for the
+-- falsifying data point).
+local SELECT_FAIL_RESPAWN_STREAK = 1
+
+local function respawn_companion_entity(cid, c)
+  local old = c.entity
+  local pos, surf, force = old.position, old.surface, old.force
+  -- Snapshot inventory BEFORE destroying -- old.get_inventory() is unusable the
+  -- instant old.destroy() runs.
+  local contents = {}
+  local inv = old.get_inventory(defines.inventory.character_main)
+  if inv then contents = inv.get_contents() end
+  if c.label and c.label.valid then c.label.destroy() end
+  old.destroy()
+  local new_pos = surf.find_non_colliding_position("character", pos, 5, 0.5) or pos
+  local e = surf.create_entity{name = "character", position = new_pos, force = force}
+  if not e then
+    u.log_error(string.format(
+      "respawn_companion_entity: failed to create a replacement character for companion " ..
+      "%d at (%.1f,%.1f) -- companion is now WITHOUT AN ENTITY, will read as dead",
+      cid, new_pos.x, new_pos.y), "gather_queue")
+    return false
+  end
+  e.color = c.color
+  local new_inv = e.get_inventory(defines.inventory.character_main)
+  if new_inv then
+    for _, item in pairs(contents) do
+      new_inv.insert{name = item.name, count = item.count, quality = item.quality}
+    end
+  end
+  c.entity = e
+  c.label = u.render_label(e, c.name, c.color)
+  u.log_error(string.format(
+    "respawn_companion_entity: companion %d's character entity replaced at (%.1f,%.1f) " ..
+    "after %d consecutive select-fail blacklist events with no successful mine in between " ..
+    "(Phase 2 mode-a-select-fail mitigation)", cid, new_pos.x, new_pos.y,
+    SELECT_FAIL_RESPAWN_STREAK), "gather_queue")
+  game.print("[" .. (c.name or ("#" .. cid)) .. " respawned -- entity was stuck (selection " ..
+    "bug), continuing]", u.print_color(u.COLORS.system))
+  return true
+end
+
 function M.start_gather(cid, resource, count, exclude)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
@@ -828,6 +906,26 @@ function M.tick_gather_queues()
           q.select_fail_ticks = nil
           q.last_res_key = nil
           q.state = "find"
+          -- ENTITY RESPAWN TRIGGER (2026-07-11, see respawn_companion_entity's own
+          -- comment above for the full evidence chain, including the same-day
+          -- streak=3 -> streak=1 revision): count consecutive blacklist events with
+          -- NO successful select in between -- reset to 0 the instant a select
+          -- actually sticks below. Live regression testing found this failure is
+          -- strictly bimodal (a candidate either selects every time or fails every
+          -- time for the whole SELECT_FAIL_TICKS budget, never partially), so even
+          -- ONE full lockout episode (SELECT_FAIL_RESPAWN_STREAK=1) is already a
+          -- reliable signal, not noise worth waiting out.
+          q.select_fail_streak = (q.select_fail_streak or 0) + 1
+          if q.select_fail_streak >= SELECT_FAIL_RESPAWN_STREAK then
+            if respawn_companion_entity(cid, c) then
+              -- The tiles just blacklisted (this streak) were victims of the
+              -- broken entity, not genuinely unreachable -- give the now-healed
+              -- companion a clean field to search instead of carrying that false
+              -- blacklist forward.
+              q.blacklist = {}
+            end
+            q.select_fail_streak = 0
+          end
         end
         _record_mine_diag(cid, {
           t = game.tick, st = "mine", r = res_key, d = best_d,
@@ -841,6 +939,7 @@ function M.tick_gather_queues()
         return false
       end
       q.select_fail_ticks = nil
+      q.select_fail_streak = 0
       if not c.entity.mining_state.mining then
         c.entity.mining_state = {mining = true, position = res.position}
       end
@@ -857,6 +956,21 @@ function M.tick_gather_queues()
     end
     return true
   end)
+end
+
+-- Manual/test-triggerable entry point for the SAME respawn mechanism the automatic
+-- SELECT_FAIL_RESPAWN_STREAK trigger above uses (2026-07-11). Exposed as its own command
+-- (commands/companion.lua's /fac_respawn_entity) both as a genuine manual escape hatch --
+-- Phase 2 of the mode-a-select-fail investigation recommended exactly this ("destroying and
+-- respawning the affected companion onto a fresh entity... is a verified, working recovery")
+-- as an operator action for a companion that looks permanently stuck for any reason -- and so
+-- this exact code path (entity destroy+recreate+inventory transfer) can be exercised directly
+-- in a live test without waiting for the rare, real select-fail trigger to occur naturally.
+function M.debug_respawn_entity(cid)
+  local c = valid_companion(cid)
+  if not c then return {error = "Invalid companion"} end
+  local ok = respawn_companion_entity(cid, c)
+  return {respawned = ok}
 end
 
 function M.get_gather_status(cid, peek)
