@@ -992,9 +992,12 @@ function M.get_diag(cid)
   -- Merge in gather's own richer engine-level diagnostics (state/selected/
   -- mining_state_mining/entity_pos, added 2026-07-09 for the #41 stall investigation)
   -- so a stuck-on-gather companion doesn't need a SEPARATE /fac_gather_status round
-  -- trip on top of this call (task #46).
+  -- trip on top of this call (task #46). peek=true (2026-07-11): this function is
+  -- explicitly documented as read-only/no-side-effects -- must NOT consume+clear a
+  -- gather queue's terminal "done" state (see get_gather_status's own "peek" comment
+  -- for why that would silently discard the final gathered count).
   if out.busy_gather then
-    out.gather = queues.get_gather_status(cid)
+    out.gather = queues.get_gather_status(cid, true)
   end
   -- Last few entries of the errors ring buffer (task #46): surfaces recent silent
   -- pcall failures (u.error_response/u.log_error, storage.errors, capped 50 total)
