@@ -197,8 +197,16 @@ end
 local function guard_tick(name, fn, tick)
   local ok, err = pcall(fn)
   if not ok then
-    storage.errors = storage.errors or {}
-    storage.errors[name] = {tick = tick, error = tostring(err)}
+    -- 2026-07-11: was storage.errors[name] = {...} -- a STRING key into the SAME table
+    -- init.lua's u.log_error appends to via table.insert (numeric/array keys). Mixing
+    -- string and numeric keys in one Lua table makes helpers.table_to_json emit a JSON
+    -- OBJECT instead of an array, so /fac_get_errors could come back as a dict (keys like
+    -- "1", "harvest") instead of the list every caller expects, crashing any code that
+    -- calls .get() on an entry expecting {context,error,tick}. Also silently overwrote
+    -- the previous error for the same handler name instead of accumulating history.
+    -- Route through the shared u.log_error so this uses the SAME array-style ring buffer
+    -- (with its own 50-entry cap) as every other error site in the mod.
+    u.log_error(tostring(err), name)
     if tick % 300 == 0 then
       game.print("[AI Companion] " .. name .. " tick error: " .. tostring(err),
         u.print_color(u.COLORS.error))

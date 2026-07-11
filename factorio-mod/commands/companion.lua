@@ -90,9 +90,23 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
     local dropped = {}
     local inv = c.entity.get_inventory(defines.inventory.character_main)
     if inv then
-      for name, count in pairs(inv.get_contents()) do
-        surf.spill_item_stack(pos, {name = name, count = count}, true, nil, false)
-        dropped[#dropped + 1] = {name = name, count = count}
+      -- 2026-07-11: two bugs fixed together, found live while investigating a separate
+      -- issue (see factorio-ai's memory/mode_a_select_fail_investigation_2026_07_11.md,
+      -- Phase 2). Both were masked by the first one throwing before the second could ever
+      -- surface as its own distinct symptom:
+      -- (1) inv.get_contents() returns an ARRAY of {name=,count=,quality=} in current
+      --     Factorio, not a name->count dict -- the old `for name, count in pairs(...)`
+      --     bound `name` to the array INDEX and `count` to the whole item table.
+      -- (2) spill_item_stack's signature is a single table of named fields in current
+      --     Factorio (confirmed against lua-api.factorio.com), not 5 positional args --
+      --     the old call threw "Expected 1 argument but 5 were given" live, aborting this
+      --     command before it ever reached c.entity.destroy() or cleared
+      --     storage.companions[id], so a companion with ANY inventory could never be
+      --     cleanly disappeared via this command at all.
+      for _, item in pairs(inv.get_contents()) do
+        surf.spill_item_stack{position = pos, stack = {name = item.name, count = item.count,
+                               quality = item.quality}, enable_looted = true, allow_belts = false}
+        dropped[#dropped + 1] = {name = item.name, count = item.count}
       end
     end
     if c.label and c.label.valid then c.label.destroy() end
