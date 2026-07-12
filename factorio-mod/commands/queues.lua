@@ -192,6 +192,60 @@ local function process_queue(queue_name, processor)
           queue_name, cid, q._stale_ticks, pos.x, pos.y, tostring(q.state),
           fmt_maybe_pos(q.entity_pos), fmt_maybe_pos(q.target)),
           queue_name)
+        -- APPROACH-DEADLINE-VS-UNIVERSAL-STALE GAP (2026-07-12, live-caught: a gather
+        -- queue got force-stopped by THIS generic backstop while stuck ~2.1 tiles from
+        -- an ore tile only 0.71 tiles from an iron_furnace_solo the companion had JUST
+        -- built -- q.state=="approach", q.entity_pos set, blacklist still empty
+        -- afterward). Root cause: "approach" states compute their OWN specific
+        -- reachability timeout (gather_queues' approach_deadline = max(1800,
+        -- distance*25); fuel_queues' APPROACH_TIMEOUT=900) -- both floors sit ABOVE
+        -- UNIVERSAL_STALE_TICKS=600, so for any real, genuinely-motionless companion
+        -- this generic backstop ALWAYS wins the race first, meaning the specific,
+        -- blacklist-aware recovery below (the actual "approach" state handler for each
+        -- queue type) never gets a chance to run -- this generic path used to just
+        -- delete the queue with NOTHING blacklisted, so a later attempt could walk
+        -- right back into the exact same obstruction. See
+        -- approach_deadline_vs_universal_stale_gap.md for the full analysis. Deliberately
+        -- NOT touching either timeout constant (that tuning may have other reasons not
+        -- fully understood) -- only mirroring each queue type's OWN existing blacklist
+        -- sweep here, before the queue is deleted below. _tile_key() is defined further
+        -- down this file (after this function), so its expression is inlined rather than
+        -- called, to avoid a forward-reference to a not-yet-declared local.
+        if queue_name == "gather_queues" and q.state == "approach" and q.entity_pos and q.resource then
+          -- Mirrors the "approach" state's own approach_deadline handler exactly
+          -- (radius=15, same "whole patch, not just one tile" reasoning documented there).
+          q.blacklist = q.blacklist or {}
+          local added = 0
+          for _, e in ipairs(c.entity.surface.find_entities_filtered{
+            name = q.resource, position = q.entity_pos, radius = 15}) do
+            local key = math.floor(e.position.x) .. "," .. math.floor(e.position.y)
+            if not q.blacklist[key] then added = added + 1 end
+            q.blacklist[key] = true
+          end
+          -- Logged (2026-07-12, per this project's "log every silent failure" standing
+          -- principle): this recovery sweep would otherwise be entirely invisible --
+          -- the queue is deleted in this SAME tick right after, so no status poll can
+          -- ever observe q.blacklist growing here the normal way.
+          u.log_error(string.format(
+            "gather_queues generic-backstop recovery: blacklisted %d tile(s) of '%s' " ..
+            "around entity_pos (%.1f,%.1f) before force-stop -- its own approach_deadline " ..
+            "(tick %s) never got a chance to run (this generic backstop fires at " ..
+            "%d ticks, always sooner)", added, q.resource,
+            q.entity_pos.x, q.entity_pos.y, tostring(q.approach_deadline), UNIVERSAL_STALE_TICKS),
+            "gather_queue")
+        elseif queue_name == "fuel_queues" and q.state == "approach" and q.target_key then
+          -- fuel_queues' own "approach" handler blacklists only the single target_key
+          -- (not a radius sweep): unlike a resource patch, a burner machine is one
+          -- isolated entity, not part of a cluster of identical adjacent tiles -- mirror
+          -- THAT shape exactly, not gather_queues' radius=15 sweep.
+          q.blacklist = q.blacklist or {}
+          local was_new = not q.blacklist[q.target_key]
+          q.blacklist[q.target_key] = true
+          u.log_error(string.format(
+            "fuel_queues generic-backstop recovery: blacklisted target_key=%s before " ..
+            "force-stop%s -- approach_deadline never got a chance to run",
+            q.target_key, was_new and "" or " (already blacklisted)"), "fuel_queue")
+        end
         c.entity.mining_state = {mining = false}
         c.entity.walking_state = {walking = false}
         to_remove[#to_remove + 1] = cid
