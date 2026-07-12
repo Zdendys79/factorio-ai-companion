@@ -1486,21 +1486,20 @@ function M.tick_build_queues()
         -- target once retries are exhausted, including whether the companion's own
         -- body (collision_box {{-0.2,-0.2},{0.2,0.2}}, verified in base game prototype
         -- data) is the culprit, same "log every retry" lesson as place_pipe()'s own
-        -- diagnostic in demonstrator.py.
-        local near = surf.find_entities_filtered{position = q.position, radius = 1.5}
-        local names = {}
-        for _, e in ipairs(near) do
-          names[#names + 1] = e.name .. (e.unit_number == c.entity.unit_number and "(COMPANION)" or "")
-        end
-        -- Tile check (2026-07-08, live-caught same night as this fix): a first live
-        -- occurrence showed NO entity/companion overlap at all (AABB boxes computed
-        -- by hand, 0.44-tile gap) -- can_place_entity also rejects unbuildable TILES
-        -- (water, out-of-map), which find_entities_filtered can never reveal since
-        -- tiles aren't entities. Logging the tile name closes that blind spot.
-        local tile = surf.get_tile(math.floor(q.position.x), math.floor(q.position.y))
+        -- diagnostic in demonstrator.py. Tile check (2026-07-08, live-caught same
+        -- night as this fix): a first live occurrence showed NO entity/companion
+        -- overlap at all (AABB boxes computed by hand, 0.44-tile gap) --
+        -- can_place_entity also rejects unbuildable TILES (water, out-of-map), which
+        -- find_entities_filtered can never reveal since tiles aren't entities.
+        -- Logging the tile name closes that blind spot.
+        -- 2026-07-12 (task #46): both the nearby-name dump and the tile check now come
+        -- from the shared u.dump_context() helper instead of duplicating this same
+        -- find_entities_filtered+get_tile logic inline (see task_pool.lua's
+        -- run_pick_orientation_checks for the OTHER caller of this same helper).
+        local diag = u.dump_context(surf, q.position, {radius = 1.5, companion = c.entity})
         u.log_error(string.format(
           "build queue: Cannot place %s at (%.1f,%.1f) tile=%s after %d retry ticks -- nearby: %s",
-          q.entity, q.position.x, q.position.y, tile and tile.name or "?", 60, table.concat(names, ",")),
+          q.entity, q.position.x, q.position.y, diag.tile, 60, table.concat(diag.nearby, ",")),
           "build_queue")
         q.failed = "Cannot place (collision)"
         q.state = "failed"

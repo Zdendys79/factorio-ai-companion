@@ -19,7 +19,11 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     if not id then u.not_found(); return end
     local ok, steps = pcall(helpers.json_to_table, args[2])
     if not ok or not steps then
-      u.error_response("Invalid step list JSON: " .. tostring(steps))
+      -- 2026-07-12 (task #46): include the companion id this submit was FOR -- a bare
+      -- "Invalid step list JSON" gave no way to tell which companion's task_submit call
+      -- failed once several are in flight. Not a dump_context call (no position involved,
+      -- this is a JSON-parse failure) -- just the id, via error_response's existing ctx param.
+      u.error_response("Invalid step list JSON for companion #" .. id .. ": " .. tostring(steps), "task_submit")
       return
     end
     local result = task_pool.submit_task(id, steps)
