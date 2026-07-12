@@ -161,7 +161,19 @@ local function process_queue(queue_name, processor)
         q._stale_pos = {x = pos.x, y = pos.y}
         q._stale_ticks = 0
       end
-      if q._stale_ticks > UNIVERSAL_STALE_TICKS then
+      if q._stale_ticks > UNIVERSAL_STALE_TICKS and q.state == "done" then
+        -- TERMINAL re-entry guard (2026-07-12, closing the follow-up flagged in
+        -- 6d00d54): gather_queues/fuel_queues can now sit HERE, frozen in q.state=
+        -- "done", waiting for get_gather_status/get_fuel_status to consume+clear them
+        -- (see the branch below that sets this). A companion that stopped moving is --
+        -- by definition -- still motionless afterward too, so _stale_ticks keeps
+        -- climbing past the threshold on every later tick; without this guard the
+        -- whole branch below would re-run FOREVER (re-logging every TICK_INTERVAL,
+        -- redundantly re-scanning for blacklist candidates) until a status poll
+        -- finally arrives. Mirrors the exact no-op every OTHER terminal state already
+        -- relies on (e.g. tick_gather_queues' own "if q.state == 'done' then return
+        -- false end" a bit further down this file) -- once frozen, sit quietly.
+      elseif q._stale_ticks > UNIVERSAL_STALE_TICKS then
         -- Diagnostic (2026-07-09, live-caught: gather("iron-ore") force-stopped this
         -- way intermittently with NO further clue why -- this generic backstop is
         -- shared across every queue type, so it never recorded WHERE the companion
@@ -248,7 +260,23 @@ local function process_queue(queue_name, processor)
         end
         c.entity.mining_state = {mining = false}
         c.entity.walking_state = {walking = false}
-        to_remove[#to_remove + 1] = cid
+        -- TERMINAL (2026-07-12): freeze gather_queues/fuel_queues in q.state="done" for
+        -- one more poll cycle instead of deleting the entry immediately here -- mirrors
+        -- the IDENTICAL pattern tick_gather_queues/tick_fuel_queues/tick_build_queues/
+        -- tick_belt_queues already use for their OWN normal-completion/failure paths
+        -- (see each one's own "TERMINAL" comment). Closes the follow-up flagged (not
+        -- fixed) in 6d00d54: without this, get_gather_status/get_fuel_status never got
+        -- a chance to read the blacklist this SAME backstop just populated above,
+        -- since the entry was deleted in the exact same tick it was populated --
+        -- confirmed live (gather() returned blacklist:[] despite the mod's own log
+        -- showing real tiles blacklisted). Every OTHER queue type routed through this
+        -- generic backstop has no status getter that consumes a "done" state written
+        -- from HERE, so they keep the original immediate-delete behavior.
+        if queue_name == "gather_queues" or queue_name == "fuel_queues" then
+          q.state = "done"
+        else
+          to_remove[#to_remove + 1] = cid
+        end
       else
         local should_remove = processor(cid, q, c)
         if should_remove then to_remove[#to_remove + 1] = cid end
@@ -1203,11 +1231,21 @@ end
 function M.get_fuel_status(cid)
   local q = storage.fuel_queues[cid]
   if not q then return {active = false} end
+  -- blacklist tile-keys (2026-07-12, closing the follow-up flagged in 6d00d54): mirrors
+  -- get_gather_status's identical `bl` construction below. Previously this getter never
+  -- exposed q.blacklist at all -- so even now that the generic backstop defers deletion
+  -- (TERMINAL freeze, see process_queue above) instead of deleting the entry in the
+  -- same tick it blacklists, a Python-side fuel_group() caller still had no field to
+  -- read the newly-blacklisted target_key back from.
+  local bl = {}
+  if q.blacklist then
+    for k in pairs(q.blacklist) do bl[#bl + 1] = k end
+  end
   if q.state == "done" then
     storage.fuel_queues[cid] = nil
-    return {active = false, fueled = q.fueled, machines = q.machines}
+    return {active = false, fueled = q.fueled, machines = q.machines, blacklist = bl}
   end
-  return {active = true, state = q.state, fueled = q.fueled, machines = q.machines}
+  return {active = true, state = q.state, fueled = q.fueled, machines = q.machines, blacklist = bl}
 end
 
 -- ============ CRAFT ============
