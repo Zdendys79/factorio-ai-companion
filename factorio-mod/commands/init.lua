@@ -133,6 +133,32 @@ function M.log_error(msg, ctx)
   if #storage.errors > 50 then table.remove(storage.errors, 1) end
 end
 
+-- dump_context (2026-07-12, task #46): shared forensic snapshot for on-failure
+-- diagnostics -- consolidates the find_entities_filtered{position,radius} + nearby-name
+-- list + get_tile name pattern that queues.lua's collision diagnostic and
+-- task_pool.lua's pick_orientation per-candidate diagnostic each hand-rolled separately
+-- (see those call sites). Returns a plain TABLE, not a pre-formatted string -- callers
+-- still compose their own log_error/error_response message text from these fields,
+-- exactly like the two hand-rolled diagnostics did before this refactor.
+-- opts (optional): {radius = <number, default 1.5>, companion = <LuaEntity to mark
+-- specially in `nearby` via unit_number match>}.
+function M.dump_context(surf, position, opts)
+  opts = opts or {}
+  local radius = opts.radius or 1.5
+  local near = surf.find_entities_filtered{position = position, radius = radius}
+  local nearby = {}
+  for _, e in ipairs(near) do
+    local mark = (opts.companion and e.unit_number == opts.companion.unit_number) and "(COMPANION)" or ""
+    nearby[#nearby + 1] = e.name .. mark
+  end
+  local tile = surf.get_tile(math.floor(position.x), math.floor(position.y))
+  return {
+    tile = tile and tile.name or "?",
+    nearby = nearby,
+    companion_pos = opts.companion and opts.companion.position or nil,
+  }
+end
+
 function M.error_response(msg, ctx)
   M.log_error(msg, ctx)
   -- Routed through json_response (not a hand-built string) so error replies ALSO

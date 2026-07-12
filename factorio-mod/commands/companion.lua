@@ -78,7 +78,16 @@ commands.add_command("fac_companion_spawn", nil, function(cmd)
       if storage.dead_companions then storage.dead_companions[id] = nil end  -- (re)spawned -> no longer dead
       game.print("[" .. name .. " spawned]", u.print_color(color))
       u.json_response({spawned = true, id = id, name = name})
-    else u.error_response("Failed to spawn") end
+    else
+      -- Diagnostic (2026-07-12, task #46): "Failed to spawn" carried zero forensic info --
+      -- surface.create_entity can fail on an unbuildable tile/collision at `pos` even after
+      -- find_non_colliding_position, so log what's actually there via the shared dump_context
+      -- helper (same pattern as queues.lua's build-collision diagnostic).
+      local diag = u.dump_context(surface, pos)
+      u.error_response(string.format(
+        "Failed to spawn at (%.1f,%.1f) tile=%s -- nearby: %s",
+        pos.x, pos.y, diag.tile, table.concat(diag.nearby, ",")))
+    end
   end)
 end)
 

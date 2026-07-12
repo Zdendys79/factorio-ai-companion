@@ -434,13 +434,16 @@ run_pick_orientation_checks = function(c, t, step, surf)
       return true
     end
     -- Diagnostic: WHY this specific candidate failed, plus what's actually there.
-    local near = surf.find_entities_filtered{position = {x = sx, y = sy}, radius = 1.5}
-    local names = {}
-    for _, e in ipairs(near) do names[#names + 1] = e.name end
+    -- 2026-07-12 (task #46): uses the shared u.dump_context() helper instead of a
+    -- hand-rolled find_entities_filtered loop (see queues.lua's collision diagnostic
+    -- for the OTHER caller) -- picks up a tile-name check for free, which this
+    -- candidate diagnostic never had before (a strict improvement, not a behavior
+    -- change to the entity-name part).
+    local diag = u.dump_context(surf, {x = sx, y = sy}, {radius = 1.5})
     candidate_diag[#candidate_diag + 1] = string.format(
-      "off(%d,%d)@(%.1f,%.1f) primary_ok=%s secondary_resource_ok=%s secondary_ok=%s nearby=[%s]",
+      "off(%d,%d)@(%.1f,%.1f) primary_ok=%s secondary_resource_ok=%s secondary_ok=%s tile=%s nearby=[%s]",
       off[1], off[2], sx, sy, tostring(primary_ok), tostring(secondary_resource_ok),
-      tostring(secondary_ok), table.concat(names, ","))
+      tostring(secondary_ok), diag.tile, table.concat(diag.nearby, ","))
   end
   u.log_error("pick_orientation: no free orientation for " .. step.secondary ..
     " around (" .. t.ctx.px .. "," .. t.ctx.py .. ") -- " .. table.concat(candidate_diag, " | "),
