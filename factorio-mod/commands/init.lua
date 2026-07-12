@@ -65,6 +65,51 @@ end
 -- the caller already set data.queues itself. `cid` is a NEW, backward-compatible optional
 -- 2nd parameter -- every one of the ~120 existing single-arg call sites still works
 -- unchanged (Lua gives an unpassed parameter `nil`, not an arity error).
+-- Factorio's helpers.table_to_json serializes every float with FULL round-trip binary
+-- precision (2026-07-11, Zdendys live-caught: a position of -34.2 came back as
+-- "-34.2000000000000028421709430404007434844970703125") -- confirmed this happens for
+-- ANY non-power-of-2 fraction regardless of pre-rounding the Lua number first (a rounded
+-- value is still an inexact binary double, so the encoder still prints its exact decimal
+-- expansion). The underlying VALUE is correct either way (Python's json.loads parses both
+-- forms to the identical float), so this is purely a log/RCON-payload verbosity problem,
+-- not a data-correctness one -- but tile-grid positions never need more than a few decimal
+-- digits, so cleaning this up is a pure readability win. Scans the ENCODED JSON string
+-- char-by-char, tracking quoted-string boundaries (handling backslash-escapes) so a
+-- number-looking substring INSIDE a string value (e.g. an error message that embeds
+-- "best_d=45.6789012345", or a tile-key string like "-75.5,23.5") is never touched --
+-- only reformats genuine bare numeric tokens. Live-tested against exactly these cases
+-- before shipping (embedded numbers in error strings, escaped quotes, array-of-strings
+-- blacklist responses) to confirm no corruption.
+local function clean_json_numbers(raw)
+  local out = {}
+  local i = 1
+  local len = #raw
+  while i <= len do
+    local c = raw:sub(i, i)
+    if c == '"' then
+      local j = i + 1
+      while j <= len do
+        local cj = raw:sub(j, j)
+        if cj == '\\' then j = j + 2
+        elseif cj == '"' then break
+        else j = j + 1 end
+      end
+      out[#out + 1] = raw:sub(i, j)
+      i = j + 1
+    else
+      local numstr = raw:match('^%-?%d+%.%d+', i)
+      if numstr then
+        out[#out + 1] = string.format('%.4g', tonumber(numstr))
+        i = i + #numstr
+      else
+        out[#out + 1] = c
+        i = i + 1
+      end
+    end
+  end
+  return table.concat(out)
+end
+
 function M.json_response(data, cid)
   if data.tick == nil then data.tick = game.tick end
   if cid and data.queues == nil then
@@ -72,7 +117,12 @@ function M.json_response(data, cid)
     if qs then data.queues = qs end
   end
   local ok, result = pcall(helpers.table_to_json, data)
-  rcon.print(ok and result or '{"error":"JSON failed"}')
+  if not ok then
+    rcon.print('{"error":"JSON failed"}')
+    return
+  end
+  local ok2, cleaned = pcall(clean_json_numbers, result)
+  rcon.print(ok2 and cleaned or result)
 end
 
 -- Tick-safe logging: appends to the storage.errors ring buffer WITHOUT rcon.print (which is
