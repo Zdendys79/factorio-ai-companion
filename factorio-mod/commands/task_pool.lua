@@ -97,6 +97,7 @@
 
 local u = require("commands.init")
 local queues = require("commands.queues")
+local ledger = require("commands.task_pool_ledger")
 
 local M = {}
 
@@ -113,142 +114,13 @@ function M.init()
 end
 
 -- ---- needs derivation + reservation ledger ----
-
--- "remove" steps (2026-07-07, coal_pair upgrade task) SUPPLY an item the task's
--- OWN later "place" steps then consume (e.g. picking up the 2 existing coal_pair
--- drills before repositioning them) -- netted against place/fuel demand here so
--- a task that fully supplies its own materials doesn't show a needs deficit for
--- items it was never actually short on. Without this, such a task would never
--- become "ready" (task_ready() gates on needs being empty) and its own remove
--- steps -- the very thing that would supply what it "needs" -- could never run:
--- a real catch-22, not just an inefficiency.
---
--- upto (2026-07-10, root-caused via live get_diag()/task_status() polling,
--- "upgrade_iron_furnace task-pool stall" -- NOT the earlier, already-fixed
--- concurrent-submission race): defaults to the WHOLE step list (unchanged caller
--- behavior for submit_task/refresh_needs' own reservation bookkeeping), but
--- task_ready() below passes t.cursor to get only the needs of steps executed SO
--- FAR (1..cursor) -- see that function's own comment for why this distinction is
--- the actual fix.
-local function derive_needs(steps, upto)
-  local needs = {}
-  -- min()'d against #steps (defensive, 2026-07-10): task_ready() passes t.cursor,
-  -- which SHOULD never exceed #steps while a task is still "active" (M.tick()
-  -- calls complete_task() the moment cursor advances past the last step) -- but
-  -- indexing steps[i] out of range would silently return nil and crash the very
-  -- next line (s.type) rather than degrade gracefully, so this costs nothing and
-  -- removes that risk entirely regardless of whether the invariant ever holds.
-  for i = 1, math.min(upto or #steps, #steps) do
-    local s = steps[i]
-    if s.type == "place" then
-      needs[s.entity] = (needs[s.entity] or 0) + 1
-    elseif s.type == "fuel" then
-      needs[s.item] = (needs[s.item] or 0) + (s.count or 1)
-    elseif s.type == "remove" then
-      needs[s.entity] = (needs[s.entity] or 0) - 1
-    end
-  end
-  for item, count in pairs(needs) do
-    if count <= 0 then needs[item] = nil end
-  end
-  return needs
-end
-
-local function release_reservations(t)
-  for item, count in pairs(t.reserved or {}) do
-    storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - count)
-  end
-  t.reserved = {}
-  -- reservation_epoch (2026-07-09, root-caused via careful live log re-analysis, task
-  -- pool investigation): refresh_needs() below only re-checks a task's needs when
-  -- THAT COMPANION's raw inventory total changes -- it has no way to notice that a
-  -- DIFFERENT task's release_reservations() call just freed up stock in the shared
-  -- storage.reserved pool. Live-caught: task 1 (coal_pair) held a reservation on
-  -- burner-mining-drill while task 2 (iron_drill_upgrade) was submitted concurrently
-  -- with an outstanding need for the SAME item; by the time task 1 completed and
-  -- released its reservation, the companion's inventory total had ALREADY stopped
-  -- changing (a freshly-crafted drill sat idle in inventory, nothing else moved
-  -- afterward) -- so refresh_needs() never re-evaluated task 2's needs again, even
-  -- though the reservation blocking it had long since cleared, and the task sat
-  -- "active" forever with a perfectly available drill sitting unused in inventory
-  -- (confirmed live: episode's final inventory dump showed burner-mining-drill=1).
-  -- A global epoch counter, bumped on every release, lets refresh_needs() detect
-  -- "some reservation freed up, worth re-checking every pending task" independent of
-  -- whether inventory itself moved this tick.
-  storage.reservation_epoch = (storage.reservation_epoch or 0) + 1
-end
-
-local function fail_task(task_id, reason)
-  local t = storage.tasks[task_id]
-  if not t or t.status ~= "active" then return end
-  release_reservations(t)
-  t.status = "failed"
-  t.error = reason
-  u.log_error(string.format("task %d failed: %s", task_id, tostring(reason)), "task_pool")
-end
-
-local function complete_task(task_id)
-  local t = storage.tasks[task_id]
-  if not t or t.status ~= "active" then return end
-  release_reservations(t)
-  t.status = "done"
-end
-
--- Submit a new task_list under a fresh task_id (2026-07-07 design). `steps` is a
--- plain Lua array (already decoded from the caller's JSON via helpers.json_to_table).
-function M.submit_task(cid, steps)
-  local c = u.get_companion(cid)
-  if not c then return {error = "Invalid companion"} end
-  if not steps or #steps == 0 then return {error = "Empty step list"} end
-
-  local needs = derive_needs(steps)
-  local inv = c.entity.get_main_inventory()
-  local task_reserved = {}
-  local remaining_needs = {}
-  for item, count in pairs(needs) do
-    local have = inv.get_item_count(item)
-    local already_reserved = storage.reserved[item] or 0
-    -- Only what's genuinely UNCLAIMED by another active task can be reserved here
-    -- (Zdendys: "spocita si co potrebuje... nesmi pocitat jiz rezervovane pocty").
-    local available = math.max(0, have - already_reserved)
-    local take = math.min(available, count)
-    if take > 0 then
-      storage.reserved[item] = already_reserved + take
-      task_reserved[item] = take
-    end
-    if take < count then
-      remaining_needs[item] = count - take
-    end
-  end
-
-  local task_id = storage.next_task_id
-  storage.next_task_id = task_id + 1
-  storage.tasks[task_id] = {
-    cid = cid,
-    steps = steps,
-    cursor = 1,
-    ctx = {},
-    reserved = task_reserved,
-    needs = remaining_needs,
-    status = "active",
-    created_tick = game.tick,
-  }
-  return {task_id = task_id, needs = remaining_needs}
-end
-
-function M.get_task_status(task_id)
-  local t = storage.tasks[task_id]
-  if not t then return {active = false} end
-  return {
-    active = t.status == "active",
-    status = t.status,
-    error = t.error,
-    cursor = t.cursor,
-    total_steps = #t.steps,
-    needs = t.needs,
-    ctx = t.ctx,  -- px/py/sx/sy/dir: useful for diagnosing placement failures externally
-  }
-end
+-- Moved to task_pool_ledger.lua (2026-07-12 size-refactor split): derive_needs,
+-- fail_task, complete_task, M.submit_task, M.get_task_status now live there --
+-- see that file for the full historical-rationale comments attached to each.
+-- Thin re-exports below so external callers (require("commands.task_pool").
+-- submit_task/.get_task_status) keep working unchanged.
+M.submit_task = ledger.submit_task
+M.get_task_status = ledger.get_task_status
 
 -- ---- step readiness + target position (for distance-priority scheduling) ----
 
@@ -317,7 +189,7 @@ end
 -- task from being submitted while another is active) -- this one reproduces with
 -- exactly ONE task submitted, no competing submission at all.
 local function task_ready(t)
-  local needed_so_far = derive_needs(t.steps, t.cursor)
+  local needed_so_far = ledger.derive_needs(t.steps, t.cursor)
   for item, count in pairs(needed_so_far) do
     if (t.reserved[item] or 0) < count then
       return false
@@ -694,7 +566,7 @@ function M.tick()
         -- and let the caller retry/relocate" pattern instead of spinning forever.
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
-        fail_task(active.task_id, "could not reach step target (walking timed out)")
+        ledger.fail_task(active.task_id, "could not reach step target (walking timed out)")
         storage.active_step[cid] = nil
         goto continue
       else
@@ -758,7 +630,7 @@ function M.tick()
             if game.tick < active.candidate_retry_deadline then
               goto continue
             end
-            fail_task(active.task_id, "no candidate position free for " .. step.entity)
+            ledger.fail_task(active.task_id, "no candidate position free for " .. step.entity)
             storage.active_step[cid] = nil
             goto continue
           end
@@ -766,7 +638,7 @@ function M.tick()
         end
         local r = queues.start_build(cid, step.entity, pos, place_dir)
         if r.error then
-          fail_task(active.task_id, r.error)
+          ledger.fail_task(active.task_id, r.error)
           storage.active_step[cid] = nil
         else
           -- Poll build_queues to completion via the SEPARATE "building" state
@@ -845,9 +717,9 @@ function M.tick()
         if ok then
           t.cursor = t.cursor + 1
           storage.active_step[cid] = nil
-          if t.cursor > #t.steps then complete_task(active.task_id) end
+          if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
         else
-          fail_task(active.task_id, err)
+          ledger.fail_task(active.task_id, err)
           storage.active_step[cid] = nil
         end
       end
@@ -877,9 +749,9 @@ function M.tick()
         end
         t.cursor = t.cursor + 1
         storage.active_step[cid] = nil
-        if t.cursor > #t.steps then complete_task(active.task_id) end
+        if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
       else
-        fail_task(active.task_id, st.error or "build failed")
+        ledger.fail_task(active.task_id, st.error or "build failed")
         storage.active_step[cid] = nil
       end
     end
