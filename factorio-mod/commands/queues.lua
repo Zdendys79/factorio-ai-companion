@@ -44,6 +44,18 @@ local MINE_ADJACENT_RANGE = 2
 -- pinned down; see scripts/test_gather_select_fail.py's docstring for the full status.
 local SELECT_FAIL_TICKS = 120
 
+-- Forward declaration (2026-07-13, closing the "667 coal tiles blacklisted within one
+-- fresh episode" incident -- see the APPROACH-STALL-RESPAWN comment inside process_queue
+-- below for the full root-cause analysis): respawn_companion_entity is defined further
+-- down this file (after find_reachable_resource), but process_queue's generic
+-- UNIVERSAL_STALE_TICKS backstop -- defined further UP, well before either of those --
+-- also needs to call it. Declaring the local here (and assigning the real function body
+-- to it later, without its own `local`) lets process_queue's closure capture this SAME
+-- variable slot; Lua only resolves the call at RUN time, by which point the real
+-- assignment below has long since executed (module load order is linear, but all
+-- functions in this file are only ever CALLED from later dispatch, never at load time).
+local respawn_companion_entity
+
 -- DIAGNOSTIC (2026-07-11, Mode A/B gather-select-fail investigation -- see
 -- scripts/live_investigate_mode_b.py, scripts/live_investigate_selected_distance.py,
 -- scripts/live_investigate_mode_a_preposition.py, scripts/live_investigate_mode_a_
@@ -252,28 +264,69 @@ local function process_queue(queue_name, processor)
         -- sweep here, before the queue is deleted below. _tile_key() is defined further
         -- down this file (after this function), so its expression is inlined rather than
         -- called, to avoid a forward-reference to a not-yet-declared local.
+        local recovered_via_respawn = false
         if queue_name == "gather_queues" and q.state == "approach" and q.entity_pos and q.resource then
-          -- Mirrors the "approach" state's own approach_deadline handler exactly
-          -- (radius=15, same "whole patch, not just one tile" reasoning documented there).
-          q.blacklist = q.blacklist or {}
-          local added = 0
-          for _, e in ipairs(c.entity.surface.find_entities_filtered{
-            name = q.resource, position = q.entity_pos, radius = 15}) do
-            local key = math.floor(e.position.x) .. "," .. math.floor(e.position.y)
-            if not q.blacklist[key] then added = added + 1 end
-            q.blacklist[key] = true
+          -- APPROACH-STALL-RESPAWN (2026-07-13, live-caught: a FRESH episode's very first
+          -- gather("coal",5) call hit "no usable coal within 400 tiles -- blacklisted=667"
+          -- almost immediately, tick ~19510 -- ALL 667 reachable coal tiles condemned via
+          -- this exact radius=15 sweep, repeated over and over across many gather() calls
+          -- this same episode, each one folded into Python's PERSISTENT per-episode
+          -- exclude list by resource_search.fold_gather_blacklist). Root cause: this sweep
+          -- unconditionally condemns an entire ~radius-15 neighborhood (dozens to 100+
+          -- tiles of one contiguous patch) the VERY FIRST time a companion fails to make
+          -- real progress for UNIVERSAL_STALE_TICKS -- with NO distinction between "this
+          -- neighborhood really is unreachable" and "this ONE companion session currently
+          -- can't progress for an unrelated reason". The mode-A/B select-fail
+          -- investigation elsewhere in this file already documents a near-identical,
+          -- still-not-fully-understood per-entity engine defect that can make EVERY
+          -- candidate fail identically for a whole session, walking-triggered specifically
+          -- (see the STATUS comment above MINE_DIAG_CAP) -- and the "mine"-state sibling of
+          -- this exact bug (SELECT_FAIL_RESPAWN_STREAK below) was already fixed by
+          -- respawning the companion's entity BEFORE condemning anything, confirmed live to
+          -- resolve the identical symptom. Apply the SAME already-validated mitigation
+          -- here: the FIRST time this specific approach attempt stalls, respawn the
+          -- companion entity and give it ONE more shot at the SAME target (no blacklist,
+          -- no freeze) instead of immediately condemning the whole neighborhood -- q.
+          -- _approach_stall_respawned (scoped to this one queue/target, not persisted
+          -- across separate gather() calls) guarantees this fires at most once per target,
+          -- so a genuinely permanent obstruction still gets the full radius=15 blacklist +
+          -- freeze exactly as before if the SAME target stalls again after the respawn --
+          -- preserving the original fix's intent in full.
+          if not q._approach_stall_respawned and respawn_companion_entity(cid, c) then
+            q._approach_stall_respawned = true
+            recovered_via_respawn = true
+            q.approach_deadline = game.tick +
+              math.max(1800, math.floor(u.distance(c.entity.position, q.entity_pos) * 25))
+            q._stale_total, q._stale_pos, q._stale_ticks = nil, nil, 0
+            u.log_error(string.format(
+              "gather_queues generic-backstop: approach toward '%s' at (%.1f,%.1f) stalled " ..
+              "for companion %d -- respawned its entity and retrying the SAME target once " ..
+              "before blacklisting the whole neighborhood", q.resource,
+              q.entity_pos.x, q.entity_pos.y, cid), "gather_queue")
+          else
+            -- Mirrors the "approach" state's own approach_deadline handler exactly
+            -- (radius=15, same "whole patch, not just one tile" reasoning documented there).
+            q.blacklist = q.blacklist or {}
+            local added = 0
+            for _, e in ipairs(c.entity.surface.find_entities_filtered{
+              name = q.resource, position = q.entity_pos, radius = 15}) do
+              local key = math.floor(e.position.x) .. "," .. math.floor(e.position.y)
+              if not q.blacklist[key] then added = added + 1 end
+              q.blacklist[key] = true
+            end
+            -- Logged (2026-07-12, per this project's "log every silent failure" standing
+            -- principle): this recovery sweep would otherwise be entirely invisible --
+            -- the queue is deleted in this SAME tick right after, so no status poll can
+            -- ever observe q.blacklist growing here the normal way.
+            u.log_error(string.format(
+              "gather_queues generic-backstop recovery: blacklisted %d tile(s) of '%s' " ..
+              "around entity_pos (%.1f,%.1f) before force-stop -- its own approach_deadline " ..
+              "(tick %s) never got a chance to run (this generic backstop fires at " ..
+              "%d ticks, always sooner)%s", added, q.resource,
+              q.entity_pos.x, q.entity_pos.y, tostring(q.approach_deadline), UNIVERSAL_STALE_TICKS,
+              q._approach_stall_respawned and " (after an earlier respawn-retry also stalled)" or ""),
+              "gather_queue")
           end
-          -- Logged (2026-07-12, per this project's "log every silent failure" standing
-          -- principle): this recovery sweep would otherwise be entirely invisible --
-          -- the queue is deleted in this SAME tick right after, so no status poll can
-          -- ever observe q.blacklist growing here the normal way.
-          u.log_error(string.format(
-            "gather_queues generic-backstop recovery: blacklisted %d tile(s) of '%s' " ..
-            "around entity_pos (%.1f,%.1f) before force-stop -- its own approach_deadline " ..
-            "(tick %s) never got a chance to run (this generic backstop fires at " ..
-            "%d ticks, always sooner)", added, q.resource,
-            q.entity_pos.x, q.entity_pos.y, tostring(q.approach_deadline), UNIVERSAL_STALE_TICKS),
-            "gather_queue")
         elseif queue_name == "fuel_queues" and q.state == "approach" and q.target_key then
           -- fuel_queues' own "approach" handler blacklists only the single target_key
           -- (not a radius sweep): unlike a resource patch, a burner machine is one
@@ -287,24 +340,31 @@ local function process_queue(queue_name, processor)
             "force-stop%s -- approach_deadline never got a chance to run",
             q.target_key, was_new and "" or " (already blacklisted)"), "fuel_queue")
         end
-        c.entity.mining_state = {mining = false}
-        c.entity.walking_state = {walking = false}
-        -- TERMINAL (2026-07-12): freeze gather_queues/fuel_queues in q.state="done" for
-        -- one more poll cycle instead of deleting the entry immediately here -- mirrors
-        -- the IDENTICAL pattern tick_gather_queues/tick_fuel_queues/tick_build_queues/
-        -- tick_belt_queues already use for their OWN normal-completion/failure paths
-        -- (see each one's own "TERMINAL" comment). Closes the follow-up flagged (not
-        -- fixed) in 6d00d54: without this, get_gather_status/get_fuel_status never got
-        -- a chance to read the blacklist this SAME backstop just populated above,
-        -- since the entry was deleted in the exact same tick it was populated --
-        -- confirmed live (gather() returned blacklist:[] despite the mod's own log
-        -- showing real tiles blacklisted). Every OTHER queue type routed through this
-        -- generic backstop has no status getter that consumes a "done" state written
-        -- from HERE, so they keep the original immediate-delete behavior.
-        if queue_name == "gather_queues" or queue_name == "fuel_queues" then
-          q.state = "done"
-        else
-          to_remove[#to_remove + 1] = cid
+        -- APPROACH-STALL-RESPAWN (continued, see comment above): if the gather_queues
+        -- branch above chose to respawn+retry instead of condemning the neighborhood,
+        -- do NOT touch mining_state/walking_state or freeze/delete the queue this tick --
+        -- let it keep running normally with its freshly reset approach_deadline and
+        -- staleness counters, exactly as an ordinary in-progress "approach" would.
+        if not recovered_via_respawn then
+          c.entity.mining_state = {mining = false}
+          c.entity.walking_state = {walking = false}
+          -- TERMINAL (2026-07-12): freeze gather_queues/fuel_queues in q.state="done" for
+          -- one more poll cycle instead of deleting the entry immediately here -- mirrors
+          -- the IDENTICAL pattern tick_gather_queues/tick_fuel_queues/tick_build_queues/
+          -- tick_belt_queues already use for their OWN normal-completion/failure paths
+          -- (see each one's own "TERMINAL" comment). Closes the follow-up flagged (not
+          -- fixed) in 6d00d54: without this, get_gather_status/get_fuel_status never got
+          -- a chance to read the blacklist this SAME backstop just populated above,
+          -- since the entry was deleted in the exact same tick it was populated --
+          -- confirmed live (gather() returned blacklist:[] despite the mod's own log
+          -- showing real tiles blacklisted). Every OTHER queue type routed through this
+          -- generic backstop has no status getter that consumes a "done" state written
+          -- from HERE, so they keep the original immediate-delete behavior.
+          if queue_name == "gather_queues" or queue_name == "fuel_queues" then
+            q.state = "done"
+          else
+            to_remove[#to_remove + 1] = cid
+          end
         end
       else
         local should_remove = processor(cid, q, c)
@@ -701,7 +761,10 @@ end
 -- falsifying data point).
 local SELECT_FAIL_RESPAWN_STREAK = 1
 
-local function respawn_companion_entity(cid, c)
+-- Assigns into the `local respawn_companion_entity` forward-declared near the top of this
+-- file (NOT `local function` here -- that would shadow the forward declaration with a
+-- brand-new local, leaving process_queue's earlier closure permanently pointing at nil).
+function respawn_companion_entity(cid, c)
   local old = c.entity
   local pos, surf, force = old.position, old.surface, old.force
   -- Snapshot inventory BEFORE destroying -- old.get_inventory() is unusable the
@@ -873,6 +936,26 @@ function M.tick_gather_queues()
         -- this keeps the walking-phase trace attached to the mine-phase trace that
         -- follows, for the SAME candidate, in one continuous buffer.)
       elseif game.tick >= (q.approach_deadline or 0) then   -- cannot reach this patch -> blacklist + try next
+        -- APPROACH-STALL-RESPAWN (2026-07-13): mirrors the identical guard added to
+        -- process_queue's generic UNIVERSAL_STALE_TICKS backstop above (see its own much
+        -- longer comment for the full root-cause analysis -- the "667 coal tiles
+        -- blacklisted within one fresh episode" incident). In practice the generic
+        -- backstop's 600-tick threshold sits below this deadline's own >=1800-tick floor
+        -- and usually fires first, but a companion that keeps moving (resetting the
+        -- generic backstop's staleness clock) without ever actually reaching q.entity_pos
+        -- can still land here -- give it the SAME one respawn-and-retry chance before
+        -- condemning the whole neighborhood, for consistency and defense in depth.
+        if not q._approach_stall_respawned and respawn_companion_entity(cid, c) then
+          q._approach_stall_respawned = true
+          q.approach_deadline = game.tick +
+            math.max(1800, math.floor(u.distance(c.entity.position, q.entity_pos) * 25))
+          u.log_error(string.format(
+            "gather_queues approach_deadline: approach toward '%s' at (%.1f,%.1f) stalled " ..
+            "for companion %d -- respawned its entity and retrying the SAME target once " ..
+            "before blacklisting the whole neighborhood", q.resource,
+            q.entity_pos.x, q.entity_pos.y, cid), "gather_queue")
+          return false
+        end
         q.blacklist = q.blacklist or {}
         -- Blacklist every tile of `resource` within patch range (not just q.entity_pos):
         -- an entirely unreachable patch (e.g. coal across water from a far-flung shore) is
