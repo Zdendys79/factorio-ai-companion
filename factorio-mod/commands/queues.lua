@@ -154,7 +154,36 @@ local function process_queue(queue_name, processor)
       local total = c.entity.get_inventory(defines.inventory.character_main).get_item_count()
       local pos = c.entity.position
       local moved = q._stale_pos and (u.distance(q._stale_pos, pos) > 5)
-      if q._stale_total == total and q._stale_pos and not moved then
+      -- STEPPING_AWAY EXEMPTION (2026-07-13, closing the approach_deadline_vs_universal_
+      -- stale_gap bug class for build_queues specifically -- live-caught: real tick
+      -- 618490, stuck_at=(197.6,-37.4) queue_state=stepping_away, force-killed via THIS
+      -- generic backstop's own to_remove path below (not q.state='failed'), so
+      -- get_build_status then returned a bare {active=false} with NO error key --
+      -- place_smart's _on_done, trusting any error-less status as success, incorrectly
+      -- reported {'placed': True} for a build that never happened). ROOT CAUSE:
+      -- "stepping_away"'s own step_away_deadline floors at 1800 ticks (same
+      -- math.max(1800, distance*25) formula as every other bounded-approach deadline in
+      -- this file) -- comfortably ABOVE this generic backstop's UNIVERSAL_STALE_TICKS=600
+      -- -- and for a SMALL building, step_away_distance() can compute an actual step-away
+      -- displacement UNDER the 5-tile "moved" threshold above, so the round trip never
+      -- resets _stale_pos/_stale_ticks even though she IS genuinely walking -- meaning this
+      -- backstop always wins the race and fires before "stepping_away"'s own deadline ever
+      -- gets a chance to. Unlike gather_queues'/fuel_queues' "approach" state (which has no
+      -- graceful continuation once force-stopped elsewhere, hence THEIR fix instead runs a
+      -- recovery sweep before freezing to "done"), build_queues' "stepping_away" handler
+      -- already does the right thing once given the chance to keep running (arrives ->
+      -- re-approach normally; own deadline expires -> ALSO re-approaches normally, see
+      -- tick_build_queues' own "stepping_away" block) -- so the correct fix is simply to
+      -- PAUSE the staleness clock (not merely skip the force-stop check) for the duration of
+      -- this one state: q._stale_ticks is kept at 0 the whole time she is in it, and the
+      -- clock resumes counting fresh (from a live position/inventory snapshot) the very
+      -- first tick after she leaves it -- no separate reset needed at the
+      -- stepping_away->approaching transition, and this state's OWN bounded deadline
+      -- (mirrored above, capped at MAX_SELF_COLLISION_STEP_AWAY cycles) is what actually
+      -- bounds total time spent here, exactly as intended.
+      if queue_name == "build_queues" and q.state == "stepping_away" then
+        q._stale_total, q._stale_pos, q._stale_ticks = total, {x = pos.x, y = pos.y}, 0
+      elseif q._stale_total == total and q._stale_pos and not moved then
         q._stale_ticks = (q._stale_ticks or 0) + TICK_INTERVAL
       else
         q._stale_total = total
@@ -1364,6 +1393,38 @@ local function clear_build_area(surf, entity_name, position, inv)
   end
 end
 
+-- Self-collision step-away distance (2026-07-13, universal own-body-blocks-own-build
+-- fix): how far to physically walk the companion away from a build target whose
+-- collision check keeps failing because HER OWN body overlaps the footprint. Derived
+-- from the ENTITY'S OWN collision_box (same prototypes.entity lookup already used by
+-- clear_build_area above) rather than a fixed guess -- this is now the SHARED path for
+-- EVERY building type placed through start_build/place_smart/task-pool "place" steps,
+-- and a fixed offset proven fine for a small building (burner-mining-drill,
+-- stone-furnace) can be too SHORT for a much larger one. Confirmed live for
+-- steam-engine (collision_box {{-1.25,-2.35},{1.25,2.35}}): demonstrator_power.py's own
+-- place_dir had to widen its step-away from (x+3,y+3) to (x+5,y+5) after the smaller
+-- offset still left her inside the ~3.34-tile padded danger radius (see that file's own
+-- place_dir docstring for the exact math) -- computing the real per-entity corner
+-- distance here avoids guessing at all. Matches building.lua's own self-collision
+-- padding (+-0.5 tile each side, per that same analysis) plus a flat +2 tile safety
+-- margin beyond the padded corner.
+local function step_away_distance(entity_name)
+  local proto = prototypes.entity[entity_name]
+  if not proto or not proto.collision_box then return 3 end
+  local bb = proto.collision_box
+  local hx = math.max(math.abs(bb.left_top.x), math.abs(bb.right_bottom.x)) + 0.5
+  local hy = math.max(math.abs(bb.left_top.y), math.abs(bb.right_bottom.y)) + 0.5
+  return math.sqrt(hx * hx + hy * hy) + 2
+end
+
+-- Bounded retry count (2026-07-13): a genuinely-blocked tile (occupied by something
+-- OTHER than the companion herself) must still fail normally rather than looping
+-- forever stepping away pointlessly -- this caps how many step-away-and-retry cycles
+-- the BUILDING state below will attempt before falling through to the existing failure
+-- path, same order of magnitude as this file's other bounded retries (place_verified's
+-- tries=3, direction_achieved's tries=5).
+local MAX_SELF_COLLISION_STEP_AWAY = 2
+
 -- Start a smart build: auto-approach + auto-clear + place
 -- State machine: approaching -> clearing -> building -> done
 function M.start_build(cid, entity_name, position, direction)
@@ -1413,6 +1474,29 @@ function M.tick_build_queues()
     -- until it is actually read.
     if q.state == "done" or q.state == "failed" then return false end
 
+    -- STEPPING_AWAY (2026-07-13, self-collision fix): walk a short distance away from
+    -- the build target so the companion's own body clears the footprint, then hand off
+    -- to the existing "approaching" state to walk back within reach for a fresh
+    -- collision-check retry window. Bounded deadline (mirrors every other movement-
+    -- waiting state in this file, CLAUDE.md checklist item 3) so a companion that
+    -- somehow can't even reach the nearby step-away point doesn't hang here forever --
+    -- either way (arrived or timed out) falls through to "approaching" and from there a
+    -- normal build attempt, since ANY distance away from where she was already helps.
+    if q.state == "stepping_away" then
+      local arrived = u.distance(c.entity.position, q.step_away_target) <= 1
+      if arrived or game.tick >= q.step_away_deadline then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        local approach = find_approach_pos(surf, c.entity.position, q.position)
+        storage.walking_queues[cid] = {target = approach}
+        q.approach = approach
+        q.state = "approaching"
+        q.approach_deadline = game.tick + math.max(1800, math.floor(
+          u.distance(c.entity.position, approach) * 25))
+      end
+      return false
+    end
+
     -- APPROACHING: wait until character is within build reach of target
     if q.state == "approaching" then
       -- Nil-safe heal for a build_queues entry persisted by an OLDER mod version
@@ -1442,6 +1526,15 @@ function M.tick_build_queues()
       clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory())
       q.state = "building"
       q.tick_start = game.tick
+      -- Fresh collision-retry window for THIS building attempt (2026-07-13): without
+      -- this reset, a stale collision_retry_deadline left over from an EARLIER failed
+      -- attempt (e.g. the one that just triggered a self-collision step-away and
+      -- re-approach below) would already be in the past the moment we re-enter
+      -- BUILDING, making the very next can_place_entity check think its 60-tick
+      -- retry budget is already exhausted -- defeating the step-away fix entirely
+      -- (it would immediately re-evaluate self-collision/fail again with zero actual
+      -- retry ticks elapsed).
+      q.collision_retry_deadline = nil
       return false
     end
 
@@ -1471,14 +1564,52 @@ function M.tick_build_queues()
       -- found). 2026-07-08, Zdendys: "ať je ověření těsně před stavbou, bez jakéhokoli
       -- pohybu" (the check IS already right before the build with no movement -- what
       -- was missing was giving a TRANSIENT collision a chance to clear before failing
-      -- the whole task over it). Bounded retry IN PLACE (no re-approach, no step-away --
-      -- she's already within reach and isn't moved here), same 60-tick budget as the
-      -- task_pool.lua candidates fix, so a genuinely permanent collision still correctly
-      -- fails, just after a few retries instead of the very first check.
+      -- the whole task over it). Bounded retry IN PLACE first (same 60-tick budget as
+      -- the task_pool.lua candidates fix) -- if STILL blocked once that expires, a
+      -- SELF-collision (her own body overlapping the footprint) additionally gets a
+      -- bounded step-away-and-retry below (2026-07-13 fix, see step_away_distance's own
+      -- docstring) -- superseding the older "no re-approach, no step-away, she's already
+      -- within reach and isn't moved here" design, which assumed the collision was
+      -- always something else and could never be cleared by an in-place wait alone. A
+      -- genuinely permanent OTHER-cause collision still correctly fails, just after a
+      -- few retries instead of the very first check, exactly as before.
       if not surf.can_place_entity{name = q.entity, position = q.position,
                                    direction = q.direction, force = c.entity.force} then
         q.collision_retry_deadline = q.collision_retry_deadline or (game.tick + 60)
         if game.tick < q.collision_retry_deadline then
+          return false
+        end
+        -- SELF-COLLISION STEP-AWAY (2026-07-13, universal own-body-blocks-own-build
+        -- fix, Zdendys: "companion nesmi nikdy blokovat vlastni stavbu, at je to
+        -- jakakoli budova"): determine whether her own body is (one of) the actual
+        -- blocker(s) by temporarily teleporting her far away (same teleport-and-
+        -- restore technique already proven for ignore_entities_at/
+        -- clear_natural_obstacles in task_pool.lua) and re-running the SAME
+        -- can_place_entity check with her excluded:
+        --   * still blocked even without her -> some OTHER obstruction (occupied tile,
+        --     unbuildable terrain) -- fail normally below; stepping away would never
+        --     help and would just loop pointlessly on a genuinely-blocked tile.
+        --   * now placeable -> her own body WAS (one of) the blocker(s) -- physically
+        --     walk her away and back (mirrors the already-proven place_verified/
+        --     place_dir/place_pipe step-away pattern) and give the collision check a
+        --     fresh retry window, bounded to MAX_SELF_COLLISION_STEP_AWAY attempts so
+        --     a persistent OTHER obstruction that happens to also overlap her current
+        --     position still eventually fails instead of looping forever.
+        local self_pos = {x = c.entity.position.x, y = c.entity.position.y}
+        c.entity.teleport({x = self_pos.x + 10000, y = self_pos.y + 10000})
+        local clear_without_self = surf.can_place_entity{name = q.entity, position = q.position,
+                                     direction = q.direction, force = c.entity.force}
+        c.entity.teleport(self_pos)
+        q.self_collision_step_away_count = q.self_collision_step_away_count or 0
+        if clear_without_self and q.self_collision_step_away_count < MAX_SELF_COLLISION_STEP_AWAY then
+          q.self_collision_step_away_count = q.self_collision_step_away_count + 1
+          local d = step_away_distance(q.entity)
+          local step_away = {x = q.position.x + d, y = q.position.y + d}
+          storage.walking_queues[cid] = {target = step_away}
+          q.step_away_target = step_away
+          q.state = "stepping_away"
+          q.step_away_deadline = game.tick + math.max(1800, math.floor(
+            u.distance(c.entity.position, step_away) * 25))
           return false
         end
         -- Diagnostic (2026-07-08, task #35): a bare "Cannot place (collision)" carried
@@ -1498,8 +1629,10 @@ function M.tick_build_queues()
         -- run_pick_orientation_checks for the OTHER caller of this same helper).
         local diag = u.dump_context(surf, q.position, {radius = 1.5, companion = c.entity})
         u.log_error(string.format(
-          "build queue: Cannot place %s at (%.1f,%.1f) tile=%s after %d retry ticks -- nearby: %s",
-          q.entity, q.position.x, q.position.y, diag.tile, 60, table.concat(diag.nearby, ",")),
+          "build queue: Cannot place %s at (%.1f,%.1f) tile=%s after %d retry ticks " ..
+          "(self_collision_clear=%s, step_away_attempts=%d) -- nearby: %s",
+          q.entity, q.position.x, q.position.y, diag.tile, 60, tostring(clear_without_self),
+          q.self_collision_step_away_count, table.concat(diag.nearby, ",")),
           "build_queue")
         q.failed = "Cannot place (collision)"
         q.state = "failed"
@@ -1570,6 +1703,7 @@ function M.get_build_status(cid)
   end
   local progress = 0
   if q.state == "approaching" then progress = 10
+  elseif q.state == "stepping_away" then progress = 55  -- self-collision fix, 2026-07-13
   elseif q.state == "clearing" then progress = 50
   elseif q.state == "building" then
     progress = 60 + math.floor((game.tick - q.tick_start) / BUILD_TICKS * 40)
