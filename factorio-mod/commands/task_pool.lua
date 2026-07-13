@@ -316,7 +316,23 @@ local function run_pick_orientation(c, t, step)
       end
     end
   end
+  -- Self-collision fix (2026-07-13, universal own-body-blocks-own-build fix, Zdendys:
+  -- "companion nesmi nikdy blokovat vlastni stavbu, at je to jakakoli budova"): every
+  -- can_place_entity probe inside run_pick_orientation_checks (both the primary and the
+  -- secondary candidate, every offset) sees the companion's OWN character body as an
+  -- ordinary collision entity -- if she is currently standing on/near the candidate area
+  -- (the common case: she just walked to the patch/anchor before pick_orientation ever
+  -- runs), EVERY orientation can spuriously fail with "all sides blocked" even though the
+  -- area would genuinely be free the instant she steps aside. Exactly the same class of
+  -- false rejection ignore_entities_at/clear_natural_obstacles above already fix for OTHER
+  -- entities -- extend the SAME teleport-and-restore technique to her own body: teleport
+  -- her far away for the duration of the checks only, then restore her EXACT original
+  -- position afterward regardless of outcome (success or failure), so there is no
+  -- player-visible flicker and no tick where she is actually gone.
+  local self_pos = {x = c.entity.position.x, y = c.entity.position.y}
+  c.entity.teleport({x = self_pos.x + 10000, y = self_pos.y + 10000})
   local ok, err = run_pick_orientation_checks(c, t, step, surf)
+  c.entity.teleport(self_pos)
   for _, m in ipairs(moved) do
     if m.entity.valid then m.entity.teleport(m.pos) end
   end
