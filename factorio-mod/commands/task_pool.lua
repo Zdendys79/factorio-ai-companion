@@ -832,7 +832,7 @@ function M.tick()
           -- poll waits indefinitely. Distance-scaled exactly like
           -- tick_gather_queues' own q.approach_deadline (25 ticks/tile, floor 1800)
           -- for consistency with the rest of the codebase's convention.
-          local walk_deadline = game.tick + math.max(1800, math.floor(u.distance(c.entity.position, pos) * 25))
+          local walk_deadline = u.approach_deadline(c.entity.position, pos)
           storage.active_step[cid] = {task_id = task_id, state = "walking",
                                        approach_deadline = walk_deadline}
         else

@@ -295,8 +295,7 @@ local function process_queue(queue_name, processor)
           if not q._approach_stall_respawned and respawn_companion_entity(cid, c) then
             q._approach_stall_respawned = true
             recovered_via_respawn = true
-            q.approach_deadline = game.tick +
-              math.max(1800, math.floor(u.distance(c.entity.position, q.entity_pos) * 25))
+            q.approach_deadline = u.approach_deadline(c.entity.position, q.entity_pos)
             q._stale_total, q._stale_pos, q._stale_ticks = nil, nil, 0
             u.log_error(string.format(
               "gather_queues generic-backstop: approach toward '%s' at (%.1f,%.1f) stalled " ..
@@ -892,7 +891,7 @@ function M.tick_gather_queues()
       -- distance-scaled deadline: 25 ticks/tile (~3.7x the expected walk) so a legit long walk is
       -- never aborted, but a companion STUCK on an obstacle (standable != path-reachable) bails fast
       -- instead of hanging the whole 180s (the "3 min and 0 coal" bug).
-      q.approach_deadline = game.tick + math.max(1800, math.floor(u.distance(c.entity.position, e.position) * 25))
+      q.approach_deadline = u.approach_deadline(c.entity.position, e.position)
       -- radius=1 (not 3): walk essentially ONTO the resource tile, not just "in the
       -- neighborhood" -- see MINE_ADJACENT_RANGE comment above (native mining needs real
       -- adjacency, confirmed live 2026-07-03).
@@ -947,8 +946,7 @@ function M.tick_gather_queues()
         -- condemning the whole neighborhood, for consistency and defense in depth.
         if not q._approach_stall_respawned and respawn_companion_entity(cid, c) then
           q._approach_stall_respawned = true
-          q.approach_deadline = game.tick +
-            math.max(1800, math.floor(u.distance(c.entity.position, q.entity_pos) * 25))
+          q.approach_deadline = u.approach_deadline(c.entity.position, q.entity_pos)
           u.log_error(string.format(
             "gather_queues approach_deadline: approach toward '%s' at (%.1f,%.1f) stalled " ..
             "for companion %d -- respawned its entity and retrying the SAME target once " ..
@@ -1537,8 +1535,7 @@ function M.start_build(cid, entity_name, position, direction)
     -- #3, this was the ONE async queue in this file missing the deadline every
     -- other one (tick_gather_queues/tick_fuel_queues/belt_connect) already has).
     -- Same distance-scaled formula as those: 25 ticks/tile, floor 1800.
-    approach_deadline = game.tick + math.max(1800, math.floor(
-      u.distance(c.entity.position, approach) * 25)),
+    approach_deadline = u.approach_deadline(c.entity.position, approach),
   }
 
   return {started = true, entity = entity_name, position = position, state = "approaching"}
@@ -1574,8 +1571,7 @@ function M.tick_build_queues()
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
-        q.approach_deadline = game.tick + math.max(1800, math.floor(
-          u.distance(c.entity.position, approach) * 25))
+        q.approach_deadline = u.approach_deadline(c.entity.position, approach)
       end
       return false
     end
@@ -1588,8 +1584,7 @@ function M.tick_build_queues()
       -- the very next check) or leaving it to hang forever (mirrors the identical
       -- fix already applied to belt_connect's own walking-with-deadline entries).
       if not q.approach_deadline then
-        q.approach_deadline = game.tick + math.max(1800, math.floor(
-          u.distance(c.entity.position, q.position) * 25))
+        q.approach_deadline = u.approach_deadline(c.entity.position, q.position)
       end
       if u.distance(c.entity.position, q.position) <= reach then
         storage.walking_queues[cid] = nil
@@ -1691,8 +1686,7 @@ function M.tick_build_queues()
           storage.walking_queues[cid] = {target = step_away}
           q.step_away_target = step_away
           q.state = "stepping_away"
-          q.step_away_deadline = game.tick + math.max(1800, math.floor(
-            u.distance(c.entity.position, step_away) * 25))
+          q.step_away_deadline = u.approach_deadline(c.entity.position, step_away)
           return false
         end
         -- Diagnostic (2026-07-08, task #35): a bare "Cannot place (collision)" carried
@@ -1932,8 +1926,7 @@ function M.tick_belt_queues()
       -- just nil-guarding the comparison) gives that legacy entry a fresh, bounded deadline
       -- rather than either failing it instantly OR leaving it to hang forever again.
       if not q.walking or not q.approach_deadline then
-        q.approach_deadline = game.tick + math.max(1800, math.floor(
-          u.distance(c.entity.position, {x = node.x, y = node.y}) * 25))
+        q.approach_deadline = u.approach_deadline(c.entity.position, {x = node.x, y = node.y})
         if not q.walking then
           storage.walking_queues[cid] = {
             target = surf.find_non_colliding_position("character", {x = node.x, y = node.y}, 3, 0.5)

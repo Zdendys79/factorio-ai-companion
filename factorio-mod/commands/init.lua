@@ -230,6 +230,19 @@ function M.distance(a, b)
   return math.sqrt((a.x - b.x)^2 + (a.y - b.y)^2)
 end
 
+-- Distance-scaled approach/walk deadline: 25 ticks/tile (~3.7x the expected walk speed)
+-- so a legitimately long walk is never aborted, but a companion genuinely STUCK on an
+-- obstacle (standable != path-reachable) bails fast instead of hanging indefinitely.
+-- floor(1800) is the minimum grace for a short/adjacent walk. Extracted 2026-07-15
+-- (duplicate-code consolidation pass, Zdendys: "Jak v Py, tak v Modu!") -- this exact
+-- formula was hand-copied 9 times across queues.lua/task_pool.lua before this; callers
+-- just do `q.approach_deadline = u.approach_deadline(c.entity.position, target_pos)`
+-- (or assign the return value to whatever deadline field they use, e.g.
+-- step_away_deadline) instead of repeating the math.max/math.floor expression.
+function M.approach_deadline(from_pos, to_pos)
+  return game.tick + math.max(1800, math.floor(M.distance(from_pos, to_pos) * 25))
+end
+
 function M.get_direction(from, to)
   local dx, dy = to.x - from.x, to.y - from.y
   if math.abs(dx) < 0.5 and math.abs(dy) < 0.5 then return nil end
