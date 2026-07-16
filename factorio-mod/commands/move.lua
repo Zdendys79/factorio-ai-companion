@@ -30,7 +30,21 @@ commands.add_command("fac_move_to", nil, function(cmd)
       u.error_response("companion busy with an active task-pool step")
       return
     end
-    storage.walking_queues[id] = {target = {x = x, y = y}}
+    -- giveup_enabled (2026-07-16, Zdendys's fast-giveup directive): ONLY fac_move_to's
+    -- OWN walks opt into process_walking_queues' new fast-giveup check (control.lua) --
+    -- every OTHER walking_queues[cid] writer in this mod (queues.start_build's approach
+    -- walk, task_pool.lua's step-driven movement) omits this field entirely and is
+    -- completely unaffected, byte-identical to before this feature existed.
+    --
+    -- Clear any stale walk_last_outcome (2026-07-16, independent-review finding):
+    -- without this, staleness protection relied only on Python's OWN giveup timeout
+    -- (~8640 ticks) being much larger than the mod's new one (600 active ticks) --
+    -- an implicit numeric coincidence across two files, not a structural guarantee.
+    -- Explicitly clearing here means a NEW walk can never see a leftover outcome
+    -- from a PREVIOUS one for this same companion, regardless of either constant's
+    -- future value.
+    if storage.walk_last_outcome then storage.walk_last_outcome[id] = nil end
+    storage.walking_queues[id] = {target = {x = x, y = y}, giveup_enabled = true}
     u.json_response({id = id, walking_to = {x = x, y = y}})
   end)
 end)

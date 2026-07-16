@@ -31,6 +31,16 @@ local function init_storage()
   storage.errors = storage.errors or {}
   storage.companion_markers = storage.companion_markers or {}
   storage.path_requests = storage.path_requests or {}
+  -- walk_last_outcome (2026-07-16, Zdendys's fast-giveup directive): one-shot,
+  -- consume-once stash of how a fac_move_to()-driven walk ended when
+  -- process_walking_queues gives up on it early (see that function's own
+  -- giveup_enabled block) -- "approx_arrived" (close enough, <4 tiles, good enough
+  -- for most construction per Zdendys) or "unreachable" (still >=4 tiles away).
+  -- Read-and-cleared by fac_companion_position's handler (commands/companion.lua)
+  -- the same way companion_queue_status already surfaces other async state, so
+  -- companion.py's wait_arrive() sees this for FREE on its own already-happening
+  -- position poll -- no new RCON round-trip.
+  storage.walk_last_outcome = storage.walk_last_outcome or {}
   queues.init()
   task_pool.init()
 end
@@ -389,6 +399,80 @@ local function process_walking_queues()
       q.stuck_ticks = 0
       q.bypass_ticks = 0
     else
+      -- Fast giveup (2026-07-16, Zdendys's directive): ONLY for fac_move_to()-driven
+      -- walks (q.giveup_enabled, set in commands/move.lua -- every OTHER caller of
+      -- this same walking-queue mechanism, e.g. queues.start_build's own approach
+      -- walk or task_pool.lua's step-driven movement, is completely untouched by
+      -- this block, byte-identical to before). Tracks NET WORLD-SPACE displacement
+      -- over rolling ~60-ACTIVE-tick windows (ACTIVE = excludes ticks spent waiting
+      -- on a pending pathfind request, per Zdendys's own explicit "nepocitat dobu
+      -- vypoctu trasy" requirement) rather than the EXISTING per-sample q.stuck_ticks
+      -- check just below (which resets on ANY physical movement, including a
+      -- perpendicular bypass step that doesn't actually unstick her at all -- an
+      -- oscillating companion that bypasses left-right-left forever would never trip
+      -- q.stuck_ticks, since each individual bypass tick genuinely moves her).
+      -- Deliberately NET POSITION, not distance-to-target (Zdendys's own correction):
+      -- distance-to-target would misfire on a legitimate pathfinder detour that goes
+      -- AWAY from the target first ("nekdy je potreba se vratit i zpet o 180 stupnu");
+      -- net position change is immune to that -- see the check itself, below.
+      --
+      -- Threshold: 600 active ticks (Zdendys's own explicit number, 2026-07-16: "Dal
+      -- bych 600! V realne rychlosti je to 10s, to by na pocatecni mape melo
+      -- companiona priblizit k cili" -- 10 real seconds at game.speed=1, comfortably
+      -- above a single bypass cycle (50 ticks) and the now-capped 4 bypass attempts
+      -- (see q.bypass_attempts just below, also 2026-07-16) -- this must NOT
+      -- reintroduce the 2026-07-06 regression (an earlier, too-aggressive stuck
+      -- check gave up on a target that WAS reachable, confirmed live). Still a
+      -- MASSIVE improvement over companion.py's own current real-wall-clock-based
+      -- give-up (observed live: ~8640 ticks, i.e. up to 36 real seconds at typical
+      -- FACTORIO_GAME_SPEED), and measured in game ticks so it behaves identically
+      -- regardless of game.speed, unlike that Python-side mechanism. 10 windows of
+      -- 60 active ticks each = 600.
+      --
+      -- Outcome (Zdendys: "mod rekne Py, ze je cil nedosazitelny", not a raw counter
+      -- -- and if <4 tiles from target, report 'approx_arrived' instead of a hard
+      -- failure, since that's "bohate postacujici" for most construction): stashed
+      -- in storage.walk_last_outcome[cid], consumed once by fac_companion_position's
+      -- handler (commands/companion.lua) the next time companion.py polls position
+      -- -- no new RCON round-trip needed on either side.
+      if q.giveup_enabled then
+        if not q.path_pending then
+          q.active_ticks = (q.active_ticks or 0) + 5
+        end
+        if not q.checkpoint_active_ticks then
+          q.checkpoint_active_ticks = q.active_ticks or 0
+          q.checkpoint_pos = {x = e.position.x, y = e.position.y}
+        elseif (q.active_ticks or 0) - q.checkpoint_active_ticks >= 60 then
+          -- NET WORLD-SPACE displacement since the last checkpoint (2026-07-16,
+          -- Zdendys's own correction: comparing DISTANCE-TO-TARGET here instead, as
+          -- an earlier draft of this did, would misfire on a legitimate pathfinder
+          -- detour that goes AWAY from the target first -- "nekdy je potreba se
+          -- vratit i zpet (o 180 stupnu) a zkusit jiny smer ve vetsi vzdalenosti" --
+          -- that raises distance-to-target even while making completely genuine
+          -- progress along a real route. Net position change is immune to this: a
+          -- companion actually walking a detour (even backward) covers REAL ground
+          -- every window; only genuine in-place stalling/oscillating (e.g. repeated
+          -- bypass attempts that cancel out) shows near-zero net displacement.
+          local net_moved = u.distance(q.checkpoint_pos, e.position)
+          if net_moved < 0.3 then
+            q.stall_windows = (q.stall_windows or 0) + 1
+          else
+            q.stall_windows = 0
+          end
+          q.checkpoint_active_ticks = q.active_ticks
+          q.checkpoint_pos = {x = e.position.x, y = e.position.y}
+          if q.stall_windows >= 10 then
+            storage.walk_last_outcome[cid] = {
+              result = (dist < 4) and "approx_arrived" or "unreachable",
+              tick = game.tick,
+            }
+            storage.walking_queues[cid] = nil
+            e.walking_state = {walking = false}
+            goto skip
+          end
+        end
+      end
+
       -- Pathfind around big obstacles (water/cliffs): request a route once per
       -- target, then steer toward the current WAYPOINT instead of straight at the
       -- final goal. Falls back to straight-line below while no route is available.
@@ -401,6 +485,32 @@ local function process_walking_queues()
       if not q.follow_player and not q.path and not q.path_pending then
         local cooling = q.path_failed_tick and (game.tick - q.path_failed_tick) < 180
         if not cooling then request_walk_path(cid, q, e) end
+      end
+      -- Wait for the FIRST pathfind result before moving at all (2026-07-16, Zdendys:
+      -- "mel by pockat na dorazeni trasy od pathfinderu" -- a small-peninsula/dead-end
+      -- scenario: straight-line steering toward q.target while the smarter route is
+      -- STILL being computed could walk the companion onto a dead-end peninsula
+      -- jutting into water BEFORE the real detour around it is even known, since
+      -- q.path is nil the whole time a request is pending -- goal would otherwise
+      -- fall through to the plain q.target below and steer straight at it). Only
+      -- gates the FIRST-ever pathfind for this target (path_pending true AND no path
+      -- decided EITHER way yet) -- once path_pending resolves (a real route, OR a
+      -- confirmed "no path found" -- see on_script_path_request_finished), normal
+      -- waypoint-following/straight-line-fallback logic below runs exactly as
+      -- before, unchanged. Applies to EVERY walk (task-pool steps, start_build's own
+      -- approach walk, follow_player is naturally excluded since it never sets
+      -- path_pending at all), not just fac_move_to's giveup_enabled ones -- this is
+      -- a general correctness fix, not scoped to the fast-giveup feature above.
+      -- (Zdendys separately asked whether the NEXT target's path could be
+      -- precomputed while still finishing the CURRENT one, hiding this wait
+      -- entirely -- not implemented here: this project's Python side has no
+      -- forward-looking queue of upcoming movement targets today, each go_to() is
+      -- issued one at a time and Python doesn't know/decide its next destination
+      -- until the current call returns, so there is no "next target" to precompute
+      -- against yet. A real architectural change, not part of this fix.)
+      if q.path_pending and not q.path then
+        e.walking_state = {walking = false}
+        goto skip
       end
       local goal = q.target
       if q.path and q.path_idx then
@@ -475,6 +585,7 @@ local function process_walking_queues()
         q.stuck_ticks = 0
         q.bypass_ticks = 0
         q.bypass_side = nil
+        q.bypass_attempts = nil
       end
 
       local dir_to_target = u.get_direction(e.position, goal)
@@ -485,9 +596,19 @@ local function process_walking_queues()
           e.walking_state = {walking = true, direction = q.bypass_dir}
         end
         q.bypass_ticks = q.bypass_ticks - 1
-      elseif (q.stuck_ticks or 0) >= 4 then
-        -- Stuck for ~0.3s: try perpendicular bypass, alternating left/right
+      elseif (q.stuck_ticks or 0) >= 4 and (q.bypass_attempts or 0) < 4 then
+        -- Stuck for ~0.3s: try perpendicular bypass, alternating left/right. Capped
+        -- at 4 attempts total (2026-07-16, Zdendys: "staci zkusit kazdy smer jednou,
+        -- nejvyse 2x, abych zjistil, ze to nejde" -- 2 rounds of left+right) -- once
+        -- neither direction has unstuck her after 2 full rounds, repeating the SAME
+        -- two directions indefinitely is pure wasted cycles; the pathfinder's own
+        -- separate periodic retry (request_walk_path's 180-tick cooldown, below)
+        -- is a genuinely DIFFERENT recovery strategy and keeps running regardless
+        -- of this cap. Reset to 0 (not nil) the moment real movement resumes
+        -- (the `else` branch just above), giving a fresh set of attempts for the
+        -- NEXT time she gets stuck, rather than a one-shot lifetime budget.
         q.stuck_ticks = 0
+        q.bypass_attempts = (q.bypass_attempts or 0) + 1
         q.bypass_side = ((q.bypass_side or 0) + 1) % 2
         local perp_dirs = {
           [defines.direction.north] = {defines.direction.west, defines.direction.east},
