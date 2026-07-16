@@ -1437,9 +1437,26 @@ local SOLID_TYPES = {
 }
 
 -- Find a walkable tile near build_pos from which the character can reach it
+--
+-- Minimum distance raised 3->4 (2026-07-16, Zdendys: "aby companion pri stavbe byl
+-- alespon 4 ctverce daleko od plochy, kterou bude budova zabirat... aby ho snap
+-- nezachytil" -- a placed entity can land up to ~0.5 tile from its requested position
+-- due to Factorio's own snap_to_grid behavior on grid-aligned entity types, already
+-- root-caused for the bridge-pipe case, see task_pool.lua's own "sub-tile snap
+-- variance" comments; margin against her own body ending up inside the final
+-- footprint). Flat distance from `build_pos` (not per-entity footprint-aware) --
+-- Zdendys explicitly asked for the simple version, flagging a valid concern first
+-- (checked directly against this Factorio install's own prototype data, not assumed):
+-- `position` is the collision_box CENTER for every entity type this project places
+-- EXCEPT offshore-pump (asymmetric collision_box, position offset ~0.375 tiles from
+-- its true center) -- a full 1-tile margin increase here comfortably covers that one
+-- outlier too (4 - 0.375 = 3.625, still well above the old 3-tile floor). 3 dropped
+-- from the candidate list entirely (not just de-prioritized) so it can never be
+-- chosen even as a last resort among these candidates; only the very last, all-
+-- candidates-blocked fallback below still needs its own check.
 local function find_approach_pos(surf, char_pos, build_pos)
   local candidates = {}
-  for _, dist in ipairs({5, 4, 6, 3, 7}) do
+  for _, dist in ipairs({5, 4, 6, 7}) do
     for _, angle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
       local rad = math.rad(angle)
       local p = {
