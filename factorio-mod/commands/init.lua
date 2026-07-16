@@ -52,6 +52,23 @@ function M.companion_queue_status(cid)
   mark("build", storage.build_queues)
   mark("belt", storage.belt_queues)
   mark("combat", storage.combat_queues)
+  -- walk_result (2026-07-16, Zdendys's fast-giveup directive): read-AND-CLEAR --
+  -- control.lua's process_walking_queues stashes "approx_arrived"/"unreachable"
+  -- here the moment it gives up early on a fac_move_to()-driven walk (see that
+  -- function's own giveup_enabled block). Consumed exactly ONCE, by whichever
+  -- companion_queue_status(cid) call happens first after the stash is set --
+  -- Factorio's single-threaded scripting model makes this safe (no concurrent
+  -- callers can race on the same cid) -- so a LATER, unrelated poll never sees a
+  -- stale outcome from a walk that already ended. companion.py's wait_arrive()
+  -- already polls position (which carries this queues dict for free) every ~0.05s
+  -- while blocked on a walk, so it will see this on its very next poll, well
+  -- before it could possibly have moved on to any other walk.
+  local outcome = storage.walk_last_outcome and storage.walk_last_outcome[cid]
+  if outcome then
+    storage.walk_last_outcome[cid] = nil
+    out = out or {}
+    out.walk_result = outcome.result
+  end
   return out
 end
 
