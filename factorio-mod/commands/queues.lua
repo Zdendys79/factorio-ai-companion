@@ -1123,6 +1123,37 @@ function M.tick_gather_queues()
       if c.entity.selected ~= res then
         q.select_fail_ticks = (q.select_fail_ticks or 0) + TICK_INTERVAL
         if q.select_fail_ticks > SELECT_FAIL_TICKS then
+          -- OBSTRUCTION-CLEAR (2026-07-17, Zdendys's own direct instruction: "big-rock
+          -- entity ma byt automaticky eliminovana - vytezena, kdyz je v dosahu
+          -- companiona, je to stejna metoda jako u stromu!" -- mirrors
+          -- clear_build_area's own tree/simple-entity clearing exactly (same
+          -- type filter, same instant obs.mine{inventory=...}), applied here to the
+          -- MINING-select-fail case instead of building placement. Live-caught: a
+          -- big-rock sitting almost directly on top of an iron-ore tile (~0.3 tiles
+          -- away) made it permanently unselectable for EVERY character entity that
+          -- tried, including a freshly-respawned one -- proving the blocker is
+          -- per-TARGET (the rock itself), not per-entity, so the respawn mitigation
+          -- below (built for a genuine per-entity engine glitch) can never fix this
+          -- specific shape. Try clearing FIRST, before ever blacklisting/respawning --
+          -- self-limiting: if nothing is actually there to clear, this is a no-op and
+          -- falls straight through to the existing escalation unchanged.
+          local obstacles = surf.find_entities_filtered{
+            position = res.position, radius = 2, type = {"tree", "simple-entity"}}
+          local cleared = 0
+          for _, obs in ipairs(obstacles) do
+            if obs.valid then
+              obs.mine{inventory = c.entity.get_main_inventory()}
+              cleared = cleared + 1
+            end
+          end
+          if cleared > 0 then
+            u.log_error(string.format(
+              "gather mine-state: cleared %d tree/rock obstacle(s) near %s at %s -- " ..
+              "retrying select instead of blacklisting", cleared, q.resource, res_key),
+              "gather_queue")
+            q.select_fail_ticks = 0
+            return false
+          end
           u.log_error(string.format(
             "gather mine-state: %s at %s never became selectable after %d ticks " ..
             "(best_d=%.2f) -- blacklisting, trying next patch",
