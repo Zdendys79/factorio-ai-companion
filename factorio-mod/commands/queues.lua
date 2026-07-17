@@ -658,6 +658,32 @@ function M.tick_orphan_mining_cleanup()
     local c = valid_companion(cid)
     if c then tracked[c.entity.unit_number] = true end
   end
+  -- walking_queues[cid].clearing_target (2026-07-17, live-caught: repeated
+  -- "orphan mining stopped" for the SAME character at successive positions,
+  -- ~300-600 ticks apart -- exactly this check's own interval): control.lua's
+  -- process_walking_queues sets mining_state DIRECTLY (via q.clearing_target,
+  -- both the reach=1/reach=4 auto-clear-while-stuck paths and the
+  -- needs_destroy_to_reach waypoint path) as a THIRD legitimate mining
+  -- mechanism, entirely separate from harvest_queues/gather_queues -- this
+  -- backstop never knew about it. Consequence: ANY obstacle whose real
+  -- mining_time exceeds ORPHAN_CHECK_INTERVAL (300 ticks/5 game-seconds --
+  -- true regardless of game.speed, since game.tick counts real ticks) got
+  -- forcibly interrupted right before/at completion, every single cycle,
+  -- forever -- a tree/rock that takes longer than 5 seconds to mine could
+  -- NEVER be successfully cleared this way, permanently stalling whatever
+  -- walk was blocked on it. process_walking_queues's own `if not
+  -- e.mining_state.mining then e.mining_state = {mining=true,...}` (it only
+  -- re-asserts when mining_state.mining reads false) means this bug was
+  -- silently self-"healing" one tick later into the SAME broken cycle,
+  -- never actually completing -- exactly the repeated-interrupt pattern
+  -- observed live.
+  for cid in pairs(storage.walking_queues or {}) do
+    local q = storage.walking_queues[cid]
+    if q and q.clearing_target then
+      local c = valid_companion(cid)
+      if c then tracked[c.entity.unit_number] = true end
+    end
+  end
   for _, surface in pairs(game.surfaces) do
     for _, e in ipairs(surface.find_entities_filtered{type = "character"}) do
       if e.valid and not e.player and e.mining_state.mining and not tracked[e.unit_number] then
