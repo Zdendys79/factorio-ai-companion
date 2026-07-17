@@ -801,7 +801,7 @@ function respawn_companion_entity(cid, c)
   return true
 end
 
-function M.start_gather(cid, resource, count, exclude)
+function M.start_gather(cid, resource, count, exclude, from_task_pool)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
   -- Don't steal this companion from an ACTIVE task-pool step (2026-07-08, task #42,
@@ -811,7 +811,17 @@ function M.start_gather(cid, resource, count, exclude)
   -- an unguarded gather() call here would silently overwrite that in-progress walk the
   -- same way direct move_to() used to. Reject instead -- Python callers already retry
   -- on their own next cycle when a dispatch is refused.
-  if storage.active_step and storage.active_step[cid] then
+  --
+  -- from_task_pool (2026-07-17, "ensure_item" step type): task_pool.lua's OWN
+  -- "acting"/"ensuring" state machine calls this function AS THE IMPLEMENTATION of
+  -- an ensure_item step, while storage.active_step[cid] is necessarily already set
+  -- (that's how tick() got here in the first place) -- the guard above would
+  -- otherwise reject task_pool.lua's own internal call with the exact error message
+  -- meant for a DIFFERENT, external caller trying to steal the companion. This flag
+  -- is set ONLY by task_pool.lua's own internal call site; every other caller
+  -- (Python's /fac_resource_mine, the opening's own gather() helpers) omits it and
+  -- keeps the original guard, byte-identical to before this fix.
+  if not from_task_pool and storage.active_step and storage.active_step[cid] then
     return {error = "companion busy with an active task-pool step"}
   end
   -- exclude (2026-07-07, Zdendys/Claude: replacing the Python-side manual
