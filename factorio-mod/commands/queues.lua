@@ -1167,6 +1167,18 @@ function M.tick_gather_queues()
               for _, key in ipairs(just_blacklisted) do
                 q.blacklist[key] = nil
               end
+              -- STALE INVENTORY FIX (2026-07-17, live-caught: "LuaInventory API call
+              -- when LuaInventory was invalid" logged with context "gather" in the SAME
+              -- tick as this respawn): `inv` (captured at the top of this whole
+              -- tick_gather_queues callback, line ~880, BEFORE this respawn could ever
+              -- run) still references the OLD character's now-destroyed inventory --
+              -- respawn_companion_entity() calls old.destroy() and reassigns
+              -- `c.entity` to the NEW character, but does nothing about THIS function's
+              -- own local `inv` variable. The very next use of `inv` below
+              -- (_record_mine_diag's `g = inv.get_item_count(...)`) then crashed on the
+              -- invalid LuaInventory object. Refresh it here so every later use in this
+              -- same tick sees the new character's real inventory.
+              inv = c.entity.get_main_inventory()
             end
             q.select_fail_streak = 0
           end
