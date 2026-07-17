@@ -581,12 +581,36 @@ local function process_walking_queues()
 
       if moved < 0.3 then
         q.stuck_ticks = (q.stuck_ticks or 0) + 1
-      else
+      elseif (q.bypass_ticks or 0) == 0 and not q.bypass_just_ended then
+        -- Only clear stuck/bypass state on CONFIRMED genuine resumed movement --
+        -- NOT merely "moved at all this tick" (2026-07-17 live-caught: "Zaseknuti o
+        -- trubku, meni smer, leva prava asi 1000x, bez uspechu" -- a companion
+        -- trapped between two symmetric dead ends, e.g. a just-placed pipe row on
+        -- one side and water on the other). Root cause: this branch used to fire
+        -- UNCONDITIONALLY whenever moved>=0.3, including on every tick the bypass
+        -- ITSELF was actively walking her perpendicular (genuine displacement, but
+        -- not evidence she's actually unstuck) -- wiping bypass_ticks/bypass_side/
+        -- bypass_attempts before the bypass's own intended 10-tick duration ever
+        -- completed, AND before bypass_attempts could ever accumulate past 1 toward
+        -- its documented 4-attempt cap (see the elseif below: "2 rounds of
+        -- left+right"). The result: every stuck cycle restarted from scratch
+        -- (bypass_side always re-derives to the SAME first side from nil, never
+        -- truly alternating; bypass_attempts never reaches the cap), so the 4-cap
+        -- never engaged and she oscillated indefinitely within the outer
+        -- approach_deadline window instead of giving up on both directions after 4
+        -- tries. Two guards now gate the reset: (a) q.bypass_ticks==0 -- don't
+        -- interrupt an in-progress bypass sequence just because ITS OWN motion
+        -- counts as displacement; (b) q.bypass_just_ended (set for exactly one tick
+        -- right after a bypass sequence's last tick, below) -- the tick immediately
+        -- following bypass completion still reflects the bypass's OWN tail motion,
+        -- not yet a confirmed return to genuine forward progress; only a LATER tick
+        -- (a full cycle of the ordinary "walk toward target" branch actually
+        -- producing displacement) can honestly confirm she's moving again.
         q.stuck_ticks = 0
-        q.bypass_ticks = 0
         q.bypass_side = nil
         q.bypass_attempts = nil
       end
+      q.bypass_just_ended = false
 
       local dir_to_target = u.get_direction(e.position, goal)
 
@@ -596,6 +620,12 @@ local function process_walking_queues()
           e.walking_state = {walking = true, direction = q.bypass_dir}
         end
         q.bypass_ticks = q.bypass_ticks - 1
+        if q.bypass_ticks == 0 then
+          -- Flags the NEXT tick's stuck-check (above) to skip the reset once --
+          -- see that check's own comment for why (this bypass's own last tick of
+          -- perpendicular motion isn't yet confirmed genuine forward progress).
+          q.bypass_just_ended = true
+        end
       elseif (q.stuck_ticks or 0) >= 4 and (q.bypass_attempts or 0) < 4 then
         -- Stuck for ~0.3s: try perpendicular bypass, alternating left/right. Capped
         -- at 4 attempts total (2026-07-16, Zdendys: "staci zkusit kazdy smer jednou,
