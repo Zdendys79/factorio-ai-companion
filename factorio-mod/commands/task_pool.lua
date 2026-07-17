@@ -37,6 +37,25 @@
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
 --                                                       -> ctx.saved[save_as]
+--   {type="ensure_item", item=NAME, count=N}            -> gathers/crafts NAME
+--                                                          up to N in inventory
+--                                                          BEFORE the next step
+--
+-- ensure_item (2026-07-17, Zdendys's own architecture correction: procurement was
+-- kept OUT of this module by the ORIGINAL v1 design above, back when neither
+-- recipe resolution nor a hand-craftable check existed anywhere in this repo --
+-- both now do (resolve_recipe/HAND_CRAFTABLE_CATEGORIES below, mirroring
+-- companion.py's get_recipe_ingredients; queues.start_gather/start_craft), so
+-- there is no longer a reason to keep this Python's job). Recursively resolves
+-- missing INGREDIENTS first (bottom-up, exactly like ColdStartOpening.ensure_item,
+-- spatial_demo.py) via an explicit stack in ctx.ensure_stack, bounded to depth
+-- ENSURE_ITEM_MAX_DEPTH -- a raw/minable resource (no recipe) is gathered via the
+-- existing gather_queues machinery, a non-hand-craftable recipe (smelting) fails
+-- fast instead of wasting a doomed start_craft attempt, and wood (no
+-- gather()-compatible resource-tile path -- trees are type="tree", not
+-- type="resource") is chopped via its own small bounded walk+mine sub-state.
+-- Should normally be the FIRST step of a task whose later place/fuel steps
+-- consume the same item, so the whole task is self-sufficient once submitted.
 --
 -- find_existing (2026-07-07, furnace-upgrade task): locates an ALREADY-PLACED
 -- entity by name nearest the companion's CURRENT position (radius search, no
@@ -103,6 +122,163 @@ local M = {}
 
 local FUEL_REACH = 3      -- mirrors fac_building_fuel's own radius (building.lua)
 local WALK_REACH = 2      -- mirrors MINE_ADJACENT_RANGE-class "close enough" used elsewhere
+
+-- ---- ensure_item step (2026-07-17, Zdendys's own architecture correction after
+-- watching a Python-side pre-stock fix land: "myslel jsem, ze predskladneni bude
+-- soucast toho task-pool jobu! Proc ukol delit na podkroky jeste v Py, kdyz to mod
+-- zvladne plne autonomne?" -- this module's own header docstring originally
+-- scoped procurement OUT of the mod deliberately, back when neither recipe
+-- resolution nor a hand-craftable check existed anywhere in this repo. Both now
+-- exist as real, callable Lua (resolve_recipe below, mirroring companion.py's
+-- get_recipe_ingredients; queues.start_gather/start_craft) -- there is no longer
+-- a genuine reason to keep this Python's job. {type="ensure_item", item=NAME,
+-- count=N} lets a submitted task be fully self-sufficient: the mod gathers/
+-- crafts whatever it's short, recursively resolving ingredients bottom-up,
+-- BEFORE the task's own later place/fuel steps ever run.
+local HAND_CRAFTABLE_CATEGORIES = {["crafting"] = true, ["hand-crafting"] = true}
+local ENSURE_ITEM_MAX_DEPTH = 4     -- mirrors ColdStartOpening.ensure_item's own _depth cap (spatial_demo.py)
+local WOOD_CHOP_REACH = 3           -- mirrors fac_mine_entity's own distance<=15 check loosely; close enough to swing
+local WOOD_CHOP_MAX_TREES = 10      -- mirrors _chop_wood's own max_trees bound (spatial_demo.py)
+-- ENSURE_ITEM_GATHER_MAX_ATTEMPTS (2026-07-17, independent-review-caught HIGH-
+-- severity gap before this feature ever shipped): the raw-resource gather path
+-- had NO bound at all -- a genuinely scarce/partially-unreachable patch (a real,
+-- previously-observed scenario for coal specifically, see this project's own
+-- memory) would re-issue start_gather forever with no failure signal, stranding
+-- the task indefinitely. Mirrors WOOD_CHOP_MAX_TREES's own bounded-attempts
+-- shape, applied to the gather path too instead of leaving it as the one
+-- ensure_item sub-path with no give-up condition.
+local ENSURE_ITEM_GATHER_MAX_ATTEMPTS = 5
+
+-- Real Factorio recipe data for `item`, or nil if `item` has no recipe at all
+-- (every raw/minable resource -- ore, coal, stone, wood -- has zero recipe
+-- ingredients; nil means "raw resource, gather it, don't craft it"). Mirrors
+-- companion.py's get_recipe_ingredients EXACTLY -- same prototypes.recipe[item]
+-- access path (NOT game.recipe_prototypes, confirmed via that method's own
+-- docstring/ground-truth citation not to exist in Factorio 2.0) -- just native
+-- Lua instead of a JSON round-trip over RCON, since this now runs INSIDE the mod.
+local function resolve_recipe(item)
+  local r = prototypes.recipe[item]
+  if not r then return nil end
+  local ingredients = {}
+  for _, x in ipairs(r.ingredients) do
+    ingredients[#ingredients + 1] = {name = x.name, amount = x.amount}
+  end
+  local yield = 1
+  for _, p in ipairs(r.products) do
+    if p.name == item then yield = p.amount; break end
+  end
+  local hand_craftable = false
+  for _, cat in ipairs(r.categories or {"crafting"}) do
+    if HAND_CRAFTABLE_CATEGORIES[cat] then hand_craftable = true; break end
+  end
+  return {ingredients = ingredients, yield = yield, hand_craftable = hand_craftable}
+end
+
+-- Starts exactly ONE concrete action toward satisfying the need at the TOP of
+-- t.ctx.ensure_stack (item=, count=) for companion c/cid. Returns a `kind`
+-- string describing what was started ("gather"|"craft"|"chop"|"push"|"satisfied")
+-- plus an error string on genuine failure (kind=nil). "push" means a NEW, deeper
+-- need (a short ingredient) was pushed onto the stack -- no queue was started
+-- this cycle, the caller should look at the stack again next "acting" pass.
+-- "satisfied" means the top-of-stack need is ALREADY met (checked fresh here,
+-- not assumed) -- pop it and reassess without starting anything.
+local function start_ensure_item_action(c, cid, t)
+  local stack = t.ctx.ensure_stack
+  local need = stack[#stack]
+  if type(need.item) ~= "string" or type(need.count) ~= "number" then
+    -- Input validation (2026-07-17, independent-review-caught LOW finding):
+    -- mirrors run_set_position's own explicit guard -- a caller bug omitting
+    -- item/count would otherwise crash on the get_item_count() call below,
+    -- silently swallowed tick after tick by guard_tick's pcall (this file's own
+    -- documented failure mode elsewhere) instead of failing this ONE task
+    -- cleanly with a clear diagnostic.
+    return nil, "ensure_item: step.item (string) and step.count (number) required"
+  end
+  local inv = c.entity.get_main_inventory()
+  if inv.get_item_count(need.item) >= need.count then
+    return "satisfied"
+  end
+  if #stack > ENSURE_ITEM_MAX_DEPTH then
+    return nil, "ensure_item recursion depth exceeded for " .. need.item ..
+      " (likely a recipe-chain or naming problem, not a normal case)"
+  end
+  if need.item == "wood" then
+    -- Wood has NO gather()-compatible resource-tile path (trees are type="tree",
+    -- not type="resource" -- mirrors _chop_wood's own docstring in spatial_demo.py,
+    -- factorio-ai repo, for the full "gather('wood',...) always returns 0" root
+    -- cause this mirrors). Tracks its OWN small exclude set (t.ctx.wood_tried) so
+    -- a tree that fails to reach isn't picked again -- same "no exclude" bug class
+    -- already fixed once for _chop_wood itself (2026-07-17), applied here from the
+    -- start rather than needing a second live-caught fix.
+    t.ctx.wood_tried = t.ctx.wood_tried or {}
+    t.ctx.wood_chop_count = t.ctx.wood_chop_count or 0
+    if t.ctx.wood_chop_count >= WOOD_CHOP_MAX_TREES then
+      return nil, "could not chop enough wood after " .. WOOD_CHOP_MAX_TREES .. " trees"
+    end
+    local trees = c.entity.surface.find_entities_filtered{
+      type = "tree", position = c.entity.position, radius = 200}
+    local best, best_d = nil, math.huge
+    for _, tr in ipairs(trees) do
+      local key = math.floor(tr.position.x) .. "," .. math.floor(tr.position.y)
+      if tr.valid and not t.ctx.wood_tried[key] then
+        local d = u.distance(c.entity.position, tr.position)
+        if d < best_d then best, best_d = tr, d end
+      end
+    end
+    if not best then return nil, "no reachable tree found for wood" end
+    t.ctx.wood_target = {x = best.position.x, y = best.position.y}
+    return "chop"
+  end
+  local recipe = resolve_recipe(need.item)
+  if not recipe then
+    -- Raw/minable resource (ore/coal/stone) -- delegate to the existing gather
+    -- queue. from_task_pool=true bypasses start_gather's own active_step busy-
+    -- guard (see that function's own docstring, queues.lua): WE are the
+    -- active_step holder calling it here, not an external caller trying to
+    -- steal the companion mid-task.
+    --
+    -- Bounded attempts (2026-07-17, independent-review-caught HIGH finding):
+    -- a single start_gather call already retries internally within its own
+    -- lifetime (tick_gather_queues' own "find" state re-blacklists and retries
+    -- nearby patches before reporting "done"), but nothing previously bounded
+    -- the OUTER loop of re-issuing a FRESH start_gather call if one full cycle
+    -- still left a shortfall -- a genuinely scarce/partially-unreachable patch
+    -- (a real, previously-observed scenario for coal specifically) would retry
+    -- forever with no failure signal. Counts per-item so a task needing several
+    -- DIFFERENT raw resources tracks each independently.
+    t.ctx.gather_attempts = t.ctx.gather_attempts or {}
+    t.ctx.gather_attempts[need.item] = (t.ctx.gather_attempts[need.item] or 0) + 1
+    if t.ctx.gather_attempts[need.item] > ENSURE_ITEM_GATHER_MAX_ATTEMPTS then
+      return nil, "could not gather enough " .. need.item .. " after " ..
+        ENSURE_ITEM_GATHER_MAX_ATTEMPTS .. " attempts (likely scarce/unreachable)"
+    end
+    local deficit = need.count - inv.get_item_count(need.item)
+    local r = queues.start_gather(cid, need.item, deficit, nil, true)
+    if r.error then return nil, r.error end
+    return "gather"
+  end
+  if not recipe.hand_craftable then
+    -- Fail fast, exactly like ensure_item's own Python-side hand-craftable check
+    -- (2026-07-16 adversarial-review finding, spatial_demo.py): a smelting recipe
+    -- (iron-plate/copper-plate/...) has ingredients but the character can never
+    -- craft it directly no matter how many ingredients it holds -- attempting
+    -- start_craft would just fail with "Missing ingredients" via
+    -- get_craftable_count, a misleadingly generic error for a call that could
+    -- NEVER have succeeded.
+    return nil, need.item .. " recipe is not hand-craftable (needs a real machine, e.g. smelting)"
+  end
+  for _, ing in ipairs(recipe.ingredients) do
+    local needed_amount = math.ceil(need.count / recipe.yield) * ing.amount
+    if inv.get_item_count(ing.name) < needed_amount then
+      stack[#stack + 1] = {item = ing.name, count = needed_amount}
+      return "push"
+    end
+  end
+  local craft_count = math.ceil(need.count / recipe.yield)
+  local r = queues.start_craft(cid, need.item, craft_count)
+  if r.error then return nil, r.error end
+  return "craft"
+end
 
 function M.init()
   storage.tasks = storage.tasks or {}
@@ -664,6 +840,48 @@ function M.tick()
           -- below (own stale-progress backstop, same as every other queue type).
           active.state = "building"
         end
+      elseif step.type == "ensure_item" then
+        -- Handled entirely inline, like "place" above (see this step type's own
+        -- header comment, near WOOD_CHOP_REACH, for the full design). Genuinely
+        -- async (gather/craft/chop can each take many ticks) -- excluded from the
+        -- generic ok/err fall-through below the same way "place" is.
+        t.ctx.ensure_stack = t.ctx.ensure_stack or {{item = step.item, count = step.count}}
+        local kind, err2 = start_ensure_item_action(c, cid, t)
+        if kind == "satisfied" then
+          table.remove(t.ctx.ensure_stack)
+          if #t.ctx.ensure_stack == 0 then
+            t.cursor = t.cursor + 1
+            storage.active_step[cid] = nil
+            if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
+          end
+          -- else: stay in "acting" this same tick's next pass (goto continue below
+          -- falls through to end-of-loop; re-entering "acting" next tick reassesses
+          -- the now-shorter stack) -- no state change needed, active.state is
+          -- already "acting".
+        elseif kind == "push" then
+          -- A deeper ingredient need was pushed -- reassess next tick against the
+          -- new top of stack, same as "satisfied"'s implicit re-entry above.
+        elseif kind == "gather" or kind == "craft" then
+          active.state = "ensuring"
+          active.ensuring_kind = kind
+        elseif kind == "chop" then
+          -- Skip the walk entirely if already close enough (mirrors "place"'s own
+          -- distance check in the idle-dispatch loop below) -- go straight to
+          -- chop_mine so a tree that happens to be right next to the companion
+          -- doesn't pay for a pointless 1-tick walking_queue round trip.
+          if u.distance(c.entity.position, t.ctx.wood_target) <= WOOD_CHOP_REACH then
+            active.state = "ensuring"
+            active.ensuring_kind = "chop_mine"
+          else
+            storage.walking_queues[cid] = {target = t.ctx.wood_target}
+            active.state = "ensuring"
+            active.ensuring_kind = "chop_walk"
+            active.chop_deadline = u.approach_deadline(c.entity.position, t.ctx.wood_target)
+          end
+        else
+          ledger.fail_task(active.task_id, err2 or "ensure_item failed")
+          storage.active_step[cid] = nil
+        end
       elseif step.type == "remove" then
         -- Pick up an existing entity (2026-07-07, coal_pair upgrade task: reuses
         -- the 2 ALREADY-BUILT coal_pair drills rather than crafting new ones --
@@ -729,10 +947,11 @@ function M.tick()
         ok, err = false, "unknown step type " .. tostring(step.type)
       end
 
-      -- "place" is fully handled above (either failed inline, or transitioned to
-      -- the separate "building" state) -- every OTHER step type completes
-      -- synchronously within this same tick, so their ok/err is resolved here.
-      if step.type ~= "place" then
+      -- "place"/"ensure_item" are fully handled above (either resolved inline, or
+      -- transitioned to their own separate polling state) -- every OTHER step
+      -- type completes synchronously within this same tick, so their ok/err is
+      -- resolved here.
+      if step.type ~= "place" and step.type ~= "ensure_item" then
         if ok then
           t.cursor = t.cursor + 1
           storage.active_step[cid] = nil
@@ -772,6 +991,65 @@ function M.tick()
       else
         ledger.fail_task(active.task_id, st.error or "build failed")
         storage.active_step[cid] = nil
+      end
+    end
+
+    if active.state == "ensuring" then
+      -- Polls whichever underlying queue/walk start_ensure_item_action started,
+      -- to completion, then falls back to "acting" so the NEXT "acting" pass
+      -- reassesses t.ctx.ensure_stack fresh (real inventory counts, not a
+      -- remembered target) -- exactly like ensure_item's own Python recursion,
+      -- one incremental step of progress per round trip through this state.
+      if active.ensuring_kind == "gather" then
+        local st = queues.get_gather_status(cid)
+        if st.active then goto continue end
+        active.state = "acting"
+      elseif active.ensuring_kind == "craft" then
+        local st = queues.get_craft_status(cid)
+        if st.active then goto continue end
+        active.state = "acting"
+      elseif active.ensuring_kind == "chop_walk" then
+        if not storage.walking_queues[cid] then
+          active.ensuring_kind = "chop_mine"  -- arrived -> fall through below, same tick
+        elseif active.chop_deadline and game.tick >= active.chop_deadline then
+          -- Bounded give-up (mirrors every other approach_deadline in this file):
+          -- blacklist this SPECIFIC tree so the next "acting" pass picks a
+          -- DIFFERENT one instead of re-selecting the identical unreachable tree
+          -- forever (the exact "no exclude" bug class already fixed once for
+          -- _chop_wood itself, spatial_demo.py -- applied here from the start).
+          storage.walking_queues[cid] = nil
+          c.entity.walking_state = {walking = false}
+          local key = math.floor(t.ctx.wood_target.x) .. "," .. math.floor(t.ctx.wood_target.y)
+          t.ctx.wood_tried[key] = true
+          active.state = "acting"
+        else
+          goto continue
+        end
+      end
+      if active.state == "ensuring" and active.ensuring_kind == "chop_mine" then
+        local trees = c.entity.surface.find_entities_filtered{
+          type = "tree", position = t.ctx.wood_target, radius = 1}
+        if trees[1] and trees[1].valid then
+          local inv = c.entity.get_main_inventory()
+          local before = inv.get_item_count("wood")
+          trees[1].mine{inventory = inv}
+          if inv.get_item_count("wood") > before then
+            t.ctx.wood_chop_count = (t.ctx.wood_chop_count or 0) + 1
+          else
+            -- Mined but yielded nothing new (inventory full?) -- blacklist so this
+            -- exact tree isn't retried forever; a genuinely full inventory will
+            -- surface via the NEXT tree's identical failure, not silently loop.
+            local key = math.floor(t.ctx.wood_target.x) .. "," .. math.floor(t.ctx.wood_target.y)
+            t.ctx.wood_tried[key] = true
+          end
+        else
+          -- Tree gone (another companion/process claimed it between selection and
+          -- arrival) -- blacklist and retry with a fresh selection, don't fail the
+          -- whole task over a single vanished tree.
+          local key = math.floor(t.ctx.wood_target.x) .. "," .. math.floor(t.ctx.wood_target.y)
+          t.ctx.wood_tried[key] = true
+        end
+        active.state = "acting"
       end
     end
     ::continue::
