@@ -215,15 +215,33 @@ local function start_ensure_item_action(c, cid, t)
     if t.ctx.wood_chop_count >= WOOD_CHOP_MAX_TREES then
       return nil, "could not chop enough wood after " .. WOOD_CHOP_MAX_TREES .. " trees"
     end
-    local trees = c.entity.surface.find_entities_filtered{
-      type = "tree", position = c.entity.position, radius = 200}
+    -- Expanding-radius search (2026-07-17, Zdendys's own follow-up after a live
+    -- incident: coal_pair_upgrade's stage1 spent ~63,000 ticks chopping just 4
+    -- trees -- a single flat radius=200 scan always considers the FULL 200-tile
+    -- box, so on a map where the nearest patch of forest happens to sit right at
+    -- the edge of that box (coal-rich areas are often tree-sparse), the
+    -- "nearest" candidate found can still require a very long walk every single
+    -- time this resolves. Trying progressively LARGER radii first -- starting
+    -- close to the companion, only widening if genuinely nothing nearby -- means
+    -- the common case (a tree within a normal few dozen tiles) resolves via a
+    -- cheap, close search instead of always scanning (and potentially picking
+    -- a candidate from) the full 200-tile radius. Does not change WHICH tree
+    -- gets picked once a given radius has candidates (still nearest-first
+    -- within that radius); it only avoids needlessly extending the SEARCH
+    -- (and therefore the walk) beyond what the nearby area can already supply.
+    local WOOD_SEARCH_RADII = {20, 50, 100, 200}
     local best, best_d = nil, math.huge
-    for _, tr in ipairs(trees) do
-      local key = math.floor(tr.position.x) .. "," .. math.floor(tr.position.y)
-      if tr.valid and not t.ctx.wood_tried[key] then
-        local d = u.distance(c.entity.position, tr.position)
-        if d < best_d then best, best_d = tr, d end
+    for _, radius in ipairs(WOOD_SEARCH_RADII) do
+      local trees = c.entity.surface.find_entities_filtered{
+        type = "tree", position = c.entity.position, radius = radius}
+      for _, tr in ipairs(trees) do
+        local key = math.floor(tr.position.x) .. "," .. math.floor(tr.position.y)
+        if tr.valid and not t.ctx.wood_tried[key] then
+          local d = u.distance(c.entity.position, tr.position)
+          if d < best_d then best, best_d = tr, d end
+        end
       end
+      if best then break end
     end
     if not best then return nil, "no reachable tree found for wood" end
     t.ctx.wood_target = {x = best.position.x, y = best.position.y}
