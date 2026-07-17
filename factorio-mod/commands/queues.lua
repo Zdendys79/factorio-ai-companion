@@ -1513,6 +1513,19 @@ local function find_approach_pos(surf, char_pos, build_pos)
 end
 
 -- Remove trees and small rocks from the entity's collision footprint
+--
+-- NOTE (2026-07-17, investigated then REVERTED): a live discard-investigation-pause
+-- showed _build_iron_output_inserter's (belt_connect_ops.py) wooden-chest placement
+-- stuck at (29,0) with "nearby: iron-ore,iron-ore,item-on-ground,burner-inserter,..."
+-- and self_collision_clear=false. Hypothesized the lying item ("item-entity") was
+-- the uncleared blocker (belt_connect_ops.py's _tile_has_clearable_debris pre-check
+-- assumes it counts as clearable) -- but a live RCON test (surface.create_entity
+-- name="item-on-ground" at a clear tile, then can_place_entity{name="wooden-chest"})
+-- proved can_place_entity returns TRUE with a lying item present regardless: it is
+-- NOT a collision blocker in this engine version. Reverted the item-entity handling
+-- added here on that now-disproven premise (per this project's own "live
+-- verification beats static review" lesson) -- the real blocker at (29,0) remains a
+-- separate, still-open investigation.
 local function clear_build_area(surf, entity_name, position, inv)
   local proto = prototypes.entity[entity_name]
   if not proto or not proto.collision_box then return end
