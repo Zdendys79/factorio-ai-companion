@@ -868,6 +868,18 @@ function M.tick()
         if kind == "satisfied" then
           table.remove(t.ctx.ensure_stack)
           if #t.ctx.ensure_stack == 0 then
+            -- Reset to nil, not just an empty table (2026-07-17, live-caught crash:
+            -- "attempt to index local 'need' (a nil value)" at start_ensure_item_action's
+            -- own `local need = stack[#stack]`). t.ctx is shared across ALL steps of
+            -- this task, and a task can have MULTIPLE ensure_item steps in a row (e.g.
+            -- build_ore_drill_row_unit_steps' burner-mining-drill THEN stone-furnace,
+            -- coal_pair.py). Leaving ensure_stack as `{}` here made line 866's own
+            -- `t.ctx.ensure_stack or {...}` initializer a no-op for the NEXT ensure_item
+            -- step -- an empty table is truthy in Lua -- so that step ran
+            -- start_ensure_item_action against a permanently empty stack instead of
+            -- pushing its own need, crashing every tick forever (active_step never
+            -- cleared -> companion deadlocked for the rest of the episode).
+            t.ctx.ensure_stack = nil
             t.cursor = t.cursor + 1
             storage.active_step[cid] = nil
             if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
