@@ -249,7 +249,18 @@ commands.add_command("fac_building_empty", nil, function(cmd)
           local av = inv.get_item_count(item)
           if av > 0 then
             local rm = inv.remove{name = item, count = math.min(count - ext, av)}
-            if rm > 0 then c.entity.insert{name = item, count = rm}; ext = ext + rm end
+            if rm > 0 then
+              -- insert()'s own return value MUST be used, not assumed to equal
+              -- `rm` (2026-07-18, same finding independently confirmed for
+              -- task_pool.lua's pull_from_nearby_container, which mirrors this
+              -- function's own idiom): a full companion inventory would
+              -- otherwise silently lose the un-placed remainder (already
+              -- removed here, never actually held) and over-report `extracted`
+              -- to the caller. Put back whatever didn't fit.
+              local ins = c.entity.insert{name = item, count = rm}
+              if ins < rm then inv.insert{name = item, count = rm - ins} end
+              ext = ext + ins
+            end
           end
         end
         if ext >= count then break end
