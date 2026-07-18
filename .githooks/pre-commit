@@ -7,15 +7,15 @@
 #   1) Auto-bump factorio-mod/info.json patch version whenever any other mod file changes
 #      (original behavior, preserved as-is).
 #   2) MECHANICAL self-review checks (2026-07-05) -- Zdendys, after cubic-dev-ai bot caught
-#      the SAME bug classes 3 times in one night: "prováděj před commitem i tyto kontroly,
-#      ať nás ChatGPT nemusí porad obtěžovat spamem" + "nastav to tak, že to bude vždy
-#      spolehlivé, ne závislé na tom, jestli si to zrovna vzpomenu". A checklist written into
+#      the SAME bug classes 3 times in one night: "run these checks before commit too, so
+#      ChatGPT doesn't have to keep bothering us with spam" + "set it up so that it's always
+#      reliable, not dependent on whether I happen to remember it". A checklist written into
 #      CLAUDE.md/memory still depends on remembering to read it -- this hook does NOT: it
 #      greps the actual staged diff for the exact patterns that caused real bugs and REFUSES
 #      the commit (exit 1) until fixed or explicitly bypassed with `git commit --no-verify`
 #      (a deliberate, visible override, not a silently-ignorable warning).
 #
-# See CLAUDE.md's "CHECKLIST PRED KAZDYM COMMITEM" for the full human-readable checklist --
+# See CLAUDE.md's "CHECKLIST BEFORE EVERY COMMIT" for the full human-readable checklist --
 # this hook mechanically enforces the subset that's actually grep-able.
 set -e
 

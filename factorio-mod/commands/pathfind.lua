@@ -1,12 +1,12 @@
 -- AI Companion v0.9.0 - Belt-connection pathfinding (Stage 0.2, 2026-07-04)
 -- A* over the tile grid between two points, avoiding resource-entity tiles (a belt
 -- corridor must route AROUND an un-mined ore/coal/stone patch, never over it -- Zdendys:
--- "mělo by se vyhýbat všem nalezištím i vodě") and anything else that blocks a
+-- "it should avoid all resource patches and water too") and anything else that blocks a
 -- transport-belt (water, cliffs, existing buildings/trees/rocks -- delegated to the
 -- ENGINE's own surf.can_place_entity check rather than re-implementing collision rules,
 -- so it stays correct as the game's placement logic evolves), with a small turn-penalty
--- so the result is a reasonably direct corridor, not a serpentine walk ("ne jen nějaký
--- klikatý had"). Bounded search area + node cap so a genuinely blocked/far target fails
+-- so the result is a reasonably direct corridor, not a serpentine walk ("not just some
+-- zigzagging snake"). Bounded search area + node cap so a genuinely blocked/far target fails
 -- fast instead of burning the RCON command's time budget.
 local M = {}
 
@@ -165,7 +165,7 @@ local MAX_NODES = 128000         -- hard cap on A* expansions (bounded, no infin
 -- higher than the offline lua5.3-only measurements above) -- still far below the RCON
 -- client's 60s socket timeout.
 
--- Shore buffer (2026-07-08, Zdendys: "vodu obcházet alespon ve vzdalenosti 5-10 od brehu"):
+-- Shore buffer (2026-07-08, Zdendys: "go around water at a distance of at least 5-10 from the shore"):
 -- a SOFT cost, not a hard block, added to any tile within SHORE_BUFFER of a water tile, so
 -- the route PREFERS to stay clear of the coast when a choice exists (leaves room for the
 -- power plant's own shore-adjacent structures, and avoids a corridor that hugs the water's
