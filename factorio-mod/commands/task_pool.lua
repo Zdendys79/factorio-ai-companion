@@ -536,8 +536,8 @@ end
 -- Temporarily remove tree/simple-entity (rock) obstacles from an entity's footprint
 -- so a can_place_entity check reflects what queues.lua's clear_build_area will ACTUALLY
 -- leave behind at build time, not raw ground-truth right now (2026-07-08, task #47,
--- Zdendys: "Při stavbě nemůže být nic obklopeno stromy, MOD má za úkol před stavbou
--- plochu očistit!" -- pick_orientation was rejecting candidates over trees/rocks that
+-- Zdendys: "During construction nothing may be surrounded by trees, the MOD's job is to
+-- clear the area before construction!" -- pick_orientation was rejecting candidates over trees/rocks that
 -- the build step removes anyway, live-caught: "no free orientation (all sides
 -- blocked)" on an ore patch with a single nearby tree). Mirrors clear_build_area's OWN
 -- area computation (queues.lua) exactly, and the existing ignore_entities_at

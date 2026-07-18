@@ -12,7 +12,7 @@ local ATTACK_COOLDOWN = 15
 local ATTACK_RANGE = 6
 local MINING_RANGE = 5
 -- Real mining requires standing basically ON/adjacent to the resource -- confirmed live
--- 2026-07-03 (Zdendys, watching: "Stojí postava přímo na uhlí! nic nejde dolovat na dálku"):
+-- 2026-07-03 (Zdendys, watching: "The character is standing right on the coal! Nothing can be mined from a distance."):
 -- unlike build/reach_distance (~10) or MINING_RANGE (5, used elsewhere as a generous "still
 -- close enough to keep going" bound), native mining_state silently does nothing at a genuine
 -- multi-tile distance even with `selected` correctly set -- it only actually starts once the
@@ -723,8 +723,8 @@ local function find_reachable_resource(surf, from, resource, blacklist)
   -- CAUSE must be map/entity-state-specific to that one run. This logs exactly WHY
   -- the search came up empty (zero candidates at all vs. every candidate rejected by
   -- a specific filter), so the next occurrence shows the real reason instead of just
-  -- "gathered 0" with no further clue. Zdendys: "Pokud je něco 'nedosažitelné' je to
-  -- bug! NIKDY chyba mapy!" -- this is a diagnostic-only addition, no behavior change.
+  -- "gathered 0" with no further clue. Zdendys: "If something is 'unreachable' it is a
+  -- bug! NEVER the map's fault!" -- this is a diagnostic-only addition, no behavior change.
   local total = #ores
   local depleted, blacklisted, near_spawner, no_stand_pos = 0, 0, 0, 0
   for _, e in ipairs(ores) do
@@ -1748,8 +1748,8 @@ function M.tick_build_queues()
       -- immediately, no retry at all" (unlike task_pool.lua's OWN candidates check,
       -- which already retries for 60 ticks -- see that fix, commit 464185f -- this was
       -- the one remaining unprotected collision check task #35's own investigation
-      -- found). 2026-07-08, Zdendys: "ať je ověření těsně před stavbou, bez jakéhokoli
-      -- pohybu" (the check IS already right before the build with no movement -- what
+      -- found). 2026-07-08, Zdendys: "let the check be immediately before the build,
+      -- without any movement" (the check IS already right before the build with no movement -- what
       -- was missing was giving a TRANSIENT collision a chance to clear before failing
       -- the whole task over it). Bounded retry IN PLACE first (same 60-tick budget as
       -- the task_pool.lua candidates fix) -- if STILL blocked once that expires, a
