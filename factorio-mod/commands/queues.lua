@@ -1137,8 +1137,24 @@ function M.tick_gather_queues()
           -- specific shape. Try clearing FIRST, before ever blacklisting/respawning --
           -- self-limiting: if nothing is actually there to clear, this is a no-op and
           -- falls straight through to the existing escalation unchanged.
+          --
+          -- FOOTPRINT-SCOPED (2026-07-18, cubic-dev-ai review finding on the original
+          -- radius=2 circular sweep): a plain radius search around res.position could
+          -- mine a tree/rock up to 2 tiles from the ore tile (up to ~4 tiles from the
+          -- companion, since she must be within her own reach of res.position to be
+          -- attempting selection at all) even when that entity does not overlap the
+          -- ore tile and has nothing to do with the select-fail. Mirrors
+          -- clear_build_area's own established pattern below (same type filter, same
+          -- +-0.5 tile padding) instead of a raw radius: build a tight `area` from the
+          -- ore entity's OWN real bounding_box, so only something actually occupying/
+          -- overlapping the ore tile gets cleared.
+          local ore_bb = res.bounding_box
+          local clear_area = {
+            {x = ore_bb.left_top.x - 0.5, y = ore_bb.left_top.y - 0.5},
+            {x = ore_bb.right_bottom.x + 0.5, y = ore_bb.right_bottom.y + 0.5}
+          }
           local obstacles = surf.find_entities_filtered{
-            position = res.position, radius = 2, type = {"tree", "simple-entity"}}
+            area = clear_area, type = {"tree", "simple-entity"}}
           local cleared = 0
           for _, obs in ipairs(obstacles) do
             if obs.valid then
