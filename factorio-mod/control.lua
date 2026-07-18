@@ -8,8 +8,8 @@ local task_pool = require("commands.task_pool")
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
 
 -- Decorative rocks worth opportunistically clearing (2026-07-05, Zdendys's exhaustive
--- list: "Vsechny hledane typy kamenu jsou: Big rock, big sandy rock: 120 tick / Huge
--- rock: 180tick"). Named explicitly rather than matching the broader type='simple-entity'
+-- list: "All the rock types being searched for are: Big rock, big sandy rock: 120
+-- tick / Huge rock: 180tick"). Named explicitly rather than matching the broader type='simple-entity'
 -- prototype category: that type ALSO covers a lot of other-planet Space Age content
 -- (Vulcanus volcanic-rock/stromatolite/demolisher-corpse, Fulgora rock/ruins,
 -- lithium-iceberg, etc. -- confirmed live via prototypes.entity, 2026-07-05) that must
@@ -325,9 +325,9 @@ local function process_walking_queues()
     local e = c.entity
     local dist = u.distance(e.position, q.target)
 
-    -- Proactive reach=1 clearing (2026-07-05, Zdendys): "kdykoli companion narazi na
-    -- okrasny kamen (entitu, nikoli naleziste kamene), nebo jakykoli strom (v dosahu 1
-    -- od postavy) vytezi ho" -- ANY tree or decorative rock within reach=1 gets mined on
+    -- Proactive reach=1 clearing (2026-07-05, Zdendys): "whenever the companion
+    -- encounters a decorative rock (an entity, not an ore deposit), or any tree
+    -- (within reach 1 of the character), it mines it" -- ANY tree or decorative rock within reach=1 gets mined on
     -- sight, regardless of whether the companion is stuck, still approaching, or has
     -- just arrived. MUST run unconditionally BEFORE the dist<2 arrival check below, not
     -- inside the still-approaching `else` branch: live-testing found the two states race
@@ -413,12 +413,12 @@ local function process_walking_queues()
       -- q.stuck_ticks, since each individual bypass tick genuinely moves her).
       -- Deliberately NET POSITION, not distance-to-target (Zdendys's own correction):
       -- distance-to-target would misfire on a legitimate pathfinder detour that goes
-      -- AWAY from the target first ("nekdy je potreba se vratit i zpet o 180 stupnu");
-      -- net position change is immune to that -- see the check itself, below.
+      -- AWAY from the target first ("sometimes it's necessary to go back by 180
+      -- degrees"); net position change is immune to that -- see the check itself, below.
       --
-      -- Threshold: 600 active ticks (Zdendys's own explicit number, 2026-07-16: "Dal
-      -- bych 600! V realne rychlosti je to 10s, to by na pocatecni mape melo
-      -- companiona priblizit k cili" -- 10 real seconds at game.speed=1, comfortably
+      -- Threshold: 600 active ticks (Zdendys's own explicit number, 2026-07-16: "I'd
+      -- give it 600! In real speed that's 10s, that should get the companion closer
+      -- to the target on the starting map" -- 10 real seconds at game.speed=1, comfortably
       -- above a single bypass cycle (50 ticks) and the now-capped 4 bypass attempts
       -- (see q.bypass_attempts just below, also 2026-07-16) -- this must NOT
       -- reintroduce the 2026-07-06 regression (an earlier, too-aggressive stuck
@@ -429,9 +429,9 @@ local function process_walking_queues()
       -- regardless of game.speed, unlike that Python-side mechanism. 10 windows of
       -- 60 active ticks each = 600.
       --
-      -- Outcome (Zdendys: "mod rekne Py, ze je cil nedosazitelny", not a raw counter
+      -- Outcome (Zdendys: "the mod tells Py that the target is unreachable", not a raw counter
       -- -- and if <4 tiles from target, report 'approx_arrived' instead of a hard
-      -- failure, since that's "bohate postacujici" for most construction): stashed
+      -- failure, since that's "plenty sufficient" for most construction): stashed
       -- in storage.walk_last_outcome[cid], consumed once by fac_companion_position's
       -- handler (commands/companion.lua) the next time companion.py polls position
       -- -- no new RCON round-trip needed on either side.
@@ -446,8 +446,9 @@ local function process_walking_queues()
           -- NET WORLD-SPACE displacement since the last checkpoint (2026-07-16,
           -- Zdendys's own correction: comparing DISTANCE-TO-TARGET here instead, as
           -- an earlier draft of this did, would misfire on a legitimate pathfinder
-          -- detour that goes AWAY from the target first -- "nekdy je potreba se
-          -- vratit i zpet (o 180 stupnu) a zkusit jiny smer ve vetsi vzdalenosti" --
+          -- detour that goes AWAY from the target first -- "sometimes it's necessary
+          -- to go back (by 180 degrees) and try a different direction at a greater
+          -- distance" --
           -- that raises distance-to-target even while making completely genuine
           -- progress along a real route. Net position change is immune to this: a
           -- companion actually walking a detour (even backward) covers REAL ground
@@ -628,8 +629,8 @@ local function process_walking_queues()
         end
       elseif (q.stuck_ticks or 0) >= 4 and (q.bypass_attempts or 0) < 4 then
         -- Stuck for ~0.3s: try perpendicular bypass, alternating left/right. Capped
-        -- at 4 attempts total (2026-07-16, Zdendys: "staci zkusit kazdy smer jednou,
-        -- nejvyse 2x, abych zjistil, ze to nejde" -- 2 rounds of left+right) -- once
+        -- at 4 attempts total (2026-07-16, Zdendys: "it's enough to try each
+        -- direction once, at most 2x, to find out it doesn't work" -- 2 rounds of left+right) -- once
         -- neither direction has unstuck her after 2 full rounds, repeating the SAME
         -- two directions indefinitely is pure wasted cycles; the pathfinder's own
         -- separate periodic retry (request_walk_path's 180-tick cooldown, below)
