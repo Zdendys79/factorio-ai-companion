@@ -32,7 +32,10 @@
 --                             secondary_resource=NAME|nil,
 --                             ignore_entities_at={{x=,y=},...}|nil}
 --                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
---   {type="place", which=/x,y/ref/candidates={{x=,y=,dir=},...}, entity=NAME, dir=N}
+--   {type="place", which=/x,y/ref/candidates={{x=,y=,dir=},...}, entity=NAME, dir=N,
+--                  mirror=true|nil}                       -> horizontal mirror (live-
+--                                                             verified: burner-mining-drill's
+--                                                             own drop_position flips side)
 --   {type="remove", which=/x,y/ref=, entity=NAME}
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
@@ -821,7 +824,7 @@ function M.tick()
           local chosen = nil
           for _, cand in ipairs(step.candidates) do
             local cdir = u.dir_map[cand.dir or 0]
-            if surf.can_place_entity{name = step.entity, position = {x = cand.x, y = cand.y}, direction = cdir, force = c.entity.force} then
+            if surf.can_place_entity{name = step.entity, position = {x = cand.x, y = cand.y}, direction = cdir, force = c.entity.force, mirror = step.mirror} then
               chosen = {x = cand.x, y = cand.y, dir = cdir}
               break
             end
@@ -850,7 +853,7 @@ function M.tick()
           end
           pos, place_dir = {x = chosen.x, y = chosen.y}, chosen.dir
         end
-        local r = queues.start_build(cid, step.entity, pos, place_dir)
+        local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror)
         if r.error then
           ledger.fail_task(active.task_id, r.error)
           storage.active_step[cid] = nil

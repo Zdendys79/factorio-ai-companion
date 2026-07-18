@@ -1633,7 +1633,7 @@ local MAX_SELF_COLLISION_STEP_AWAY = 2
 
 -- Start a smart build: auto-approach + auto-clear + place
 -- State machine: approaching -> clearing -> building -> done
-function M.start_build(cid, entity_name, position, direction)
+function M.start_build(cid, entity_name, position, direction, mirror)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
 
@@ -1651,6 +1651,17 @@ function M.start_build(cid, entity_name, position, direction)
     entity = entity_name,
     position = position,
     direction = dir,
+    -- mirror (2026-07-18, coal-mining-row task): horizontal mirroring for
+    -- directional entities that support it (live-verified: burner-mining-
+    -- drill's own drop_position flips to the opposite side of its footprint
+    -- when mirror=true, same direction otherwise -- needed so a drill tapping
+    -- a shared belt from the OPPOSITE side still ejects onto the same
+    -- absolute side as one tapping from the near side, instead of the plain
+    -- 180-degree rotation's mirrored-through-center result). nil for every
+    -- OTHER existing caller (never set) -- Factorio's own create_entity/
+    -- can_place_entity treat a nil mirror field identically to omitting it,
+    -- so this is a no-op for all pre-existing build_queues use.
+    mirror = mirror or nil,
     approach = approach,
     state = "approaching",
     tick_start = game.tick,
@@ -1777,7 +1788,8 @@ function M.tick_build_queues()
       -- genuinely permanent OTHER-cause collision still correctly fails, just after a
       -- few retries instead of the very first check, exactly as before.
       if not surf.can_place_entity{name = q.entity, position = q.position,
-                                   direction = q.direction, force = c.entity.force} then
+                                   direction = q.direction, force = c.entity.force,
+                                   mirror = q.mirror} then
         q.collision_retry_deadline = q.collision_retry_deadline or (game.tick + 60)
         if game.tick < q.collision_retry_deadline then
           return false
@@ -1801,7 +1813,8 @@ function M.tick_build_queues()
         local self_pos = {x = c.entity.position.x, y = c.entity.position.y}
         c.entity.teleport({x = self_pos.x + 10000, y = self_pos.y + 10000})
         local clear_without_self = surf.can_place_entity{name = q.entity, position = q.position,
-                                     direction = q.direction, force = c.entity.force}
+                                     direction = q.direction, force = c.entity.force,
+                                     mirror = q.mirror}
         c.entity.teleport(self_pos)
         q.self_collision_step_away_count = q.self_collision_step_away_count or 0
         if clear_without_self and q.self_collision_step_away_count < MAX_SELF_COLLISION_STEP_AWAY then
@@ -1852,7 +1865,8 @@ function M.tick_build_queues()
         name = q.entity,
         position = q.position,
         direction = q.direction,
-        force = c.entity.force
+        force = c.entity.force,
+        mirror = q.mirror
       }
       -- Only keep the building if a real item was actually consumed; else remove it (no free build).
       local destroyed = false
