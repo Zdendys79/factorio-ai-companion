@@ -107,7 +107,8 @@ function M.submit_task(cid, steps)
     local have = inv.get_item_count(item)
     local already_reserved = storage.reserved[item] or 0
     -- Only what's genuinely UNCLAIMED by another active task can be reserved here
-    -- (Zdendys: "spocita si co potrebuje... nesmi pocitat jiz rezervovane pocty").
+    -- (Zdendys: "it calculates what it needs... it must not count amounts already
+    -- reserved").
     local available = math.max(0, have - already_reserved)
     local take = math.min(available, count)
     if take > 0 then

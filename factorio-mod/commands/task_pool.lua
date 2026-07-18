@@ -61,8 +61,8 @@
 -- entity by name nearest the companion's CURRENT position (radius search, no
 -- ore/resource patch involved) and sets ctx.px/py to it -- for a task that
 -- upgrades something already built (e.g. adding a drill next to a lone
--- bootstrap furnace, Zdendys: "je to stejne jako postaveni noveho paru, ale
--- pec uz tu je, staci k ni pridat vrtacku") rather than starting from a raw
+-- bootstrap furnace, Zdendys: "it's the same as building a new pair, but the
+-- furnace is already there, just add a drill to it") rather than starting from a raw
 -- resource tile like find_patch does.
 --
 -- pick_orientation's primary_exists (2026-07-07, furnace-upgrade task): when
@@ -124,9 +124,9 @@ local FUEL_REACH = 3      -- mirrors fac_building_fuel's own radius (building.lu
 local WALK_REACH = 2      -- mirrors MINE_ADJACENT_RANGE-class "close enough" used elsewhere
 
 -- ---- ensure_item step (2026-07-17, Zdendys's own architecture correction after
--- watching a Python-side pre-stock fix land: "myslel jsem, ze predskladneni bude
--- soucast toho task-pool jobu! Proc ukol delit na podkroky jeste v Py, kdyz to mod
--- zvladne plne autonomne?" -- this module's own header docstring originally
+-- watching a Python-side pre-stock fix land: "I thought the pre-stocking would be
+-- part of that task-pool job! Why split the task into sub-steps still in Py, when
+-- the mod can handle it fully autonomously?" -- this module's own header docstring originally
 -- scoped procurement OUT of the mod deliberately, back when neither recipe
 -- resolution nor a hand-craftable check existed anywhere in this repo. Both now
 -- exist as real, callable Lua (resolve_recipe below, mirroring companion.py's
@@ -511,7 +511,8 @@ local function run_pick_orientation(c, t, step)
     end
   end
   -- Self-collision fix (2026-07-13, universal own-body-blocks-own-build fix, Zdendys:
-  -- "companion nesmi nikdy blokovat vlastni stavbu, at je to jakakoli budova"): every
+  -- "the companion must never block her own construction, whatever the building
+  -- is"): every
   -- can_place_entity probe inside run_pick_orientation_checks (both the primary and the
   -- secondary candidate, every offset) sees the companion's OWN character body as an
   -- ordinary collision entity -- if she is currently standing on/near the candidate area

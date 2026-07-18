@@ -122,9 +122,9 @@ local function valid_companion(id)
   return c and c.entity and c.entity.valid and c
 end
 
--- Universal stale-progress backstop threshold (2026-07-06, Zdendys: "to bychom mohli
--- udelat jako obecny fallback na vsechny akce" -- then: "jestli uz tam nekde je 600
--- ticku, tak dame taky 600!", matching tick_harvest_queues's own existing stale-progress
+-- Universal stale-progress backstop threshold (2026-07-06, Zdendys: "we could do
+-- that as a generic fallback for all actions" -- then: "if there's already 600
+-- ticks somewhere, let's use 600 too!", matching tick_harvest_queues's own existing stale-progress
 -- constant below, for one consistent number project-wide).
 local UNIVERSAL_STALE_TICKS = 600
 
@@ -140,7 +140,7 @@ local function process_queue(queue_name, processor)
       to_remove[#to_remove + 1] = cid
     else
       -- UNIVERSAL stale-progress backstop, ONE level above every queue type's own
-      -- specific checks (2026-07-06, Zdendys: "obecny fallback na vsechny akce" -- if
+      -- specific checks (2026-07-06, Zdendys: "a generic fallback for all actions" -- if
       -- NEITHER the companion's total inventory item count NOR its position has changed
       -- in UNIVERSAL_STALE_TICKS ticks, whatever this queue is doing isn't making real
       -- progress, regardless of queue type or the specific reason -- including cases
@@ -1123,9 +1123,9 @@ function M.tick_gather_queues()
       if c.entity.selected ~= res then
         q.select_fail_ticks = (q.select_fail_ticks or 0) + TICK_INTERVAL
         if q.select_fail_ticks > SELECT_FAIL_TICKS then
-          -- OBSTRUCTION-CLEAR (2026-07-17, Zdendys's own direct instruction: "big-rock
-          -- entity ma byt automaticky eliminovana - vytezena, kdyz je v dosahu
-          -- companiona, je to stejna metoda jako u stromu!" -- mirrors
+          -- OBSTRUCTION-CLEAR (2026-07-17, Zdendys's own direct instruction: "a
+          -- big-rock entity should be automatically eliminated -- mined -- when
+          -- within the companion's reach, it's the same method as with trees!" -- mirrors
           -- clear_build_area's own tree/simple-entity clearing exactly (same
           -- type filter, same instant obs.mine{inventory=...}), applied here to the
           -- MINING-select-fail case instead of building placement. Live-caught: a
@@ -1767,8 +1767,8 @@ function M.tick_build_queues()
           return false
         end
         -- SELF-COLLISION STEP-AWAY (2026-07-13, universal own-body-blocks-own-build
-        -- fix, Zdendys: "companion nesmi nikdy blokovat vlastni stavbu, at je to
-        -- jakakoli budova"): determine whether her own body is (one of) the actual
+        -- fix, Zdendys: "the companion must never block her own construction,
+        -- whatever the building is"): determine whether her own body is (one of) the actual
         -- blocker(s) by temporarily teleporting her far away (same teleport-and-
         -- restore technique already proven for ignore_entities_at/
         -- clear_natural_obstacles in task_pool.lua) and re-running the SAME

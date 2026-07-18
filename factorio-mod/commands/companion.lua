@@ -22,8 +22,8 @@ commands.add_command("fac_companion_list", nil, function(cmd)
 end)
 
 -- Standard new-player starting kit (2026-07-06, Zdendys live-checked his own actual
--- Space Age crash-landing start and gave the exact, authoritative list: "pri spusteni
--- ma postava pouze: wood=1, pistol=1, firearm-magazine=2, burner-mining-drill=1,
+-- Space Age crash-landing start and gave the exact, authoritative list: "at start
+-- the character only has: wood=1, pistol=1, firearm-magazine=2, burner-mining-drill=1,
 -- stone-furnace=1" -- base game's own freeplay.lua created_items() has DIFFERENT counts
 -- (iron-plate=8, firearm-magazine=10) and includes iron-plate at all, but that script is
 -- not what Space Age's crash-landing scenario actually uses -- this exact list is

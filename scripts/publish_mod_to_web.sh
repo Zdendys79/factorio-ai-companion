@@ -3,8 +3,8 @@
 # modname_version.zip containing a top-level modname_version/ folder) and sync it to
 # the website download folder, removing OLDER versions of THIS mod only.
 #
-# Zdendys (2026-07-06): "Tak se rovnou pust do toho nastroje, ktery bude nove verze
-# modu na web ukladat hned jak vzniknou a stare mazat." -- runs standalone (manual
+# Zdendys (2026-07-06): "Then go ahead and get started on that tool that will save
+# new mod versions to the web as soon as they're created, and delete the old ones." -- runs standalone (manual
 # republish) or via .githooks/post-commit (automatic, right after any commit that
 # touches factorio-mod/, since the pre-commit hook already bumps info.json's version
 # on every such commit).

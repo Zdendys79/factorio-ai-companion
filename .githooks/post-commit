@@ -1,8 +1,8 @@
 #!/bin/bash
 # Post-commit hook (TRACKED in the repo, same core.hooksPath wiring as pre-commit).
 #
-# Zdendys (2026-07-06): "nastroj, ktery bude nove verze modu na web ukladat hned jak
-# vzniknou a stare mazat" -- whenever a commit touches factorio-mod/ (which means
+# Zdendys (2026-07-06): "a tool that will save new mod versions to the web as soon
+# as they're created, and delete the old ones" -- whenever a commit touches factorio-mod/ (which means
 # pre-commit already bumped info.json's version as part of THIS commit), repackage
 # and republish to the website sync folder automatically, no manual step to remember.
 #
