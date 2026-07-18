@@ -1,4 +1,23 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.101
+Date: 2026-07-18
+  Bugfixes:
+    - start_ensure_item_action's raw-resource fallback (task_pool.lua) only ever checked
+      the companion's OWN carried inventory before hand-mining, never a nearby chest --
+      live-caught: the companion hand-mined stone right next to a FULL (800/16 slots)
+      stone chest sitting immediately adjacent to her own drill. Fixed: before falling
+      back to hand-mining, pull from the nearest container within 5 tiles (mirrors
+      fac_building_empty's own chest-extraction idiom exactly, including its nearest-not-
+      first tie-break), only gathering whatever deficit remains after that.
+    - Both the new chest-pull helper above and the pre-existing fac_building_empty
+      (building.lua) ignored LuaEntity.insert()'s own return value, assuming the full
+      removed amount was always successfully placed into the companion's inventory --
+      independent review caught this: a genuinely full companion inventory would
+      silently LOSE the un-placed remainder (already removed from the source
+      container, never actually held) and, for the new ensure_item path, could report
+      a false "satisfied" to the task pool. Both now use insert()'s real return value
+      and put back whatever didn't fit.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.26
 Date: 2026-07-06
   (0.16.26 is a changelog-only update -- adds this file's own missing 0.16.20-0.16.25

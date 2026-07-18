@@ -151,6 +151,13 @@ local WOOD_CHOP_MAX_TREES = 10      -- mirrors _chop_wood's own max_trees bound 
 -- shape, applied to the gather path too instead of leaving it as the one
 -- ensure_item sub-path with no give-up condition.
 local ENSURE_ITEM_GATHER_MAX_ATTEMPTS = 5
+-- ENSURE_ITEM_CONTAINER_SEARCH_RADIUS (2026-07-18, Zdendys live-caught:
+-- ensure_item_bypasses_nearby_chest bug -- watched the companion hand-mine
+-- stone right next to a FULL 800-stone chest): mirrors fac_building_empty's
+-- own radius=5 chest-extraction convention (building.lua) -- a proven,
+-- already-tuned distance for "container sitting right next to whatever the
+-- companion is currently doing", not a new guess.
+local ENSURE_ITEM_CONTAINER_SEARCH_RADIUS = 5
 
 -- Real Factorio recipe data for `item`, or nil if `item` has no recipe at all
 -- (every raw/minable resource -- ore, coal, stone, wood -- has zero recipe
@@ -175,6 +182,53 @@ local function resolve_recipe(item)
     if HAND_CRAFTABLE_CATEGORIES[cat] then hand_craftable = true; break end
   end
   return {ingredients = ingredients, yield = yield, hand_craftable = hand_craftable}
+end
+
+-- Extracts up to `deficit` of `item` from the NEAREST container (chest) within
+-- ENSURE_ITEM_CONTAINER_SEARCH_RADIUS, inserting straight into the companion's
+-- own inventory. Returns the amount actually pulled (0 if nothing nearby has
+-- any). Mirrors fac_building_empty's own chest-extraction idiom exactly
+-- (building.lua's defines.inventory.chest lookup + nearest-not-first tie-
+-- break -- a resource tile can sit exactly as close as a real container in a
+-- tight layout, same class of bug that fix already closed once elsewhere).
+--
+-- Fix for ensure_item_bypasses_nearby_chest_2026_07_18 (Zdendys live-caught:
+-- watched the companion hand-mine stone right next to a FULL 800-stone
+-- chest) -- called from start_ensure_item_action's raw-resource branch below,
+-- BEFORE falling back to queues.start_gather's hand-mining path.
+local function pull_from_nearby_container(c, item, deficit)
+  if deficit <= 0 then return 0 end
+  local candidates = c.entity.surface.find_entities_filtered{
+    position = c.entity.position, radius = ENSURE_ITEM_CONTAINER_SEARCH_RADIUS,
+    type = {"container", "logistic-container"}}
+  local target, bd = nil, math.huge
+  for _, e in ipairs(candidates) do
+    if e.valid then
+      local dx, dy = e.position.x - c.entity.position.x, e.position.y - c.entity.position.y
+      local d = dx * dx + dy * dy
+      if d < bd then bd, target = d, e end
+    end
+  end
+  if not target then return 0 end
+  local inv = target.get_inventory(defines.inventory.chest)
+  if not inv then return 0 end
+  local av = inv.get_item_count(item)
+  if av <= 0 then return 0 end
+  local rm = inv.remove{name = item, count = math.min(deficit, av)}
+  if rm <= 0 then return 0 end
+  -- insert()'s own return value MUST be used, not assumed to equal `rm`
+  -- (independent-review finding, 2026-07-18): if the companion's own
+  -- inventory can't hold the full amount (e.g. genuinely full), insert()
+  -- silently places less -- returning `rm` unchecked would both lose the
+  -- un-placed remainder (already removed from the chest, never actually
+  -- held) AND let the caller's deficit arithmetic report "satisfied" when
+  -- the companion doesn't actually have enough on hand yet. Put back
+  -- whatever didn't fit instead of losing it.
+  local ins = c.entity.insert{name = item, count = rm}
+  if ins < rm then
+    inv.insert{name = item, count = rm - ins}
+  end
+  return ins
 end
 
 -- Starts exactly ONE concrete action toward satisfying the need at the TOP of
@@ -267,13 +321,23 @@ local function start_ensure_item_action(c, cid, t)
     -- (a real, previously-observed scenario for coal specifically) would retry
     -- forever with no failure signal. Counts per-item so a task needing several
     -- DIFFERENT raw resources tracks each independently.
+    local deficit = need.count - inv.get_item_count(need.item)
+    -- Check a nearby container FIRST (2026-07-18 fix, see pull_from_nearby_
+    -- container's own docstring above) -- only fall back to hand-mining for
+    -- whatever a chest didn't already cover.
+    local pulled = pull_from_nearby_container(c, need.item, deficit)
+    if pulled > 0 then
+      deficit = deficit - pulled
+    end
+    if deficit <= 0 then
+      return "satisfied"
+    end
     t.ctx.gather_attempts = t.ctx.gather_attempts or {}
     t.ctx.gather_attempts[need.item] = (t.ctx.gather_attempts[need.item] or 0) + 1
     if t.ctx.gather_attempts[need.item] > ENSURE_ITEM_GATHER_MAX_ATTEMPTS then
       return nil, "could not gather enough " .. need.item .. " after " ..
         ENSURE_ITEM_GATHER_MAX_ATTEMPTS .. " attempts (likely scarce/unreachable)"
     end
-    local deficit = need.count - inv.get_item_count(need.item)
     local r = queues.start_gather(cid, need.item, deficit, nil, true)
     if r.error then return nil, r.error end
     return "gather"
