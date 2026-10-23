@@ -1,4 +1,23 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.134
+Date: 2026-10-23
+  Bugfixes:
+    - Item duplication when clearing a build site: a lying item stack that only partly fit
+      the companion's inventory was inserted AND left on the ground in full
+      (fac_building_place in building.lua, and clear_build_area in queues_build.lua used
+      by every task-pool "place" step). The ground stack now shrinks by the amount picked
+      up, same as fac_item_pick. Live-verified: inventory+ground total stays 110 -> 110
+      (was 110 -> 120).
+    - fac_building_fuel never fuelled burner inserters: its type filter listed
+      "burner-inserter", which is an entity name, not a type (real type: "inserter").
+      Now uses "inserter", counts only entities that actually have a fuel inventory (so
+      "No burner nearby" is still reported when only electric inserters are around), and
+      fuels machines before inserters, each nearest-first, so a nearby inserter can't
+      take the fuel meant for the drill/furnace. Live-verified for all three cases.
+  Note:
+    - Versions 0.16.102 - 0.16.133 were published without changelog entries; see the
+      repository's git history for those changes.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.101
 Date: 2026-07-18
   Bugfixes:

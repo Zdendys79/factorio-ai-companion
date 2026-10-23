@@ -109,7 +109,10 @@ local function clear_build_area(surf, entity_name, position, inv)
   for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
     if it.valid and it.stack and it.stack.valid_for_read then
       local moved = inv.insert(it.stack)
-      if moved >= it.stack.count then it.destroy() end
+      -- PARTIAL PICKUP (2026-10-23): shrink the lying stack by what was moved -- see
+      -- building.lua's fac_building_place for the duplication this closes.
+      if moved >= it.stack.count then it.destroy()
+      elseif moved > 0 then it.stack.count = it.stack.count - moved end
     end
   end
 end
