@@ -1,4 +1,25 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.135
+Date: 2026-10-23
+  Changes:
+    - Gather blacklisting is single-tile everywhere now: the generic stall backstop
+      (queues_core.lua) still swept every resource tile within radius 15 in both of its
+      gather recovery branches, while the gather handlers themselves were narrowed to one
+      tile on 2026-07-21 -- so a backstop stall could still condemn reachable ore. In the
+      "mine" state it now blacklists the tile actually being mined (last_res_key), not the
+      original approach target.
+    - fac_companion_inventory returns crafting_queue_size (the companion's own hand-craft
+      queue length). The Python side used to read it with a raw console command, which
+      cannot see the mod's storage and failed on every call.
+  Bugfixes:
+    - fac_companion_inventory with x,y (another entity's inventory) still read Factorio
+      2.x get_contents() as the old 1.x name->count map, returning garbage entries, and
+      could list one inventory twice under two labels. Fixed both.
+  Removed:
+    - Never-called internals: stop_build, stop_belt_connect, the queues.lua
+      start_mining_next re-export, and the write-only inv_snapshot field (which would also
+      have indexed nil if the harvest queue had already been dropped).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.134
 Date: 2026-10-23
   Bugfixes:

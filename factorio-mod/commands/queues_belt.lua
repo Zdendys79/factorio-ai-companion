@@ -220,11 +220,4 @@ function M.get_belt_connect_status(cid)
   return {active = true, tiles_placed = q.tiles_placed, tiles_total = #q.path}
 end
 
-function M.stop_belt_connect(cid)
-  if not storage.belt_queues[cid] then return {stopped = false} end
-  storage.walking_queues[cid] = nil
-  storage.belt_queues[cid] = nil
-  return {stopped = true}
-end
-
 return M
