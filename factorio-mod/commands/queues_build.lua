@@ -475,11 +475,4 @@ function M.get_build_status(cid)
   }
 end
 
-function M.stop_build(cid)
-  if not storage.build_queues[cid] then return {stopped = false} end
-  storage.walking_queues[cid] = nil
-  storage.build_queues[cid] = nil
-  return {stopped = true}
-end
-
 return M

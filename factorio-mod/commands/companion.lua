@@ -294,9 +294,19 @@ commands.add_command("fac_companion_inventory", nil, function(cmd)
       -- furnace_source/furnace_result are stale 1.x defines removed in Factorio 2.0's
       -- inventory unification (nil here; get_inventory(nil) throws) -- crafter_input/
       -- crafter_output are the correct 2.0+ names for both furnaces and assemblers.
+      -- seen (2026-10-23, independent review): several of these defines can share the
+      -- same numeric index (e.g. chest and fuel), which listed one inventory twice under
+      -- two labels -- report each real LuaInventory (by its own .index) only once.
+      local seen = {}
       for _, it in ipairs({{defines.inventory.chest, "chest"}, {defines.inventory.crafter_input, "in"}, {defines.inventory.crafter_output, "out"}, {defines.inventory.fuel, "fuel"}}) do
         local inv = t.get_inventory(it[1])
-        if inv then for name, count in pairs(inv.get_contents()) do items[#items + 1] = {name = name, count = count, slot = it[2]} end end
+        if inv and seen[inv.index] then inv = nil end
+        if inv then seen[inv.index] = true end
+        -- Factorio 2.0 get_contents() returns an ARRAY of {name, quality, count} (2026-10-23
+        -- fix: this branch still iterated it as the 1.x {name=count} map, so every entry
+        -- came out as name=<index>, count=<table>) -- same shape the companion branch below
+        -- already reads correctly.
+        if inv then for _, item in pairs(inv.get_contents()) do items[#items + 1] = {name = item.name, count = item.count, quality = item.quality, slot = it[2]} end end
       end
       u.json_response({id = id, entity = t.name, items = items})
     else
@@ -314,8 +324,15 @@ commands.add_command("fac_companion_inventory", nil, function(cmd)
       -- e.g. copper-plate:2800 (28 full stacks) counts as used=1 there, making
       -- "used >= slots" useless for detecting this. count_empty_stacks() is the
       -- real, stack-aware signal LuaInventory provides for "is there room left".
+      -- crafting_queue_size (2026-10-23): the companion's own hand-craft queue length.
+      -- Python's craft_wait used to read it via a raw `/c storage.companions[cid]...`
+      -- console command -- which runs in the LEVEL script context where the mod's
+      -- `storage` doesn't exist, so it failed on EVERY call ("attempt to index field
+      -- 'companions' (a nil value)" -- the long-unexplained task #48 error) and its
+      -- "queue empty -> stop waiting" early exit never worked.
       u.json_response({id = id, items = items, slots = #inv, used = #items,
-                        empty_stacks = inv.count_empty_stacks()})
+                        empty_stacks = inv.count_empty_stacks(),
+                        crafting_queue_size = c.entity.crafting_queue_size})
     end
   end)
 end)

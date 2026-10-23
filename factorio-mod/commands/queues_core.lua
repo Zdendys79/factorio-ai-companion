@@ -26,9 +26,8 @@ M.MINE_ADJACENT_RANGE = 2
 -- private _tile_key, which several OTHER queue types also need for their own blacklists,
 -- e.g. FUEL GROUP's find_next_burner/q.blacklist below). queues.lua keeps its own alias
 -- (`local _tile_key = core.tile_key`) so GATHER's own not-yet-split call sites keep
--- working unchanged; process_queue's APPROACH-STALL-RESPAWN recovery above still inlines
--- the same expression itself (see its own comment) rather than calling this, to avoid
--- touching that already-verified code for an unrelated batch.
+-- working unchanged; process_queue's gather backstop below calls it too (2026-10-23 --
+-- it used to inline the same expression).
 function M.tile_key(pos) return math.floor(pos.x) .. "," .. math.floor(pos.y) end
 
 -- Universal stale-progress backstop threshold (2026-07-06, Zdendys: "we could do
@@ -197,9 +196,9 @@ function M.process_queue(queue_name, processor)
         -- approach_deadline_vs_universal_stale_gap.md for the full analysis. Deliberately
         -- NOT touching either timeout constant (that tuning may have other reasons not
         -- fully understood) -- only mirroring each queue type's OWN existing blacklist
-        -- sweep here, before the queue is deleted below. _tile_key() is defined further
-        -- down this file (after this function), so its expression is inlined rather than
-        -- called, to avoid a forward-reference to a not-yet-declared local.
+        -- blacklist here, before the queue is frozen/deleted below. Keys come from
+        -- M.tile_key (defined at the top of this file), the exact function behind
+        -- queues_gather.lua's _tile_key, so both blacklist the same key format.
         local recovered_via_respawn = false
         if queue_name == "gather_queues" and q.state == "approach" and q.entity_pos and q.resource then
           -- APPROACH-STALL-RESPAWN (2026-07-13, live-caught: a FRESH episode's very first
@@ -225,9 +224,8 @@ function M.process_queue(queue_name, processor)
           -- no freeze) instead of immediately condemning the whole neighborhood -- q.
           -- _approach_stall_respawned (scoped to this one queue/target, not persisted
           -- across separate gather() calls) guarantees this fires at most once per target,
-          -- so a genuinely permanent obstruction still gets the full radius=15 blacklist +
-          -- freeze exactly as before if the SAME target stalls again after the respawn --
-          -- preserving the original fix's intent in full.
+          -- so a genuinely permanent obstruction still gets blacklisted if the SAME target
+          -- stalls again after the respawn (single tile since 2026-10-23, see below).
           if not q._approach_stall_respawned and try_respawn(cid, c) then
             q._approach_stall_respawned = true
             recovered_via_respawn = true
@@ -236,26 +234,27 @@ function M.process_queue(queue_name, processor)
             u.log_error(string.format(
               "gather_queues generic-backstop: approach toward '%s' at (%.1f,%.1f) stalled " ..
               "for companion %d -- respawned its entity and retrying the SAME target once " ..
-              "before blacklisting the whole neighborhood", q.resource,
+              "before blacklisting that tile", q.resource,
               q.entity_pos.x, q.entity_pos.y, cid), "gather_queue")
           else
-            -- Mirrors the "approach" state's own approach_deadline handler exactly
-            -- (radius=15, same "whole patch, not just one tile" reasoning documented there).
+            -- Same single-tile rule as the "approach" state's own approach_deadline
+            -- handler, which was NARROWED to the one candidate tile on 2026-07-21
+            -- (Zdendys's own decision, see queues_gather.lua); this backstop copy kept the
+            -- old radius=15 "whole neighborhood" sweep until 2026-10-23 (Zdendys: unify on
+            -- 1 tile), so a backstop stall still mass-condemned reachable tiles. One
+            -- difference stays: the handler goes straight back to "find" in the same
+            -- gather() call, while this backstop freezes the queue as "done" -- so each
+            -- unreachable tile it hits costs a whole gather() round trip (accepted
+            -- tradeoff of the 1-tile rule; Python's exclude folding carries the tile).
             q.blacklist = q.blacklist or {}
-            local added = 0
-            for _, e in ipairs(c.entity.surface.find_entities_filtered{
-              name = q.resource, position = q.entity_pos, radius = 15}) do
-              local key = math.floor(e.position.x) .. "," .. math.floor(e.position.y)
-              if not q.blacklist[key] then added = added + 1 end
-              q.blacklist[key] = true
-            end
+            local key = M.tile_key(q.entity_pos)
+            local added = q.blacklist[key] and 0 or 1
+            q.blacklist[key] = true
             -- Logged (2026-07-12, per this project's "log every silent failure" standing
-            -- principle): this recovery sweep would otherwise be entirely invisible --
-            -- the queue is deleted in this SAME tick right after, so no status poll
-            -- ever observe q.blacklist growing here the normal way.
+            -- principle): this recovery would otherwise be entirely invisible.
             u.log_error(string.format(
               "gather_queues generic-backstop recovery: blacklisted %d tile(s) of '%s' " ..
-              "around entity_pos (%.1f,%.1f) before force-stop -- its own approach_deadline " ..
+              "at entity_pos (%.1f,%.1f) before force-stop -- its own approach_deadline " ..
               "(tick %s) never got a chance to run (this generic backstop fires at " ..
               "%d ticks, always sooner)%s", added, q.resource,
               q.entity_pos.x, q.entity_pos.y, tostring(q.approach_deadline), UNIVERSAL_STALE_TICKS,
@@ -282,36 +281,38 @@ function M.process_queue(queue_name, processor)
           -- ticks where mining_state.mining is actually true; if selection itself never
           -- sticks in a way SELECT_FAIL_TICKS's own check doesn't catch either, NEITHER
           -- specific mechanism ever engages, and this generic 600-tick catch-all is the
-          -- only thing left to recover at all. Mirrors the "approach" branch's own
-          -- radius=15 "whole patch, not just one tile" blacklist sweep exactly (same
-          -- reasoning: an adjacent, structurally-identical resource tile is just as
-          -- likely to hit the identical defect) -- deliberately NOT adding the
+          -- only thing left to recover at all. Blacklists the single stalled tile only
+          -- (2026-10-23, Zdendys: unify on 1 tile -- was a radius=15 "whole patch" sweep,
+          -- the same mass-condemnation risk the gather handlers dropped on 2026-07-21;
+          -- see the "approach" branch above) -- deliberately NOT adding the
           -- "approach" branch's own respawn-first step here too: that mitigation was
           -- validated for a DIFFERENTLY-diagnosed, walking-specific engine defect
           -- (Mode A/B select-fail), not this mining-adjacent stall, so it is not
           -- assumed to apply here without its own live confirmation.
+          -- WHICH tile (2026-10-23, independent-review finding): in "mine" state the tile
+          -- actually being mined is the re-derived `res` (q.last_res_key), which can differ
+          -- from the original approach target q.entity_pos -- the gather handlers key on
+          -- res for exactly that reason (queues_gather.lua). The old radius-15 sweep
+          -- covered res by accident; a single tile must be the right one.
           q.blacklist = q.blacklist or {}
-          local added = 0
-          for _, e in ipairs(c.entity.surface.find_entities_filtered{
-            name = q.resource, position = q.entity_pos, radius = 15}) do
-            local key = math.floor(e.position.x) .. "," .. math.floor(e.position.y)
-            if not q.blacklist[key] then added = added + 1 end
-            q.blacklist[key] = true
-          end
+          local key = q.last_res_key or M.tile_key(q.entity_pos)
+          local added = q.blacklist[key] and 0 or 1
+          q.blacklist[key] = true
           u.log_error(string.format(
             "gather_queues generic-backstop recovery (mine state): blacklisted %d " ..
-            "tile(s) of '%s' around entity_pos (%.1f,%.1f) before force-stop -- " ..
+            "tile(s) of '%s' (key %s, approach target (%.1f,%.1f)) before force-stop -- " ..
             "queues_gather.lua's own MINE_STUCK_TICKS never got a chance to recover " ..
             "this stall (MINE_STUCK_TICKS is a queues_gather.lua-local, not visible " ..
             "here -- this module loads before it, see this file's own Registration " ..
             "indirection comment above)",
-            added, q.resource, q.entity_pos.x, q.entity_pos.y),
+            added, q.resource, key, q.entity_pos.x, q.entity_pos.y),
             "gather_queue")
         elseif queue_name == "fuel_queues" and q.state == "approach" and q.target_key then
           -- fuel_queues' own "approach" handler blacklists only the single target_key
           -- (not a radius sweep): unlike a resource patch, a burner machine is one
           -- isolated entity, not part of a cluster of identical adjacent tiles -- mirror
-          -- THAT shape exactly, not gather_queues' radius=15 sweep.
+          -- THAT shape exactly (gather_queues' branches are single-tile too since
+          -- 2026-10-23).
           q.blacklist = q.blacklist or {}
           local was_new = not q.blacklist[q.target_key]
           q.blacklist[q.target_key] = true

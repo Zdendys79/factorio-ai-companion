@@ -32,7 +32,6 @@ M.get_mine_diag = gather.get_mine_diag
 M.start_build = build.start_build
 M.tick_build_queues = build.tick_build_queues
 M.get_build_status = build.get_build_status
-M.stop_build = build.stop_build
 
 -- FUEL GROUP (see queues_fuel.lua)
 M.start_fuel_group = fuel.start_fuel_group
@@ -41,7 +40,6 @@ M.get_fuel_status = fuel.get_fuel_status
 
 -- HARVEST + ORPHANED MINING SAFETY NET (see queues_harvest.lua)
 M.start_harvest = harvest.start_harvest
-M.start_mining_next = harvest.start_mining_next
 M.tick_harvest_queues = harvest.tick_harvest_queues
 M.get_harvest_status = harvest.get_harvest_status
 M.stop_harvest = harvest.stop_harvest
@@ -51,7 +49,8 @@ M.tick_orphan_mining_cleanup = harvest.tick_orphan_mining_cleanup
 M.start_belt_connect = belt.start_belt_connect
 M.tick_belt_queues = belt.tick_belt_queues
 M.get_belt_connect_status = belt.get_belt_connect_status
-M.stop_belt_connect = belt.stop_belt_connect
+-- (stop_build / stop_belt_connect / the start_mining_next re-export were removed
+-- 2026-10-23: never called from anywhere -- mod, Python or the TS MCP server.)
 
 -- CRAFT (see queues_craft.lua)
 M.start_craft = craft.start_craft

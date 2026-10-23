@@ -474,7 +474,7 @@ function M.tick_gather_queues()
           u.log_error(string.format(
             "gather_queues approach_deadline: approach toward '%s' at (%.1f,%.1f) stalled " ..
             "for companion %d -- respawned its entity and retrying the SAME target once " ..
-            "before blacklisting the whole neighborhood", q.resource,
+            "before blacklisting that tile", q.resource,
             q.entity_pos.x, q.entity_pos.y, cid), "gather_queue")
           return false
         end
