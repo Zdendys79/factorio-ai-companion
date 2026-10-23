@@ -72,7 +72,11 @@ commands.add_command("fac_building_place", nil, function(cmd)
         for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
           if it.valid and it.stack and it.stack.valid_for_read then
             local moved = c.entity.insert(it.stack)
-            if moved >= it.stack.count then it.destroy() end
+            -- PARTIAL PICKUP (2026-10-23): a partial insert must shrink the lying stack
+            -- by what was moved -- leaving it full DUPLICATED those items (in the
+            -- inventory AND still on the ground). Same as fac_item_pick (item.lua).
+            if moved >= it.stack.count then it.destroy()
+            elseif moved > 0 then it.stack.count = it.stack.count - moved end
           end
         end
         -- trees / rocks (simple-entity) blocking the footprint: MINE them (wood/stone into the
@@ -216,19 +220,39 @@ commands.add_command("fac_building_fuel", nil, function(cmd)
     -- "successfully" walked to, well past the old radius=3. Widened to 6 to cover that
     -- common case; fueling any other genuinely-nearby burner this catches is harmless
     -- by design (see the "fuel EVERY nearby burner" comment below).
-    local es = c.entity.surface.find_entities_filtered{position = c.entity.position, radius = 6, type = {"furnace", "boiler", "burner-inserter", "car", "locomotive", "mining-drill"}}
-    if #es == 0 then u.json_response({id = id, error = "No burner nearby"}); return end
-    -- Fuel EVERY nearby burner (not just es[1], whose order is arbitrary): in a tight
-    -- furnace row, fueling only the first leaves the others starved -> they stop smelting
-    -- and their input fills up (observed: copper furnace unfueled -> copper-ore stuck).
-    local ins = 0
-    for _, e in ipairs(es) do
-      if have - ins <= 0 then break end
+    -- "inserter", not "burner-inserter" (2026-10-23): the filter is by TYPE and
+    -- "burner-inserter" is an entity NAME, so burner inserters were never matched --
+    -- same bug task_pool.lua's fuel step already fixed (2026-07-28). Non-burner
+    -- inserters have no fuel inventory and are skipped by the `if fi` check below.
+    local found = c.entity.surface.find_entities_filtered{position = c.entity.position, radius = 6, type = {"furnace", "boiler", "inserter", "car", "locomotive", "mining-drill"}}
+    -- Only entities that actually HAVE a fuel inventory count (2026-10-23, independent
+    -- review): with "inserter" in the filter, electric inserters (no fuel inventory) would
+    -- otherwise suppress "No burner nearby" -- a string spatial_demo.py's dead-furnace
+    -- detection relies on (3 strikes -> drop a furnace position whose entity is gone).
+    local es = {}
+    for _, e in ipairs(found) do
       local fi = e.get_fuel_inventory()
-      if fi then
-        local r = fi.insert{name = fuel, count = math.min(amount, have - ins)}
-        if r > 0 then ins = ins + r end
-      end
+      if fi then es[#es + 1] = {e = e, fi = fi} end
+    end
+    if #es == 0 then u.json_response({id = id, error = "No burner nearby"}); return end
+    -- Machines before inserters, each group nearest-first (2026-10-23): the per-entity
+    -- budget is spent in this order, so a nearby burner-inserter must not soak up fuel
+    -- meant for the drill/furnace the companion walked to (the same failure task_pool.lua's
+    -- fuel step hit live on 2026-07-28 and fixed with a nearest-first sort).
+    local pos = c.entity.position
+    table.sort(es, function(a, b)
+      local ai, bi = a.e.type == "inserter", b.e.type == "inserter"
+      if ai ~= bi then return bi end
+      return u.distance(a.e.position, pos) < u.distance(b.e.position, pos)
+    end)
+    -- Fuel EVERY nearby burner (not just the first): in a tight furnace row, fueling only
+    -- the first leaves the others starved -> they stop smelting and their input fills up
+    -- (observed: copper furnace unfueled -> copper-ore stuck).
+    local ins = 0
+    for _, b in ipairs(es) do
+      if have - ins <= 0 then break end
+      local r = b.fi.insert{name = fuel, count = math.min(amount, have - ins)}
+      if r > 0 then ins = ins + r end
     end
     if ins > 0 then inv.remove{name = fuel, count = ins}; u.json_response({id = id, inserted = ins, fuel = fuel})
     else u.json_response({id = id, error = "Full"}) end
