@@ -316,7 +316,8 @@ end
 -- {x, y, dir} (dir = the direction of travel INTO that tile, nil for the start tile),
 -- or nil if no route was found within the search budget. On nil, a second string
 -- return value distinguishes WHY (2026-07-10, task #43 diagnostic follow-up):
--- "start-blocked" / "dest-blocked" / "budget-exhausted" -- callers that only capture
+-- "start-blocked" / "dest-blocked" / "unreachable" (2026-10-23: open list emptied) /
+-- "budget-exhausted" (MAX_NODES hit) -- callers that only capture
 -- one return value (`local path = pathfind.find_path(...)`) are unaffected, per Lua's
 -- own multi-return semantics (extra return values are simply discarded).
 function M.find_path(surf, from, to, force)
@@ -411,7 +412,13 @@ function M.find_path(surf, from, to, force)
       end
     end
   end
-  return nil, "budget-exhausted"   -- no path found within the search budget
+  -- 2026-10-23: an EMPTY open list means every tile reachable from the start (inside the
+  -- search box) was expanded without meeting the goal -- the start or the goal sits in an
+  -- enclosed pocket, and more MAX_NODES cannot help. It used to be reported as
+  -- "budget-exhausted" too, which made enclosed starts (live: a coal-belt end boxed in by
+  -- boiler fuel chests, failing in 2 ticks) indistinguishable from genuinely long searches.
+  if #open == 0 then return nil, "unreachable" end
+  return nil, "budget-exhausted"   -- node budget ran out before the goal was reached
 end
 
 return M
