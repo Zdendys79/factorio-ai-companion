@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.136
+Date: 2026-10-23
+  Changes:
+    - fac_belt_connect_start: a route the pathfinder cannot reach because every tile
+      reachable from the start inside its search box was searched (the start or the goal
+      sits in an enclosed pocket, or the only way round leaves the box) is now reported
+      as reason "unreachable" instead of "budget-exhausted".
+      "budget-exhausted" now only means the node budget (MAX_NODES) ran out, so the two
+      can be told apart in logs; error stays "no path" for both.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.135
 Date: 2026-10-23
   Changes:

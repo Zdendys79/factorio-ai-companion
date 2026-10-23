@@ -66,7 +66,8 @@ function M.start_belt_connect(cid, from_pos, to_pos)
       }
     else
       -- `reason` distinguishes WHY find_path failed (task #43 diagnostic follow-up,
-      -- 2026-07-10): "start-blocked" / "dest-blocked" / "budget-exhausted". Additive
+      -- 2026-07-10): "start-blocked" / "dest-blocked" / "unreachable" (2026-10-23) /
+      -- "budget-exhausted". Additive
       -- only -- `error` stays exactly "no path" so every existing caller checking
       -- `.get("error")` for truthiness is unaffected.
       return {error = "no path", reason = reason or "budget-exhausted"}
