@@ -8,7 +8,8 @@
 -- same proven pattern as _build_ore_drill_furnace) and places any INSERTERS itself via the
 -- existing fac_building_place/_rotate/fac_inserter_set_filter primitives. This command
 -- handles ONLY the one genuinely-new problem: routing a transport-belt corridor between two
--- already-chosen points, avoiding ore patches/water/buildings (pathfind.lua's A*), with an
+-- already-chosen points, avoiding water/buildings (pathfind.lua's A*; ore patches are
+-- ordinary ground, see pathfind.lua), with an
 -- underground-belt straight-line fallback (max 4 tiles, yellow tier) for a gap no walkable
 -- route crosses. No `material`/inserter-type param -- narrower than the original plan
 -- sketch (which had this command also place+type both end inserters); simplified during

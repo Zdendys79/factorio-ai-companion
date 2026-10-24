@@ -1,13 +1,18 @@
 -- AI Companion v0.9.0 - Belt-connection pathfinding (Stage 0.2, 2026-07-04)
--- A* over the tile grid between two points, avoiding resource-entity tiles (a belt
--- corridor must route AROUND an un-mined ore/coal/stone patch, never over it -- Zdendys:
--- "it should avoid all resource patches and water too") and anything else that blocks a
+-- A* over the tile grid between two points, avoiding anything that blocks a
 -- transport-belt (water, cliffs, existing buildings/trees/rocks -- delegated to the
 -- ENGINE's own surf.can_place_entity check rather than re-implementing collision rules,
 -- so it stays correct as the game's placement logic evolves), with a small turn-penalty
 -- so the result is a reasonably direct corridor, not a serpentine walk ("not just some
 -- zigzagging snake"). Bounded search area + node cap so a genuinely blocked/far target fails
 -- fast instead of burning the RCON command's time budget.
+--
+-- Resource tiles are ordinary ground: a belt may cross an ore/coal/stone patch (Zdendys
+-- 2026-10-24: "why shouldn't belts go over a resource patch?"). Until 0.16.136 is_blocked
+-- had a resource check meant to route around patches, but it queried the integer tile
+-- CORNER with radius 0.3 while resource entities sit at tile CENTRES -- live 2026-10-24 it
+-- matched 0 of 491 ore tiles, so it never blocked ore/coal/stone (only crude oil, whose
+-- collision box is large, could have matched) and was removed.
 local M = {}
 
 -- MAX_SEARCH_MARGIN raised 15->40 (2026-07-05, Zdendys live-caught: a diagnostic sweep of
@@ -195,15 +200,10 @@ local function make_is_blocked(surf, force)
     local key = tile_key(x, y)
     local cached = cache[key]
     if cached ~= nil then return cached end
-    local blocked
-    if surf.count_entities_filtered{position = {x, y}, radius = 0.3, type = "resource"} > 0 then
-      blocked = true
-    else
-      blocked = not surf.can_place_entity{
-        name = "transport-belt", position = {x, y},
-        direction = defines.direction.north, force = force
-      }
-    end
+    local blocked = not surf.can_place_entity{
+      name = "transport-belt", position = {x, y},
+      direction = defines.direction.north, force = force
+    }
     cache[key] = blocked
     return blocked
   end
@@ -333,7 +333,7 @@ function M.find_path(surf, from, to, force)
   -- so it needs its own explicit check for the same reason the destination tile does.
   if is_blocked(fx, fy) then return nil, "start-blocked" end
   -- Destination-blocked check (2026-07-10, task #43 diagnostic follow-up): without this,
-  -- a destination sitting on water/a resource/anything is_blocked rejects can NEVER be
+  -- a destination sitting on water/a building/anything is_blocked rejects can NEVER be
   -- added to `open` (it's only ever validated as a side effect of neighbor-expansion
   -- below), so the search silently exhausts the whole budget before returning nil --
   -- indistinguishable from a genuine "too far/obstacle-heavy" failure. Checking it here
@@ -393,9 +393,7 @@ function M.find_path(surf, from, to, force)
         local nx, ny = cur.x + d.dx, cur.y + d.dy
         if nx >= minx and nx <= maxx and ny >= miny and ny <= maxy then
           -- No endpoint exemption: the destination tile must be a genuinely valid belt
-          -- spot too (not ore/water/occupied), same as every other tile on the route --
-          -- otherwise a caller-requested endpoint sitting on a resource tile would let
-          -- the corridor terminate ON ore, contradicting the avoid-resource-tiles rule.
+          -- spot too (not water/occupied), same as every other tile on the route.
           if not is_blocked(nx, ny) then
             local turn_penalty = (cur.dir and cur.dir ~= d.dir) and 0.5 or 0
             local shore_penalty = near_water(nx, ny) and SHORE_PENALTY or 0
