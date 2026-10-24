@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.137
+Date: 2026-10-24
+  Changes:
+    - pathfind.lua: removed the resource-tile check from the belt pathfinder. It was meant
+      to route belts around ore patches, but it tested the tile corner while resource
+      entities sit at tile centres, so it never matched (0 of 491 ore tiles on a live map).
+      Belts could always cross ore, coal and stone; the code and comments now say so, and
+      those routes are unchanged. Only crude oil (a large collision box) may have matched
+      before -- belts may now cross oil fields too.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.136
 Date: 2026-10-23
   Changes:
