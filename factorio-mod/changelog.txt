@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.138
+Date: 2026-11-04
+  Changes:
+    - fac_building_remove: removes the entity of that name NEAREST to the given position,
+      and only if the position lies on that entity (its selection box plus 0.25 tiles);
+      otherwise "Not found". It took the first match within radius 1, in no particular
+      order; around a belt tile that radius also covers the 4 neighbouring belts, so
+      cleaning up a belt of a failed build -- or one that was never placed -- could mine a
+      working belt next to it. fac_building_rotate already picked the nearest entity.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.137
 Date: 2026-10-24
   Changes:

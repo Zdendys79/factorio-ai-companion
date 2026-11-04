@@ -110,7 +110,24 @@ commands.add_command("fac_building_remove", nil, function(cmd)
     if not x or not y then u.error_response("Invalid coordinates"); return end
     local es = c.entity.surface.find_entities_filtered{name = name, position = {x=x, y=y}, radius = 1, force = c.entity.force}
     if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
-    local t = es[1]
+    -- Nearest to the requested position, not es[1] (2026-11-04): radius 1 around a belt
+    -- tile also matches its 4 neighbours, and es[1] is in no particular order -- a cleanup
+    -- removing "our" stub belt could mine a network belt next to it instead.
+    local t, td = nil, nil
+    for _, e in ipairs(es) do
+      local d = (e.position.x - x) ^ 2 + (e.position.y - y) ^ 2
+      if not td or d < td then t, td = e, d end
+    end
+    -- ...and only if the position is on (or within 0.25 tiles of) that entity: when
+    -- nothing of that name is there, the nearest match is a neighbour, which a cleanup
+    -- must not mine. The margin keeps callers that pass a position slightly off the
+    -- entity's centre working (a snapped pipe up to ~0.6 off); a neighbouring 1x1
+    -- belt's box is 0.5 away from this tile's centre, so it never qualifies.
+    local bb, m = t.selection_box, 0.25
+    if x < bb.left_top.x - m or x > bb.right_bottom.x + m
+       or y < bb.left_top.y - m or y > bb.right_bottom.y + m then
+      u.json_response({id = id, error = "Not found"}); return
+    end
     if u.distance(c.entity.position, t.position) > 10 then u.json_response({id = id, error = "Too far"}); return end
     -- MINE the building (native): its real item + contents go into the companion inventory and the
     -- game removes it. Never fabricate the item + free-destroy (that minted an item from nothing and
