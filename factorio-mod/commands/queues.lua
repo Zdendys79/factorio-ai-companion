@@ -32,6 +32,7 @@ M.get_mine_diag = gather.get_mine_diag
 M.start_build = build.start_build
 M.tick_build_queues = build.tick_build_queues
 M.get_build_status = build.get_build_status
+M.clear_build_area = build.clear_build_area
 
 -- FUEL GROUP (see queues_fuel.lua)
 M.start_fuel_group = fuel.start_fuel_group

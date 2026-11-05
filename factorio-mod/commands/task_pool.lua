@@ -391,6 +391,27 @@ function M.tick()
               break
             end
           end
+          if not chosen and not active.candidates_cleared then
+            -- CLEAR FIRST, like a player would (2026-11-05, live-caught: a coal pair's
+            -- 2nd criss-cross inserter failed "no candidate position free" 3x on the only
+            -- free gap tile; Zdendys placed it by hand later without trouble). A lying
+            -- item-entity, a tree or a rock blocks can_place_entity (live A/B test
+            -- 2026-07-27, see queues_build.lua's clear_build_area) -- start_build clears
+            -- those from the footprint, but this pre-check ran BEFORE start_build ever
+            -- got the chance. Clear each candidate's footprint once (mined into the
+            -- companion's inventory, never destroyed) when it is within build reach,
+            -- then re-check on the next tick.
+            active.candidates_cleared = true
+            local inv = c.entity.get_main_inventory()
+            local reach = c.entity.build_distance or 10
+            for _, cand in ipairs(step.candidates) do
+              if u.distance(c.entity.position, cand) <= reach then
+                queues.clear_build_area(surf, step.entity, {x = cand.x, y = cand.y}, inv,
+                                        u.dir_map[cand.dir or 0])
+              end
+            end
+            goto continue
+          end
           if not chosen then
             -- Bounded retry across ticks (2026-07-08, task #35) instead of failing on
             -- the FIRST check: live-observed "no candidate position free" 3x across
@@ -837,6 +858,7 @@ function M.get_diag(cid)
       approach_deadline = active.approach_deadline,
       ticks_until_deadline = active.approach_deadline and (active.approach_deadline - game.tick) or nil,
       candidate_retry_deadline = active.candidate_retry_deadline,
+      candidates_cleared = active.candidates_cleared,
     } or nil,
     walking_queue = storage.walking_queues and storage.walking_queues[cid] and {
       target = storage.walking_queues[cid].target,

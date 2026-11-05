@@ -82,13 +82,25 @@ end
 -- drain (belt_connect_ops.py, commit 5c73768) -- this was the third, still-unfixed
 -- code path for the identical bug class: task_pool.lua's "place" step routes
 -- through queues.start_build, whose clearing state only cleared trees/rocks.
-local function clear_build_area(surf, entity_name, position, inv)
+--
+-- direction (2026-11-05, independent review): the prototype's collision_box is the
+-- NORTH-facing one; for a non-square entity turned east/west (a 3x5 steam engine) or
+-- an off-centre box, both corners are turned by the build direction's quarter turns
+-- (clockwise, y down: (x,y) -> (-y,x)) so the cleared area matches the real footprint.
+-- nil direction = north (unchanged behaviour for any caller that does not pass it).
+local function clear_build_area(surf, entity_name, position, inv, direction)
   local proto = prototypes.entity[entity_name]
   if not proto or not proto.collision_box then return end
   local bb = proto.collision_box
+  local x1, y1, x2, y2 = bb.left_top.x, bb.left_top.y, bb.right_bottom.x, bb.right_bottom.y
+  for _ = 1, math.floor((direction or 0) / 4 + 0.5) % 4 do
+    x1, y1, x2, y2 = -y1, x1, -y2, x2
+  end
+  local lx, rx = math.min(x1, x2), math.max(x1, x2)
+  local ty, by = math.min(y1, y2), math.max(y1, y2)
   local area = {
-    {x = position.x + bb.left_top.x - 0.5, y = position.y + bb.left_top.y - 0.5},
-    {x = position.x + bb.right_bottom.x + 0.5, y = position.y + bb.right_bottom.y + 0.5}
+    {x = position.x + lx - 0.5, y = position.y + ty - 0.5},
+    {x = position.x + rx + 0.5, y = position.y + by + 0.5}
   }
   local obstacles = surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}
   for _, obs in ipairs(obstacles) do
@@ -151,6 +163,10 @@ local MAX_SELF_COLLISION_STEP_AWAY = 2
 
 -- Start a smart build: auto-approach + auto-clear + place
 -- State machine: approaching -> clearing -> building -> done
+-- Exported (2026-11-05) for task_pool.lua's "place" candidates pre-check, which must
+-- clear a candidate's footprint the same way before deciding it is blocked.
+M.clear_build_area = clear_build_area
+
 function M.start_build(cid, entity_name, position, direction, mirror)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
@@ -265,7 +281,7 @@ function M.tick_build_queues()
 
     -- CLEARING: remove trees/rocks from build footprint
     if q.state == "clearing" then
-      clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory())
+      clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory(), q.direction)
       q.state = "building"
       q.tick_start = game.tick
       -- Fresh collision-retry window for THIS building attempt (2026-07-13): without
@@ -325,7 +341,7 @@ function M.tick_build_queues()
           -- same tile between retries (e.g. a full-inventory mine dropping the
           -- excess right back where it was picked up), and a passive wait alone
           -- would never clear it before the 60-tick budget runs out.
-          clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory())
+          clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory(), q.direction)
           return false
         end
         -- SELF-COLLISION STEP-AWAY (2026-07-13, universal own-body-blocks-own-build

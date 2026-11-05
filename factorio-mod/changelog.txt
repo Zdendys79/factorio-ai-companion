@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.139
+Date: 2026-11-05
+  Changes:
+    - Task pool "place" step with candidate positions: when no candidate passes
+      can_place_entity, the footprint of every candidate within build reach is first
+      cleared the way start_build already clears it -- loose items picked up, trees and
+      rocks mined, all into the companion's inventory -- and the check runs again on the
+      next tick. A lying item, tree or rock used to fail the step with "no candidate
+      position free" before start_build's own clearing could run (a coal pair's second
+      criss-cross inserter failed 3 times on the only free tile between the drills).
+    - clear_build_area turns the prototype's (north-facing) collision box by the build
+      direction before clearing: a 3x5 steam engine turned east/west, or an off-centre
+      box, had its long end left uncleared (start_build's clearing included).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.138
 Date: 2026-11-04
   Changes:
