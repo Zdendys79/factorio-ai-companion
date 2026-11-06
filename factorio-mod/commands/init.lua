@@ -189,13 +189,24 @@ end
 -- false so a caller COULD log that distinctly if it ever mattered, though no
 -- current caller does).
 local RARE_SYMPTOM_SAVE_COOLDOWN_TICKS = 3600  -- ~60s at 60 UPS, regardless of game.speed
+-- CAPPED per code per game (2026-11-06, factorio-ai): RARE-WALK-01 ("no path") is not
+-- rare at all -- a save every cooldown, ~150 saves a 560k-tick run, 7229 saves / 7.4 GB
+-- in rare_symptoms/, each one pausing the server (RCON timeouts). A few saves of a
+-- code are enough for the later review.
+local RARE_SYMPTOM_MAX_SAVES = 3
 function M.rare_symptom_save(code)
   storage.rare_symptom_last_save = storage.rare_symptom_last_save or {}
+  storage.rare_symptom_save_count = storage.rare_symptom_save_count or {}
+  local count = storage.rare_symptom_save_count[code] or 0
+  if count >= RARE_SYMPTOM_MAX_SAVES then
+    return false
+  end
   local last = storage.rare_symptom_last_save[code]
   if last and (game.tick - last) < RARE_SYMPTOM_SAVE_COOLDOWN_TICKS then
     return false
   end
   storage.rare_symptom_last_save[code] = game.tick
+  storage.rare_symptom_save_count[code] = count + 1
   game.server_save("rare_symptoms/" .. code .. "/" .. code .. "_" .. game.tick)
   return true
 end

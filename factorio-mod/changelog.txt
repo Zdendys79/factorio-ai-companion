@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.150
+  Bugfixes:
+    - The rare-symptom save makes at most 3 saves per symptom code in a game
+      (RARE_SYMPTOM_MAX_SAVES), besides its 3600-tick cooldown. RARE-WALK-01 ("no path")
+      is not rare: it saved every cooldown, ~150 times a 560k-tick run -- 7229 saves,
+      7.4 GB under saves/rare_symptoms/ -- and every save paused the server (an RCON
+      timeout once discarded a whole factorio-ai run). The count lives in storage
+      (rare_symptom_save_count, nil-safe for older saves), so a game continued from a
+      save keeps it; a fresh map starts at 0.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.149
   Bugfixes:
     - A walk from a shore spot no longer stalls for good when the shifted path start
