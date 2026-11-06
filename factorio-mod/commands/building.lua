@@ -547,11 +547,21 @@ commands.add_command("fac_inserter_set_filter", nil, function(cmd)
     if (t.filter_slot_count or 0) < 1 then
       u.json_response({id = id, error = t.name .. " has no filter slots"}); return
     end
-    local ok, err = pcall(function() t.set_filter(1, item) end)
+    -- use_filters + whitelist (2026-11-06): in 2.x a filter only acts when use_filters is
+    -- true, and it defaults to false. Live probe (data/probe_use_filters.py): a burner
+    -- inserter with filter 'coal' but use_filters=false moved 25 stone out of a coal+stone
+    -- chest; with use_filters=true it moved only coal. Every "coal only" inserter set
+    -- through here since 2026-07-04 was unfiltered.
+    local ok, err = pcall(function()
+      t.set_filter(1, item)
+      t.inserter_filter_mode = "whitelist"
+      t.use_filters = true
+    end)
     if not ok then u.json_response({id = id, error = "set_filter failed: " .. tostring(err)}); return end
     local f = t.get_filter(1)
-    u.json_response({id = id, filtered = (f ~= nil and f.name == item), entity = t.name,
-                      item = item, got = f and f.name or nil})
+    local on = t.use_filters == true and t.inserter_filter_mode == "whitelist"
+    u.json_response({id = id, filtered = (f ~= nil and f.name == item and on), entity = t.name,
+                      item = item, got = f and f.name or nil, use_filters = t.use_filters})
   end)
 end)
 

@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.146
+Date: 2026-11-06
+  Bugfixes:
+    - fac_inserter_set_filter now sets inserter_filter_mode = "whitelist" and use_filters
+      = true. In 2.x a filter only acts with use_filters, which defaults to false, so no
+      filter set through this command since 2026-07-04 ever acted. Live probe
+      (factorio-ai data/probe_use_filters.py): a burner inserter filtered 'coal' moved
+      25 stone out of a coal+stone chest; with use_filters it moved only coal. The reply
+      reports filtered = true only if the filter, the mode and use_filters all stuck, and
+      carries use_filters.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.145
 Date: 2026-11-06
   Changes:
