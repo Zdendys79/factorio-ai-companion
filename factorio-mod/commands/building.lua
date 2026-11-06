@@ -564,7 +564,9 @@ end)
 -- tiles a foreign belt end, inserter or drill would put items onto (or an inserter take
 -- them from), see pathfind.lua fed_tiles; "underground" -- the route may cross belts and
 -- other obstacles by underground-belt pairs (pathfind.lua UG_MAX_DISTANCE). Without them
--- the behaviour is unchanged.
+-- the behaviour is unchanged. "pipe" (2026-11-06, blue science B1', on its own) lays a
+-- fluid pipeline of pipes and pipe-to-ground pairs instead (pathfind.lua pipe mode); the
+-- same _status command reports it.
 commands.add_command("fac_belt_connect_start", nil, function(cmd)
   u.safe_command(function()
     local five = "^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)"
@@ -574,13 +576,18 @@ commands.add_command("fac_belt_connect_start", nil, function(cmd)
     if not id then u.not_found(); return end
     local fx, fy, tx, ty = tonumber(args[2]), tonumber(args[3]), tonumber(args[4]), tonumber(args[5])
     if not (fx and fy and tx and ty) then u.error_response("Invalid coordinates"); return end
-    -- option words (0.16.142): "pure" and/or "underground" (pathfind.lua find_path)
-    local opts = {}
+    -- option words (0.16.142): "pure" and/or "underground" (pathfind.lua find_path);
+    -- "pipe" (0.16.144) only on its own -- the belt options mean nothing for a pipeline
+    local opts, n = {}, 0
     for word in string.gmatch(args[6] or "", "%S+") do
-      if word ~= "pure" and word ~= "underground" then
-        u.error_response("Unknown option '" .. word .. "' (only 'pure', 'underground')"); return
+      if word ~= "pure" and word ~= "underground" and word ~= "pipe" then
+        u.error_response("Unknown option '" .. word .. "' (only 'pure', 'underground', 'pipe')"); return
       end
       opts[word] = true
+      n = n + 1
+    end
+    if opts.pipe and n > 1 then
+      u.error_response("Option 'pipe' takes no other option"); return
     end
     local result = queues.start_belt_connect(id, {x = fx, y = fy}, {x = tx, y = ty}, opts)
     result.id = id

@@ -41,9 +41,25 @@ local function step_dir(a, b)
   return defines.direction.north
 end
 
+-- the items a route is built of: belts, or (pipe mode) pipes
+local ITEMS = {
+  belt = {plain = "transport-belt", underground = "underground-belt"},
+  pipe = {plain = "pipe", underground = "pipe-to-ground"},
+}
+
+local function opposite(dir) return (dir + 8) % 16 end
+
+-- ticks a companion gets to step off a pipe tile she stands on, below the queues'
+-- universal no-progress backstop (600); she aims STEP_OFF_DISTANCE tiles sideways
+local STEP_OFF_TICKS = 300
+local STEP_OFF_DISTANCE = 3
+
 -- opts (optional, 2026-11-06): {pure = true} -- the route avoids every tile something
 -- from outside would put items onto or take them from (pathfind.lua, fed_tiles): a plate
--- belt must carry only its own plates.
+-- belt must carry only its own plates. {pipe = true} (blue science B1') lays a fluid
+-- pipeline instead: pipes and pipe-to-ground pairs (pathfind.lua pipe mode), the same
+-- queue, walk and item rules. A pipe-to-ground's surface connection is on its facing
+-- side, so an entrance faces back toward the source and an exit toward the sink.
 function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local c = core.valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
@@ -56,8 +72,11 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local surf = c.entity.surface
   local force = c.entity.force
 
+  local pipe = opts and opts.pipe and true or false
+  local items = pipe and ITEMS.pipe or ITEMS.belt
   local path, reason = pathfind.find_path(surf, from_pos, to_pos, force, opts)
-  if not path and (reason == "dest-fed" or (opts and opts.pure)) then
+  if not path and (reason == "dest-fed" or (opts and opts.pure) or pipe) then
+    -- (pipe mode: the search already hops as far as a pipe-to-ground reaches)
     -- no underground fallback for a pure route (independent review 2026-11-06): the pair
     -- is placed without the fed-tile check (for dest-fed its exit would even stand on
     -- that fed tile), and an underground exit on the caller's join tile cannot be turned
@@ -97,6 +116,13 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
         path[i].dir = (path[i - 1] and path[i - 1].dir) or defines.direction.north
       end
     end
+    -- an entrance's outgoing direction points at its exit; a pipe-to-ground entrance must
+    -- face the other way (its surface side toward the source)
+    if pipe then
+      for _, node in ipairs(path) do
+        if node.underground == "entrance" then node.dir = opposite(node.dir) end
+      end
+    end
   end
 
   local need_belt, need_underground = 0, 0
@@ -106,16 +132,19 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   end
 
   local inv = c.entity.get_main_inventory()
-  local have_belt = inv.get_item_count("transport-belt")
-  local have_underground = inv.get_item_count("underground-belt")
+  local have_belt = inv.get_item_count(items.plain)
+  local have_underground = inv.get_item_count(items.underground)
   if have_belt < need_belt or have_underground < need_underground then
+    -- the field names stay "belt" for both kinds (one status shape for the callers)
     return {
-      error = "Insufficient belt items", need_belt = need_belt, need_underground = need_underground,
+      error = pipe and "Insufficient pipe items" or "Insufficient belt items",
+      need_belt = need_belt, need_underground = need_underground,
       have_belt = have_belt, have_underground = have_underground
     }
   end
 
   storage.belt_queues[cid] = {path = path, idx = 1, tiles_placed = 0, state = "placing",
+    pipe = pipe,
     -- run_start_tick/run_end_tick (2026-07-28, action-timing instrumentation,
     -- batch 2): this domain already has a "done"/"failed" freeze grace period
     -- (get_belt_connect_status consumes it exactly once before deleting), so
@@ -178,8 +207,57 @@ function M.tick_belt_queues()
       q.walking = false
     end
 
-    local item = node.underground and "underground-belt" or "transport-belt"
+    -- q.pipe is nil on records from before pipe mode: those are belts
+    local items = q.pipe and ITEMS.pipe or ITEMS.belt
+    local item = node.underground and items.underground or items.plain
     local pos = {x = node.x, y = node.y}
+
+    -- A pipe collides with characters (a belt and a pipe-to-ground do not -- live
+    -- 2026-11-06: "Cannot place pipe" with the companion standing on the start tile;
+    -- core/lualib/collision-mask-defaults.lua: pipe = building() with the player layer,
+    -- pipe-to-ground = building_walkable() without it). She steps off the tile first,
+    -- sideways to the route, by walking; bounded. (Another character -- the player --
+    -- on a route tile still fails the route as "Cannot place pipe"; planning tests a
+    -- belt, which characters do not block.)
+    if q.pipe and not node.underground then
+      local p, cx, cy = c.entity.position, node.x + 0.5, node.y + 0.5
+      if math.abs(p.x - cx) < 0.5 and math.abs(p.y - cy) < 0.5 then
+        if not q.step_off_deadline then
+          local sx, sy = 0, 1                   -- sideways to an east/west route
+          if node.dir == defines.direction.north or node.dir == defines.direction.south then
+            sx, sy = 1, 0
+          end
+          -- the walker stops within 2 tiles of its target (control.lua), so the aim is
+          -- STEP_OFF_DISTANCE away: she then ends at least 1 tile off the centre
+          -- (verification review: an aim 2 away read as arrived at once). A free spot
+          -- found too near the tile is not used -- the other side is tried.
+          local target = nil
+          for _, side in ipairs({1, -1}) do
+            local aim = {x = cx + side * STEP_OFF_DISTANCE * sx, y = cy + side * STEP_OFF_DISTANCE * sy}
+            local spot = surf.find_non_colliding_position("character", aim, 2, 0.5)
+            if spot and u.distance(spot, {x = cx, y = cy}) >= STEP_OFF_DISTANCE - 0.5 then
+              target = spot
+              break
+            end
+          end
+          storage.walking_queues[cid] = {
+            target = target or {x = cx + STEP_OFF_DISTANCE * sx, y = cy + STEP_OFF_DISTANCE * sy}}
+          q.step_off_deadline = game.tick + STEP_OFF_TICKS
+        elseif game.tick >= q.step_off_deadline then
+          storage.walking_queues[cid] = nil
+          c.entity.walking_state = {walking = false}
+          q.failed = "could not step off pipe tile (" .. node.x .. "," .. node.y .. ")"
+          q.run_end_tick = game.tick
+          q.state = "failed"
+        end
+        return false
+      end
+      if q.step_off_deadline then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.step_off_deadline = nil
+      end
+    end
     if c.entity.get_main_inventory().get_item_count(item) < 1 then
       q.failed = "Out of " .. item .. " mid-build (" .. q.idx .. "/" .. #q.path .. " placed)"
       q.run_end_tick = game.tick
@@ -194,7 +272,9 @@ function M.tick_belt_queues()
       q.state = "failed"; return false
     end
     local create_args = {name = item, position = pos, direction = node.dir, force = c.entity.force}
-    if node.underground then create_args.type = (node.underground == "entrance") and "input" or "output" end
+    if node.underground and not q.pipe then
+      create_args.type = (node.underground == "entrance") and "input" or "output"
+    end
     local placed = surf.create_entity(create_args)
     if not placed then
       q.failed = "create_entity returned nil"

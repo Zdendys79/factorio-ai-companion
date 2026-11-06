@@ -210,6 +210,24 @@ end
 local UG_MAX_DISTANCE = 5
 local UG_PENALTY = 6
 local OWN_PATH_LOOKBACK = 16   -- path tiles a crossing route checks it does not step on
+-- pipe mode (blue science B1'): pipe-to-ground links at a centre distance of up to 10
+-- (prototype max_underground_distance 10; measured live 2026-11-05: 10 links, 11 not);
+-- a surface pipe costs 1.5 per tile, a pair k + 1 -- the run stays underground
+local PIPE_UG_MAX_DISTANCE = 10
+local PIPE_STEP_COST = 1.5
+local PIPE_HOP_PENALTY = 1
+-- entity types whose prototypes can have fluid boxes (base + Space Age; a heat exchanger
+-- is a "boiler"; checked against the 2.1.24 prototype data); an assembler or
+-- an electric mining drill counts even when its box is unused -- a pipe beside it could
+-- still join it, so the route keeps off (conservative)
+local PIPE_FLUID_TYPES = {"pipe", "pipe-to-ground", "storage-tank", "pump", "offshore-pump",
+  "boiler", "generator", "fluid-turret", "mining-drill", "assembling-machine", "furnace",
+  "reactor", "infinity-pipe", "valve", "fusion-generator",
+  "fusion-reactor", "thruster", "agricultural-tower", "rocket-silo", "fluid-wagon"}
+-- pipe mode tries up to 9 hops from every expanded node (independent review: a search
+-- with no route would otherwise run the full belt budget, ~3x the heap work, in one
+-- tick); a long pipeline needs a few thousand expansions with the scaled heuristic
+local PIPE_MAX_NODES = 64000
 
 -- Per-run cache: the same neighbor tile is checked from multiple expanded nodes, and
 -- surf.can_place_entity is a real engine call (not a cheap table lookup) -- memoizing
@@ -389,6 +407,13 @@ end
 -- above): path entries then may carry underground = "entrance" / "exit" (an entrance
 -- is always directly followed by its exit, an exit by a tile straight ahead); the
 -- destination is never an exit (a caller may need to turn its last belt).
+-- {pipe = true} plans a fluid pipeline instead: hops of up to PIPE_UG_MAX_DISTANCE
+-- (pipe-to-ground pairs, preferred over surface pipe), and no surface step onto a tile
+-- beside a foreign fluid entity (start and destination exempt: they touch the source
+-- and the sink -- an end touching two fluid entities fails as "start-fluid-mixed" /
+-- "dest-fluid-mixed"; an end with no usable neighbour as "start-enclosed" /
+-- "dest-enclosed"; the node budget is PIPE_MAX_NODES). Entries carry the same
+-- underground = "entrance" / "exit" marks.
 function M.find_path(surf, from, to, force, opts)
   local fx, fy = math.floor(from.x), math.floor(from.y)
   local tx, ty = math.floor(to.x), math.floor(to.y)
@@ -421,28 +446,102 @@ function M.find_path(surf, from, to, force, opts)
   -- during normal expansion, no stale-cache risk.
   if is_blocked(tx, ty) then return nil, "dest-blocked" end
 
-  local function h(x, y) return math.abs(tx - x) + math.abs(ty - y) end
+  -- PIPE mode (opts.pipe, 2026-11-06, blue science B1'): the same search lays a fluid
+  -- pipeline -- plain steps are pipes, hops are pipe-to-ground pairs (up to
+  -- PIPE_UG_MAX_DISTANCE). A surface pipe costs more than the tiles a pair covers, so the
+  -- run stays underground (it does not block walking, and touches nothing on the way),
+  -- and a hop needs no obstacle ahead.
+  local pipe = opts and opts.pipe
+  -- The cheapest tile in pipe mode is one of a longest hop, (max + penalty) / max = 1.1;
+  -- scaling the heuristic by it keeps it admissible and consistent (a step costs 1.5, a
+  -- hop of k costs k + 1 >= 1.1 k for k <= 10) while narrowing the search band of a long
+  -- pipeline (with h = Manhattan alone every tile within ~0.14 x length of the line would
+  -- tie with the best route).
+  local h_scale = pipe and (PIPE_UG_MAX_DISTANCE + PIPE_HOP_PENALTY) / PIPE_UG_MAX_DISTANCE or 1
+  local function h(x, y) return h_scale * (math.abs(tx - x) + math.abs(ty - y)) end
 
-  local ug_max = (opts and opts.underground) and UG_MAX_DISTANCE or nil
+  local ug_max = pipe and PIPE_UG_MAX_DISTANCE
+                 or ((opts and opts.underground) and UG_MAX_DISTANCE or nil)
+  local ug_type = pipe and "pipe-to-ground" or "underground-belt"
+  local step_cost = pipe and PIPE_STEP_COST or 1
+  local hop_penalty = pipe and PIPE_HOP_PENALTY or UG_PENALTY
   local DIR_OF = {}
   for _, d in ipairs(DIRS) do DIR_OF[d.dir] = d end
-  -- whether an underground belt of the axis of `d` stands on the line through (x, y)
-  -- within UG_MAX_DISTANCE either way (memoized per tile and axis)
+  -- whether an underground of the axis of `d` stands on the line through (x, y) within
+  -- ug_max either way (memoized per tile and axis): the game would pair with it
   local ug_axis_cache = {}
   local function axis_underground_near(x, y, d)
     local key = tile_key(x, y) .. ":" .. (d.dir % 8)
     local v = ug_axis_cache[key]
     if v ~= nil then return v end
-    local ax, bx = x - math.abs(d.dx) * UG_MAX_DISTANCE, x + math.abs(d.dx) * UG_MAX_DISTANCE
-    local ay, by = y - math.abs(d.dy) * UG_MAX_DISTANCE, y + math.abs(d.dy) * UG_MAX_DISTANCE
+    local ax, bx = x - math.abs(d.dx) * ug_max, x + math.abs(d.dx) * ug_max
+    local ay, by = y - math.abs(d.dy) * ug_max, y + math.abs(d.dy) * ug_max
     v = false
     for _, e in pairs(surf.find_entities_filtered{
-        area = {{ax + 0.1, ay + 0.1}, {bx + 0.9, by + 0.9}}, type = "underground-belt"}) do
+        area = {{ax + 0.1, ay + 0.1}, {bx + 0.9, by + 0.9}}, type = ug_type}) do
       if (e.direction - d.dir) % 8 == 0 then v = true break end
     end
     ug_axis_cache[key] = v
     return v
   end
+  -- PIPE mode: a plain pipe joins every adjacent fluid box, so it may not stand next to a
+  -- FOREIGN fluid entity (crude must not mix with water or steam). The tiles touching any
+  -- fluid entity's footprint are collected once (one area query); the start and goal
+  -- tiles are exempt -- they are meant to touch their source and sink, and nothing else:
+  -- an end tile touching TWO fluid entities is refused below (independent review). A
+  -- pipe-to-ground connects only on its facing side (the route itself), so hop ends are
+  -- exempt too. fluid_adj[tile] = the set of fluid entities touching it.
+  local fluid_adj = {}
+  local anon = 0                -- ids for fluid entities without a unit_number
+  if pipe then
+    -- the entity types that can carry a fluid box (a long pipeline's box holds many trees
+    -- and rocks -- those are not queried); each is still checked for real fluid boxes
+    for _, e in pairs(surf.find_entities_filtered{area = {{minx - 6, miny - 6}, {maxx + 7, maxy + 7}},
+        type = PIPE_FLUID_TYPES}) do
+      local ok, boxes = pcall(function() return e.prototype.fluidbox_prototypes end)
+      if ok and boxes and #boxes > 0 then
+        local b = e.bounding_box
+        local x0, y0 = math.floor(b.left_top.x + 0.01), math.floor(b.left_top.y + 0.01)
+        local x1, y1 = math.ceil(b.right_bottom.x - 0.01) - 1, math.ceil(b.right_bottom.y - 0.01) - 1
+        anon = anon + 1
+        local id = e.unit_number or ("anon" .. anon)
+        local function mark(x, y)
+          local k = tile_key(x, y)
+          fluid_adj[k] = fluid_adj[k] or {}
+          fluid_adj[k][id] = true
+        end
+        for x = x0, x1 do mark(x, y0 - 1) mark(x, y1 + 1) end
+        for y = y0, y1 do mark(x0 - 1, y) mark(x1 + 1, y) end
+      end
+    end
+  end
+  local function fluid_touch(x, y)
+    return pipe and fluid_adj[tile_key(x, y)] ~= nil and not (x == fx and y == fy)
+           and not (x == tx and y == ty)
+  end
+  if pipe then
+    -- an end pipe joins every fluid entity beside it: more than one = a foreign fluid
+    -- would mix in at the very first (or last) tile
+    for _, e in ipairs({{fx, fy, "start-fluid-mixed"}, {tx, ty, "dest-fluid-mixed"}}) do
+      local n = 0
+      for _ in pairs(fluid_adj[tile_key(e[1], e[2])] or {}) do n = n + 1 end
+      if n > 1 then return nil, e[3] end
+    end
+    -- fail fast on an enclosed end (the search would otherwise expand the whole box):
+    -- the start needs a free, clean neighbour (it cannot hop -- no direction yet); the
+    -- goal needs a free neighbour (an exit may arrive there, exits touch nothing)
+    local start_ok, goal_ok = false, false
+    for _, d in ipairs(DIRS) do
+      local sx, sy = fx + d.dx, fy + d.dy
+      if not is_blocked(sx, sy) and not fluid_touch(sx, sy) then start_ok = true end
+      if not is_blocked(tx + d.dx, ty + d.dy) then goal_ok = true end
+    end
+    if not start_ok and not (math.abs(tx - fx) + math.abs(ty - fy) <= 1) then
+      return nil, "start-enclosed"
+    end
+    if not goal_ok then return nil, "dest-enclosed" end
+  end
+  local max_nodes = pipe and PIPE_MAX_NODES or MAX_NODES
 
   -- a route never steps onto its own start or a tile of its recent path: with
   -- crossings, looping back to enter a hop straight can look cheapest (live 2026-11-06:
@@ -469,7 +568,7 @@ function M.find_path(surf, from, to, force, opts)
   local visited = {}
   local expansions = 0
 
-  while #open > 0 and expansions < MAX_NODES do
+  while #open > 0 and expansions < max_nodes do
     -- Pop lowest-f via the binary min-heap above (O(log n), see heap_pop/heap_less
     -- for the full mechanism + why its pop order is provably identical to the OLD
     -- linear-scan's pop order at every step). Tie-break toward the LARGER g
@@ -521,9 +620,10 @@ function M.find_path(surf, from, to, force, opts)
         -- hopping from there costs the same (1 + (k-1) + UG_PENALTY) and reaches one tile
         -- further, so nothing is lost -- and the axis check (an engine call) runs only
         -- at obstacles, and only once a free exit tile exists (independent review:
-        -- worst-case tick time)
+        -- worst-case tick time). Pipe mode hops anywhere: a pair is cheaper than the
+        -- surface pipes it replaces, so the run is meant to stay underground.
         local axis_ok = nil
-        if d and is_blocked(cur.x + d.dx, cur.y + d.dy) then
+        if d and (pipe or is_blocked(cur.x + d.dx, cur.y + d.dy)) then
           for k = 2, ug_max do
             local nx, ny = cur.x + d.dx * k, cur.y + d.dy * k
             if nx < minx or nx > maxx or ny < miny or ny > maxy then break end
@@ -531,7 +631,7 @@ function M.find_path(surf, from, to, force, opts)
                 and not on_own_path(cur, nx, ny) then
               if axis_ok == nil then axis_ok = not axis_underground_near(cur.x, cur.y, d) end
               if not axis_ok then break end
-              local ng = cur.g + k + UG_PENALTY + (near_water(nx, ny) and SHORE_PENALTY or 0)
+              local ng = cur.g + k + hop_penalty + (near_water(nx, ny) and SHORE_PENALTY or 0)
               local nk = state_key(nx, ny, cur.dir, true)
               if ng < (gscore[nk] or math.huge) then
                 gscore[nk] = ng
@@ -551,10 +651,11 @@ function M.find_path(surf, from, to, force, opts)
             and nx >= minx and nx <= maxx and ny >= miny and ny <= maxy then
           -- No endpoint exemption: the destination tile must be a genuinely valid belt
           -- spot too (not water/occupied), same as every other tile on the route.
-          if not is_blocked(nx, ny) and not (ug_max and on_own_path(cur, nx, ny)) then
+          if not is_blocked(nx, ny) and not (ug_max and on_own_path(cur, nx, ny))
+              and not fluid_touch(nx, ny) then
             local turn_penalty = (cur.dir and cur.dir ~= d.dir) and 0.5 or 0
             local shore_penalty = near_water(nx, ny) and SHORE_PENALTY or 0
-            local ng = cur.g + 1 + turn_penalty + shore_penalty
+            local ng = cur.g + step_cost + turn_penalty + shore_penalty
             local nk = state_key(nx, ny, d.dir)
             if ng < (gscore[nk] or math.huge) then
               gscore[nk] = ng

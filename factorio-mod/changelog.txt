@@ -1,4 +1,38 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.144
+Date: 2026-11-06
+  Changes:
+    - fac_belt_connect_start takes the option word "pipe" (on its own). The same router
+      and queue then lay a fluid pipeline: plain steps are pipes, hops are pipe-to-ground
+      pairs up to 10 tiles apart (prototype max_underground_distance 10). The entrance
+      faces back toward the source, the exit toward the sink. The status command is the
+      same; a missing item is reported as "Insufficient pipe items" with need_belt =
+      pipes and need_underground = pipe-to-ground.
+    - Pipe mode hops without an obstacle ahead. A surface pipe costs 1.5 per tile and a
+      pair k + 1, so most of the run is under ground and the ground stays walkable. The
+      heuristic is scaled by 1.1 (the cheapest tile, one of a longest hop). It stays
+      admissible and keeps the search band of a long pipeline narrow.
+    - Fluid isolation: no surface pipe stands next to an entity that can hold a fluid
+      box (pipes, tanks, boilers, engines, pumps, drills, assemblers, furnaces, ...),
+      except the start and goal tiles, which are meant to touch the source and the sink.
+      No hop is made where a pipe-to-ground of the same axis stands within 10 tiles.
+    - An end tile touching two fluid entities is refused as "start-fluid-mixed" /
+      "dest-fluid-mixed", so the end pipe would not join a foreign fluid. An end with no
+      usable neighbour fails fast as "start-enclosed" / "dest-enclosed". The pipe-mode
+      node budget is 64000.
+    - A pipe collides with characters; a belt and a pipe-to-ground do not
+      (collision-mask-defaults.lua: building() vs building_walkable()). A companion
+      standing on a plain pipe's tile first walks 3 tiles sideways, within 300 ticks or
+      the route fails. The walker stops within 2 tiles of its target, so an aim 2 away
+      would leave her on the tile. Another character on a route tile still fails the
+      route as "Cannot place pipe".
+    - Live (factorio-ai scripts/live_verify_pipe_route_2026_11_06.py, all PASS):
+      - tank to tank, 40 tiles, across a chest wall and a foreign water line: 5 pipes + 8
+        pipe-to-ground, 9747 crude in 1200 ticks, the water line stayed water only;
+      - the mixed and enclosed starts are refused;
+      - a route connects with the companion on its start tile, 0.3 off the centre
+        either way, and on its entrance tile. Before the step-off: "Cannot place pipe".
+---------------------------------------------------------------------------------------------------
 Version: 0.16.143
 Date: 2026-11-06
   Changes:
