@@ -310,9 +310,13 @@ function M.approach_deadline(from_pos, to_pos)
   return game.tick + math.max(1800, math.floor(M.distance(from_pos, to_pos) * 25))
 end
 
-function M.get_direction(from, to)
+-- The 8-way walking direction from `from` toward `to`, or nil when `to` lies within
+-- `dead` (default 0.5) on both axes. A walker steering onto a precise spot passes a
+-- smaller `dead` (control.lua: the shifted walk start, which can lie under 0.5 away).
+function M.get_direction(from, to, dead)
   local dx, dy = to.x - from.x, to.y - from.y
-  if math.abs(dx) < 0.5 and math.abs(dy) < 0.5 then return nil end
+  local dz = dead or 0.5
+  if math.abs(dx) < dz and math.abs(dy) < dz then return nil end
   local deg = math.atan2(dy, dx) * 180 / math.pi
   if deg < 0 then deg = deg + 360 end
   local dirs = {

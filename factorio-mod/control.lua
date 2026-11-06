@@ -317,6 +317,7 @@ local function request_walk_path(cid, q, e)
   local ok, id = pcall(function()
     local start, shifted = walk_start(e)
     q.start_shifted = shifted or nil
+    q.start_prev_dist = nil
     return e.surface.request_path{
       bounding_box = proto.collision_box,
       collision_mask = proto.collision_mask,
@@ -333,6 +334,7 @@ local function request_walk_path(cid, q, e)
   end)
   if ok and id then
     storage.path_requests[id] = cid
+    q.path_req_id = id
     q.path_pending = true
     q.path_req_tick = game.tick
   else
@@ -352,6 +354,13 @@ script.on_event(defines.events.on_script_path_request_finished, function(ev)
   storage.path_requests[ev.id] = nil
   local q = storage.walking_queues and storage.walking_queues[cid]
   if not q then return end
+  -- only the queue's own latest request (independent review): a result of a request
+  -- made for a replaced queue, or one re-issued after the 600-tick timeout, would
+  -- otherwise become this queue's path (an old target, a wrong shifted start) or end
+  -- its wait for the first route. A queue without the id accepts a result only while it
+  -- waits for one (a queue from an older mod version); a fresh queue that has not
+  -- asked yet takes none (second review).
+  if q.path_req_id ~= ev.id and (q.path_req_id or not q.path_pending) then return end
   q.path_pending = false
   if ev.path and #ev.path > 0 then
     q.path = ev.path           -- array of {position=, needs_destroy_to_reach=}
@@ -647,10 +656,23 @@ local function process_walking_queues()
       local goal = q.target
       if q.path and q.path_idx then
         -- a shifted start (walk_start: she overlaps a blocking tile) is walked ONTO
-        -- first, not skipped as "near": it is the free spot that leads her out
+        -- first, not skipped as "near": it is the free spot that leads her out. It is
+        -- done once her box is dry (or she stands on it): live 2026-11-06 (factorio-ai
+        -- live_verify_lab_pole_route) the start lay 0.47/0.48 from her, inside
+        -- get_direction's 0.5 dead zone -- no direction, no walking, no bypass, and
+        -- "within 0.3" never came; every walk from that shore spot stalled for good.
+        -- Also done when she no longer gets nearer within one step of it: a dry tile
+        -- between two wet ones is 0.6 wide for her box, one 5-tick update moves her
+        -- ~0.75, so she could bounce across it for good (independent review).
         while q.path[q.path_idx] do
-          local near = (q.start_shifted and q.path_idx == 1) and 0.3 or 2
-          if u.distance(e.position, q.path[q.path_idx].position) >= near then break end
+          local wp = q.path[q.path_idx].position
+          if q.start_shifted and q.path_idx == 1 then
+            local sd = u.distance(e.position, wp)
+            local stalled = q.start_prev_dist and sd >= q.start_prev_dist and sd < 1
+            q.start_prev_dist = sd
+            if sd >= 0.3 and not stalled
+               and u.char_spot_blocked(e.surface, e.position, 0.2) then break end
+          elseif u.distance(e.position, wp) >= 2 then break end
           q.path_idx = q.path_idx + 1
         end
         if q.path[q.path_idx] then
@@ -774,7 +796,9 @@ local function process_walking_queues()
       end
       q.bypass_just_ended = false
 
-      local dir_to_target = u.get_direction(e.position, goal)
+      -- onto the shifted start: no 0.5 dead zone (it can lie closer than that)
+      local onto_start = q.start_shifted and q.path and q.path_idx == 1
+      local dir_to_target = u.get_direction(e.position, goal, onto_start and 0.05 or nil)
 
       if (q.waypoint_stall_ticks or 0) >= WAYPOINT_STALL_REPATH_TICKS and q.path then
         -- RE-PATH AFTER PROLONGED WAYPOINT STALL (2026-07-25, Zdendys: 2nd of 3

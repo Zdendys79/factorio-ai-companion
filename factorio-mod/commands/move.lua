@@ -44,6 +44,12 @@ commands.add_command("fac_move_to", nil, function(cmd)
     -- from a PREVIOUS one for this same companion, regardless of either constant's
     -- future value.
     if storage.walk_last_outcome then storage.walk_last_outcome[id] = nil end
+    -- The same for walk_last_arrived: fac_companion_position falls back to it as
+    -- "walk_target" once the queue is gone. Left over from the PREVIOUS walk, it made a
+    -- new walk that gave up at once read as arrived: she stood by the old target, and
+    -- go_to() returned True 14 tiles from the new one (live 2026-11-06, factorio-ai
+    -- live_verify_lab_pole_route: every pole then "Too far").
+    if storage.walk_last_arrived then storage.walk_last_arrived[id] = nil end
     storage.walking_queues[id] = {target = {x = x, y = y}, giveup_enabled = true}
     u.json_response({id = id, walking_to = {x = x, y = y}})
   end)

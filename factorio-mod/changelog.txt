@@ -1,4 +1,37 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.149
+  Bugfixes:
+    - A walk from a shore spot no longer stalls for good when the shifted path start
+      (0.16.147) lies under 0.5 tiles away.
+      - get_direction returns no direction inside its 0.5 dead zone. From (65.03, -22.98),
+        box 0.17 tiles into a lake, the dry start (65.5, -22.5) lay 0.47 / 0.48 away. So
+        there was no walking, no bypass, and the start's "within 0.3" never came (a
+        tick trace showed walking=false all along).
+      - The walker now steers onto the shifted start without the dead zone, and the
+        start is done once her box is dry. It is also done when she gets no nearer
+        to it within one step: a dry tile between two wet ones is narrower than one
+        5-tick update moves her, so she could bounce across it (independent review).
+      - get_direction takes an optional dead zone (default 0.5, unchanged elsewhere).
+    - fac_move_to clears walk_last_arrived, as it already cleared walk_last_outcome.
+      fac_companion_position falls back to it as walk_target once the queue is gone.
+      Left over from the previous walk, it made a walk that gave up read as arrived:
+      go_to() returned True 14 tiles from its target, and every pole of the lab's
+      route was then refused "Too far".
+    - A path result is taken only by the walking queue whose latest request it answers
+      (q.path_req_id). A result for a replaced queue, or for a request re-issued after
+      the 600-tick timeout, could become the new queue's path or end its wait for the
+      first route (independent review). A fresh queue that has not asked yet takes no
+      result; a queue from an older version (no id) takes one only while it waits for
+      one.
+    - Live (factorio-ai scripts/live_verify_walk_shore_dead_zone_2026_11_06.py, her on
+      that exact spot):
+      - she walks off to her goal;
+      - after an arrival, a new walk stopped at once leaves no walk_target (the old code
+        reported the previous target);
+      - a walk deep into the lake returns False.
+      The lab's pole route round the plant's lake then powers the lab
+      (scripts/live_verify_lab_pole_route_2026_11_06.py).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.148
   Bugfixes:
     - The build queue no longer sends the companion into water (the root cause of
