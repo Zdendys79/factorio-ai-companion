@@ -284,13 +284,48 @@ end
 -- (water, cliffs) -- the straight-line + perpendicular bypass only clears small
 -- stuff (trees/rocks) and cannot navigate around a lake. Result arrives async via
 -- on_script_path_request_finished and is stored as q.path (list of waypoints).
+-- The path's START: her own position, unless her collision box overlaps a tile that
+-- blocks characters (the "player" collision layer: water, out-of-map, ...). Live
+-- RARE-WALK-01 (factorio-ai data/smoke_fixes_20261106_1025.log): she ended on the power
+-- plant's shore with her box 0.12 tiles into the water row; every request from there
+-- returned NO PATH, and the bypass only shuffled her along the shore, for ~400k ticks.
+-- Then the path starts at the nearest free position, at most 2 tiles away, and the
+-- queue is marked (q.start_shifted) so the walker goes onto that start first instead of
+-- skipping it as "near" (independent review).
+-- The character's own collision is transition-aware (she can stand with her box a bit
+-- into a shore tile), the pathfinder's is not, so the shifted start is a TILE CENTRE
+-- (force_to_tile_center): her box then lies inside one land tile, checked dry before it
+-- is used (independent review: a transition-aware free spot can still be "wet").
+-- Returns: the start position, and true when it was shifted.
+local function box_blocked(surface, x, y, bb)
+  local hw, hh = (bb.right_bottom.x - bb.left_top.x) / 2, (bb.right_bottom.y - bb.left_top.y) / 2
+  return surface.count_tiles_filtered{area = {{x - hw, y - hh}, {x + hw, y + hh}},
+                                      collision_mask = "player"} > 0
+end
+
+local function walk_start(e)
+  local p, bb = e.position, e.bounding_box
+  if not box_blocked(e.surface, p.x, p.y, bb) then return p, false end
+  local free = e.surface.find_non_colliding_position("character", p, 2, 0.1, true)
+  if not free or box_blocked(e.surface, free.x, free.y, bb) then
+    u.log_error(string.format("walk start (%.2f,%.2f) overlaps a blocking tile and no dry "
+      .. "tile centre within 2 -- path from her position", p.x, p.y), "walk_start_wet")
+    return p, false
+  end
+  u.log_error(string.format("walk start (%.2f,%.2f) overlaps a blocking tile -- path from "
+    .. "the dry tile centre (%.1f,%.1f)", p.x, p.y, free.x, free.y), "walk_start_shifted")
+  return free, true
+end
+
 local function request_walk_path(cid, q, e)
   local proto = prototypes.entity["character"]
   local ok, id = pcall(function()
+    local start, shifted = walk_start(e)
+    q.start_shifted = shifted or nil
     return e.surface.request_path{
       bounding_box = proto.collision_box,
       collision_mask = proto.collision_mask,
-      start = e.position,
+      start = start,
       goal = q.target,
       force = e.force,
       radius = 2,
@@ -306,7 +341,12 @@ local function request_walk_path(cid, q, e)
     q.path_pending = true
     q.path_req_tick = game.tick
   else
-    -- API/call failed -> fall back to straight-line; retry later
+    -- API/call failed -> fall back to straight-line; retry later. Logged: a broken
+    -- argument would otherwise silently turn pathfinding off everywhere (review)
+    if not ok then
+      u.log_error("walk path request for companion " .. cid .. " raised: " .. tostring(id),
+                  "walk_path_request_error")
+    end
     q.path_failed_tick = game.tick
   end
 end
@@ -611,7 +651,11 @@ local function process_walking_queues()
       end
       local goal = q.target
       if q.path and q.path_idx then
-        while q.path[q.path_idx] and u.distance(e.position, q.path[q.path_idx].position) < 2 do
+        -- a shifted start (walk_start: she overlaps a blocking tile) is walked ONTO
+        -- first, not skipped as "near": it is the free spot that leads her out
+        while q.path[q.path_idx] do
+          local near = (q.start_shifted and q.path_idx == 1) and 0.3 or 2
+          if u.distance(e.position, q.path[q.path_idx].position) >= near then break end
           q.path_idx = q.path_idx + 1
         end
         if q.path[q.path_idx] then

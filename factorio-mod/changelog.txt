@@ -1,4 +1,24 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.147
+  Bugfixes:
+    - A walk path is requested from a free start when the companion's collision box
+      overlaps a tile that blocks characters (the "player" layer: water, out-of-map).
+      Live (factorio-ai RARE-WALK-01): she ended on the power plant's shore with her box
+      0.12 tiles into the water row. Every path request from there returned no path,
+      and the bypass only shuffled her along the shore, for ~400k ticks. Her own
+      collision is transition-aware, the pathfinder's is not. The path now starts at the
+      nearest free TILE CENTRE within 2 tiles, checked dry, and that first waypoint is
+      walked onto (within 0.3), not skipped as "near" (q.start_shifted). Each shift is
+      logged (walk_start_shifted / walk_start_wet). Live
+      (scripts/live_verify_walk_off_shore_2026_11_06.py on that save): the start moved
+      from (-54.55,-34.08) to (-54.5,-34.5), and she reached her target 125 tiles away.
+      Without the change she stays on the shore, has_path false.
+    - Not fixed yet (independent review): how she gets there. The build step-away target
+      (queues_build.lua, a fixed diagonal) and find_approach_pos candidates are not
+      checked against water.
+    - A path request that raises is logged (walk_path_request_error) instead of silently
+      falling back to the straight line.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.146
 Date: 2026-11-06
   Bugfixes:
