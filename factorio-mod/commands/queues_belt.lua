@@ -39,7 +39,10 @@ local function step_dir(a, b)
   return defines.direction.north
 end
 
-function M.start_belt_connect(cid, from_pos, to_pos)
+-- opts (optional, 2026-11-06): {pure = true} -- the route avoids every tile something
+-- from outside would put items onto or take them from (pathfind.lua, fed_tiles): a plate
+-- belt must carry only its own plates.
+function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local c = core.valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
   -- Same task-pool-ownership guard as start_gather/start_fuel_group (2026-07-08, task
@@ -51,7 +54,11 @@ function M.start_belt_connect(cid, from_pos, to_pos)
   local surf = c.entity.surface
   local force = c.entity.force
 
-  local path, reason = pathfind.find_path(surf, from_pos, to_pos, force)
+  local path, reason = pathfind.find_path(surf, from_pos, to_pos, force, opts)
+  if not path and reason == "dest-fed" then
+    -- no underground fallback either: its exit would stand on that same fed tile
+    return {error = "no path", reason = reason}
+  end
   if not path then
     -- No walkable route at all within the search budget -- try a direct underground-belt
     -- pair across the gap (only when it's a straight axis-aligned hop within the yellow

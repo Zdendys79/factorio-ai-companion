@@ -312,6 +312,49 @@ local function heap_pop(heap)
   return top
 end
 
+-- PURE routes (2026-11-06, plate belts to a science line): tiles something from outside
+-- would put items onto. Without this a plate route could run in front of a coal belt's
+-- end, which would side-load coal onto it, or under an inserter that drops onto that
+-- tile. It could also run under an inserter's empty pickup point, and that inserter would
+-- take plates off. Collected ONCE for the whole search box (one engine call) rather than
+-- per expanded tile. A tile counts when one of these points into it:
+--   * a transport belt or an underground-belt exit faces it (a belt end; a tile in the
+--     middle of a line is occupied anyway);
+--   * an inserter's drop or pickup point, or a mining drill's drop point, lies on it;
+--   * a splitter's output faces it (both of its 2 lanes' front tiles).
+-- (Loaders are not craftable in the base game and are not handled.)
+-- Keys are tile_key(floor x, floor y).
+local DIR_VEC = {[defines.direction.north] = {0, -1}, [defines.direction.east] = {1, 0},
+                 [defines.direction.south] = {0, 1}, [defines.direction.west] = {-1, 0}}
+
+local function fed_tiles(surf, minx, miny, maxx, maxy)
+  local fed = {}
+  local function mark(p) fed[tile_key(math.floor(p.x), math.floor(p.y))] = true end
+  for _, e in pairs(surf.find_entities_filtered{
+      area = {{minx - 3, miny - 3}, {maxx + 4, maxy + 4}},
+      type = {"transport-belt", "underground-belt", "splitter", "inserter", "mining-drill"}}) do
+    if e.type == "transport-belt"
+        or (e.type == "underground-belt" and e.belt_to_ground_type == "output") then
+      local v = DIR_VEC[e.direction]
+      if v then mark({x = e.position.x + v[1], y = e.position.y + v[2]}) end
+    elseif e.type == "splitter" then
+      -- 2 tiles wide across its direction, centred on the seam: one front tile per half
+      local v = DIR_VEC[e.direction]
+      if v then
+        for _, side in ipairs({-0.5, 0.5}) do
+          mark({x = e.position.x + v[1] + side * v[2], y = e.position.y + v[2] + side * v[1]})
+        end
+      end
+    elseif e.type == "inserter" then
+      mark(e.drop_position)
+      mark(e.pickup_position)
+    elseif e.type == "mining-drill" then
+      mark(e.drop_position)
+    end
+  end
+  return fed
+end
+
 -- 4-directional A* (belts are axis-aligned). Returns an ordered list of
 -- {x, y, dir} (dir = the direction of travel INTO that tile, nil for the start tile),
 -- or nil if no route was found within the search budget. On nil, a second string
@@ -320,7 +363,10 @@ end
 -- "budget-exhausted" (MAX_NODES hit) -- callers that only capture
 -- one return value (`local path = pathfind.find_path(...)`) are unaffected, per Lua's
 -- own multi-return semantics (extra return values are simply discarded).
-function M.find_path(surf, from, to, force)
+-- opts (optional): {pure = true} also blocks every fed tile (fed_tiles above) except the
+-- start, which the caller's own belt end is meant to feed; a fed destination fails
+-- as "dest-fed".
+function M.find_path(surf, from, to, force, opts)
   local fx, fy = math.floor(from.x), math.floor(from.y)
   local tx, ty = math.floor(to.x), math.floor(to.y)
   local minx = math.min(fx, tx) - MAX_SEARCH_MARGIN
@@ -328,6 +374,15 @@ function M.find_path(surf, from, to, force)
   local miny = math.min(fy, ty) - MAX_SEARCH_MARGIN
   local maxy = math.max(fy, ty) + MAX_SEARCH_MARGIN
   local is_blocked = make_is_blocked(surf, force)
+  if opts and opts.pure then
+    local fed = fed_tiles(surf, minx, miny, maxx, maxy)
+    if fed[tile_key(tx, ty)] and not (tx == fx and ty == fy) then return nil, "dest-fed" end
+    local placeable_blocked = is_blocked
+    is_blocked = function(x, y)
+      if fed[tile_key(x, y)] and not (x == fx and y == fy) then return true end
+      return placeable_blocked(x, y)
+    end
+  end
   local near_water = make_near_water(surf)
   -- The start tile is seeded directly into `open` (never evaluated as a "neighbor"),
   -- so it needs its own explicit check for the same reason the destination tile does.

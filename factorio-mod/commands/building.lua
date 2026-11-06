@@ -560,14 +560,23 @@ end)
 -- full design rationale (model=WHAT, mod=HOW routing; narrower than the original plan
 -- sketch -- no material/inserter placement here, see that comment block). Async like
 -- fac_building_place_start/_status: mirrors that exact start+poll pattern.
+-- Optional 6th argument (2026-11-06): "pure" -- the route avoids tiles a foreign belt end,
+-- inserter or drill would put items onto (or an inserter take them from), see
+-- pathfind.lua fed_tiles. Without it the behaviour is unchanged.
 commands.add_command("fac_belt_connect_start", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
+    local five = "^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)"
+    local args = u.parse_args(five .. "%s+(%S+)$", cmd.parameter)
+    if not args[1] then args = u.parse_args(five .. "$", cmd.parameter) end
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local fx, fy, tx, ty = tonumber(args[2]), tonumber(args[3]), tonumber(args[4]), tonumber(args[5])
     if not (fx and fy and tx and ty) then u.error_response("Invalid coordinates"); return end
-    local result = queues.start_belt_connect(id, {x = fx, y = fy}, {x = tx, y = ty})
+    if args[6] and args[6] ~= "pure" then
+      u.error_response("Unknown option '" .. tostring(args[6]) .. "' (only 'pure')"); return
+    end
+    local result = queues.start_belt_connect(id, {x = fx, y = fy}, {x = tx, y = ty},
+                                             {pure = args[6] == "pure"})
     result.id = id
     u.json_response(result)
   end)

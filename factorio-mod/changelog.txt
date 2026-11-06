@@ -1,4 +1,19 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.140
+Date: 2026-11-06
+  Changes:
+    - fac_belt_connect_start takes an optional 6th word, "pure". A pure route avoids every
+      tile something from outside would put items onto or take them from. That covers:
+      - a tile a belt end, an underground-belt exit or a splitter output faces;
+      - an inserter's drop or pickup point;
+      - a mining drill's drop point.
+      The start tile is exempt, because the caller's own belt end feeds it. A fed
+      destination fails as "no path" / reason "dest-fed", with no underground fallback.
+      The use: plate belts routed to a science line must carry only their own plates. A
+      route passing a coal belt's end would get coal side-loaded onto it.
+    - Without the option nothing changes. Any other 6th word is refused with "Unknown
+      option".
+---------------------------------------------------------------------------------------------------
 Version: 0.16.139
 Date: 2026-11-05
   Changes:
