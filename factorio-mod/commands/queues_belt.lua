@@ -53,6 +53,10 @@ local function opposite(dir) return (dir + 8) % 16 end
 -- universal no-progress backstop (600); she aims STEP_OFF_DISTANCE tiles sideways
 local STEP_OFF_TICKS = 300
 local STEP_OFF_DISTANCE = 3
+-- fresh walks to a route tile after its approach deadline ran out, before the route
+-- fails (each one with a new path request, a new deadline and a stand spot reach - 2
+-- short of the tile, on her side)
+local APPROACH_RETRIES = 2
 
 -- opts (optional, 2026-11-06): {pure = true} -- the route avoids every tile something
 -- from outside would put items onto or take them from (pathfind.lua, fed_tiles): a plate
@@ -75,13 +79,14 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local pipe = opts and opts.pipe and true or false
   local items = pipe and ITEMS.pipe or ITEMS.belt
   local path, reason = pathfind.find_path(surf, from_pos, to_pos, force, opts)
-  if not path and (reason == "dest-fed" or (opts and opts.pure) or pipe) then
-    -- (pipe mode: the search already hops as far as a pipe-to-ground reaches)
+  if not path and (reason == "dest-fed" or (opts and opts.pure) or pipe or (opts and opts.plan)) then
+    -- (pipe mode: the search already hops as far as a pipe-to-ground reaches; a plan
+    -- reports the search's own result, not the straight-pair fallback)
     -- no underground fallback for a pure route (independent review 2026-11-06): the pair
     -- is placed without the fed-tile check (for dest-fed its exit would even stand on
     -- that fed tile), and an underground exit on the caller's join tile cannot be turned
     -- into the belt it must feed (turning an underground swaps its input/output sides)
-    return {error = "no path", reason = reason}
+    return {error = "no path", reason = reason, expansions = pathfind.last_expansions}
   end
   if not path then
     -- No walkable route at all within the search budget -- try a direct underground-belt
@@ -129,6 +134,22 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   for _, node in ipairs(path) do
     if node.underground then need_underground = need_underground + 1
     else need_belt = need_belt + 1 end
+  end
+  -- "plan" (0.16.145): the route and its item need only -- nothing is started, no items
+  -- are checked (a caller checks a route exists before building what it connects)
+  if opts and opts.plan then
+    -- extent: the route's bounding box, its longer side in tiles. A fluid segment longer
+    -- than the engine's pipeline extent (utility-constants default_pipeline_extent 320)
+    -- does not flow into or out of machines (live 2026-11-06: 330 straight pipes, the
+    -- refinery at the end got 0 crude; 300 pipes, 400)
+    local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+    for _, node in ipairs(path) do
+      x0, y0 = math.min(x0, node.x), math.min(y0, node.y)
+      x1, y1 = math.max(x1, node.x), math.max(y1, node.y)
+    end
+    return {planned = true, tiles = #path, need_belt = need_belt,
+            need_underground = need_underground, expansions = pathfind.last_expansions,
+            extent = math.max(x1 - x0, y1 - y0) + 1}
   end
 
   local inv = c.entity.get_main_inventory()
@@ -185,17 +206,41 @@ function M.tick_belt_queues()
       if not q.walking or not q.approach_deadline then
         q.approach_deadline = u.approach_deadline(c.entity.position, {x = node.x, y = node.y})
         if not q.walking then
+          -- a retry aims at a spot between her and the tile, reach - 2 short of it (any
+          -- spot within reach will do): a different, shorter walk than the first one
+          local aim = {x = node.x, y = node.y}
+          if (q.approach_tries or 0) > 0 then
+            local p = c.entity.position
+            local d = u.distance(p, aim)
+            local back = math.min(d, math.max(0, reach - 2))
+            if d > 0 then
+              aim = {x = aim.x + (p.x - aim.x) / d * back, y = aim.y + (p.y - aim.y) / d * back}
+            end
+          end
           storage.walking_queues[cid] = {
-            target = surf.find_non_colliding_position("character", {x = node.x, y = node.y}, 3, 0.5)
-                     or {x = node.x, y = node.y}
+            target = surf.find_non_colliding_position("character", aim, 3, 0.5) or aim
           }
           q.walking = true
         end
+      elseif game.tick >= q.approach_deadline and (q.approach_tries or 0) < APPROACH_RETRIES then
+        -- live 2026-11-06: a 118-piece pipeline through dense forest (65 trees within 8
+        -- tiles) failed at piece 24 with the deadline run out while she was still
+        -- clearing her way (another run passed the same tile). A fresh walk -- a new
+        -- path request, a new deadline, a nearer stand spot -- before giving up. Only
+        -- reachable while she keeps making progress (wood from the trees): standing
+        -- still for 600 ticks, the universal backstop in queues_core drops the queue.
+        -- q.approach_tries is nil on older records (none tried yet) and resets with
+        -- every placed tile.
+        q.approach_tries = (q.approach_tries or 0) + 1
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.walking = false
+        q.approach_deadline = nil
       elseif game.tick >= q.approach_deadline then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.failed = "cannot reach belt tile (" .. node.x .. "," .. node.y .. ") -- " ..
-                   (q.idx) .. "/" .. #q.path .. " placed before giving up"
+                   q.tiles_placed .. "/" .. #q.path .. " placed before giving up"
         q.run_end_tick = game.tick
         q.state = "failed"
       end
@@ -290,6 +335,7 @@ function M.tick_belt_queues()
     end
     q.tiles_placed = q.tiles_placed + 1
     q.idx = q.idx + 1
+    q.approach_tries = nil
     if q.idx > #q.path then
       q.run_end_tick = game.tick
       q.state = "done"

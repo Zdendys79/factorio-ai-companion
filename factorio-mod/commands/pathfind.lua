@@ -226,8 +226,10 @@ local PIPE_FLUID_TYPES = {"pipe", "pipe-to-ground", "storage-tank", "pump", "off
   "fusion-reactor", "thruster", "agricultural-tower", "rocket-silo", "fluid-wagon"}
 -- pipe mode tries up to 9 hops from every expanded node (independent review: a search
 -- with no route would otherwise run the full belt budget, ~3x the heap work, in one
--- tick); a long pipeline needs a few thousand expansions with the scaled heuristic
+-- tick); weighted (PIPE_H_WEIGHT), a live 456-tile crude route took 21456 expansions
 local PIPE_MAX_NODES = 64000
+-- weighted A* for pipes (see find_path): routes at most 1.5x the cheapest cost
+local PIPE_H_WEIGHT = 1.5
 
 -- Per-run cache: the same neighbor tile is checked from multiple expanded nodes, and
 -- surf.can_place_entity is a real engine call (not a cheap table lookup) -- memoizing
@@ -415,6 +417,7 @@ end
 -- "dest-enclosed"; the node budget is PIPE_MAX_NODES). Entries carry the same
 -- underground = "entrance" / "exit" marks.
 function M.find_path(surf, from, to, force, opts)
+  M.last_expansions = 0          -- diagnostic: the last search's expansions (plan replies)
   local fx, fy = math.floor(from.x), math.floor(from.y)
   local tx, ty = math.floor(to.x), math.floor(to.y)
   local minx = math.min(fx, tx) - MAX_SEARCH_MARGIN
@@ -457,7 +460,12 @@ function M.find_path(surf, from, to, force, opts)
   -- hop of k costs k + 1 >= 1.1 k for k <= 10) while narrowing the search band of a long
   -- pipeline (with h = Manhattan alone every tile within ~0.14 x length of the line would
   -- tie with the best route).
-  local h_scale = pipe and (PIPE_UG_MAX_DISTANCE + PIPE_HOP_PENALTY) / PIPE_UG_MAX_DISTANCE or 1
+  -- On top of that the pipe search is WEIGHTED (PIPE_H_WEIGHT; live 2026-11-06: a
+  -- 456-tile crude route over a real map ran out of the node budget with the plain
+  -- bound): the route found costs at most PIPE_H_WEIGHT x the cheapest one, which for a
+  -- pipeline only means a few more pieces -- finding one at all is what matters.
+  local h_scale = pipe and PIPE_H_WEIGHT * (PIPE_UG_MAX_DISTANCE + PIPE_HOP_PENALTY)
+                           / PIPE_UG_MAX_DISTANCE or 1
   local function h(x, y) return h_scale * (math.abs(tx - x) + math.abs(ty - y)) end
 
   local ug_max = pipe and PIPE_UG_MAX_DISTANCE
@@ -596,6 +604,8 @@ function M.find_path(surf, from, to, force, opts)
         -- among all direction-variants of the goal tile the lowest-g one always has the
         -- lowest f and is popped first (edge costs are non-negative, so g only grows along
         -- a path) -- position-only goal test is correct even though the state space isn't.
+        -- (Pipe mode is weighted -- PIPE_H_WEIGHT: there the route is within 1.5x of the
+        -- cheapest, not minimum; the lowest-g goal variant still pops first, h = 0 there.)
         -- an exit's predecessor is its entrance (hops start only from non-exit nodes)
         local path, node, after_exit, seen = {}, cur, false, {}
         while node do
@@ -606,11 +616,12 @@ function M.find_path(surf, from, to, force, opts)
           -- a tile used twice cannot be built (live 2026-11-06: a crossing route looped
           -- back over its own start) -- the expansion below avoids it; this is the net
           local tk = tile_key(node.x, node.y)
-          if seen[tk] then return nil, "self-overlap" end
+          if seen[tk] then M.last_expansions = expansions return nil, "self-overlap" end
           seen[tk] = true
           table.insert(path, 1, entry)
           node = came_from[state_key(node.x, node.y, node.dir, node.ug)]
         end
+        M.last_expansions = expansions
         return path
       end
       -- underground hops: from a node entered straight that is not itself an exit
@@ -633,7 +644,9 @@ function M.find_path(surf, from, to, force, opts)
               if not axis_ok then break end
               local ng = cur.g + k + hop_penalty + (near_water(nx, ny) and SHORE_PENALTY or 0)
               local nk = state_key(nx, ny, cur.dir, true)
-              if ng < (gscore[nk] or math.huge) then
+              -- (no relaxing an expanded state: the weighted pipe heuristic is not
+              -- consistent, and came_from must stay the chain on_own_path checked)
+              if not visited[nk] and ng < (gscore[nk] or math.huge) then
                 gscore[nk] = ng
                 came_from[nk] = cur
                 seq = seq + 1
@@ -657,7 +670,7 @@ function M.find_path(surf, from, to, force, opts)
             local shore_penalty = near_water(nx, ny) and SHORE_PENALTY or 0
             local ng = cur.g + step_cost + turn_penalty + shore_penalty
             local nk = state_key(nx, ny, d.dir)
-            if ng < (gscore[nk] or math.huge) then
+            if not visited[nk] and ng < (gscore[nk] or math.huge) then
               gscore[nk] = ng
               came_from[nk] = cur
               seq = seq + 1
@@ -674,6 +687,7 @@ function M.find_path(surf, from, to, force, opts)
   -- enclosed pocket, and more MAX_NODES cannot help. It used to be reported as
   -- "budget-exhausted" too, which made enclosed starts (live: a coal-belt end boxed in by
   -- boiler fuel chests, failing in 2 ticks) indistinguishable from genuinely long searches.
+  M.last_expansions = expansions
   if #open == 0 then return nil, "unreachable" end
   return nil, "budget-exhausted"   -- node budget ran out before the goal was reached
 end

@@ -1,4 +1,37 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.145
+Date: 2026-11-06
+  Changes:
+    - The pipe search is weighted (PIPE_H_WEIGHT 1.5): a route costs at most 1.5x the
+      cheapest. Live: a real 456-tile crude route (factorio-ai AI-power-verify-end, the
+      pumpjack's port to a site at the base) ran out of the 64000-node budget with the
+      plain bound. Weighted, it is found in 21456 expansions (1.1 s in one command):
+      27 pipes + 90 pipe-to-ground.
+    - fac_belt_connect_start takes the option word "plan" (with any other option):
+      only the route and its item need, {planned, tiles, need_belt, need_underground,
+      expansions}, or {error = "no path", reason, expansions}. Nothing is started, and
+      no items are checked. A caller checks a route exists before building what it
+      connects.
+    - The plan reply carries "extent": the longer side of the route's bounding box, in
+      tiles. A fluid segment longer than the engine's pipeline extent
+      (default_pipeline_extent 320) does not flow into or out of machines. Live
+      (factorio-ai scripts/probe_pipeline_extent_2026_11_06.py): a straight 330-pipe line
+      gave a refinery at its end 0 crude, while a tank on the same line filled; at 300
+      pipes the refinery got 400. A route over the limit needs a pump to split it.
+    - "pipe" is now refused only together with a belt option ("takes no belt option").
+    - Belt / pipe routes: when the approach to a route tile runs out of time while the
+      companion keeps making progress (standing still, the universal 600-tick backstop
+      still drops the queue), there are two fresh walks before the route fails. Each has
+      a new path request, a new deadline, and a stand spot between her and the tile,
+      reach - 2 short of it. Live: a pipeline through dense forest (65 trees within 8
+      tiles) failed at piece 24 while the companion was still clearing her way; another
+      run passed the same tile.
+    - The weighted pipe search never relaxes an expanded state. Its heuristic is not
+      consistent, and the returned chain must be the one the own-path check saw
+      (independent review). Belt routes are unaffected: their heuristic is consistent.
+    - "cannot reach belt tile" reports the tiles actually placed.
+    - "no path" replies of pure, pipe and plan routes carry the search's expansions.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.144
 Date: 2026-11-06
   Changes:
