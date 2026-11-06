@@ -11,7 +11,7 @@
 -- already-chosen points, avoiding water/buildings (pathfind.lua's A*; ore patches are
 -- ordinary ground, see pathfind.lua), with an
 -- underground-belt straight-line fallback (max 4 tiles, yellow tier) for a gap no walkable
--- route crosses. No `material`/inserter-type param -- narrower than the original plan
+-- route crosses -- not for a "pure" route (2026-11-06, see start_belt_connect). No `material`/inserter-type param -- narrower than the original plan
 -- sketch (which had this command also place+type both end inserters); simplified during
 -- implementation per the plan's own flagged Open Question #3 ("exact algorithm needs its
 -- own design pass"). Async like fac_building_place_start/_status: the companion really
@@ -55,8 +55,11 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local force = c.entity.force
 
   local path, reason = pathfind.find_path(surf, from_pos, to_pos, force, opts)
-  if not path and reason == "dest-fed" then
-    -- no underground fallback either: its exit would stand on that same fed tile
+  if not path and (reason == "dest-fed" or (opts and opts.pure)) then
+    -- no underground fallback for a pure route (independent review 2026-11-06): the pair
+    -- is placed without the fed-tile check (for dest-fed its exit would even stand on
+    -- that fed tile), and an underground exit on the caller's join tile cannot be turned
+    -- into the belt it must feed (turning an underground swaps its input/output sides)
     return {error = "no path", reason = reason}
   end
   if not path then

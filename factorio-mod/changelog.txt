@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.141
+Date: 2026-11-06
+  Changes:
+    - fac_belt_connect_start "pure": no underground-belt fallback when the pathfinder
+      finds no route. The fallback pair was placed without the fed-tile check, and an
+      underground exit on the caller's join tile cannot be turned into the belt it must
+      feed. A pure route now either avoids every fed tile or fails as "no path" with the
+      pathfinder's reason.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.140
 Date: 2026-11-06
   Changes:
