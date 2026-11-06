@@ -10,8 +10,10 @@
 -- handles ONLY the one genuinely-new problem: routing a transport-belt corridor between two
 -- already-chosen points, avoiding water/buildings (pathfind.lua's A*; ore patches are
 -- ordinary ground, see pathfind.lua), with an
--- underground-belt straight-line fallback (max 4 tiles, yellow tier) for a gap no walkable
--- route crosses -- not for a "pure" route (2026-11-06, see start_belt_connect). No `material`/inserter-type param -- narrower than the original plan
+-- underground-belt straight-line fallback (entrance to exit at most 5 tiles, yellow tier)
+-- for a gap no walkable route crosses -- not for a "pure" route (2026-11-06, see
+-- start_belt_connect); "underground" routes cross obstacles inside the search instead
+-- (pathfind.lua). No `material`/inserter-type param -- narrower than the original plan
 -- sketch (which had this command also place+type both end inserters); simplified during
 -- implementation per the plan's own flagged Open Question #3 ("exact algorithm needs its
 -- own design pass"). Async like fac_building_place_start/_status: the companion really

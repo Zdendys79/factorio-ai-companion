@@ -189,7 +189,26 @@ local function tile_key(x, y) return x .. ":" .. y end
 -- (Corrected 2026-07-10, adversarial verify: path reconstruction below also uses
 -- state_key via came_from, not tile_key -- this comment previously claimed otherwise;
 -- tile_key is only ever used by the make_is_blocked/make_near_water caches above.)
-local function state_key(x, y, dir) return x .. ":" .. y .. ":" .. tostring(dir) end
+-- `ug` (2026-11-06): the node is an underground-belt EXIT, which may only continue
+-- straight -- its expansion differs from a plain belt's, so it is a separate state.
+local function state_key(x, y, dir, ug)
+  return x .. ":" .. y .. ":" .. tostring(dir) .. (ug and ":u" or "")
+end
+
+-- UNDERGROUND CROSSINGS (opts.underground, 2026-11-06): besides the 4 neighbours, a
+-- node entered straight (not the start, not an exit) with an obstacle right ahead may
+-- become an underground-belt ENTRANCE whose EXIT is UG_MAX_DISTANCE or fewer tiles ahead
+-- in the same direction
+-- (yellow tier: max_distance 5, entrance-to-exit), hopping over whatever lies between
+-- -- a belt, a pipe, a building. That is how one belt crosses another: without it a
+-- plate belt boxed in by a coal belt (live 2026-11-06: a coal join wrapped round a
+-- plate row and enclosed its plate exit) has no route at all. The exit only continues
+-- straight. UG_PENALTY makes a hop cost like a detour of that many tiles, so a plain
+-- route wins wherever one exists. No hop where an underground belt of the same axis
+-- stands within UG_MAX_DISTANCE of the hop on that line: the game would pair the new
+-- entrance or exit with it.
+local UG_MAX_DISTANCE = 5
+local UG_PENALTY = 6
 
 -- Per-run cache: the same neighbor tile is checked from multiple expanded nodes, and
 -- surf.can_place_entity is a real engine call (not a cheap table lookup) -- memoizing
@@ -365,7 +384,10 @@ end
 -- own multi-return semantics (extra return values are simply discarded).
 -- opts (optional): {pure = true} also blocks every fed tile (fed_tiles above) except the
 -- start, which the caller's own belt end is meant to feed; a fed destination fails
--- as "dest-fed".
+-- as "dest-fed". {underground = true} adds underground crossings (UG_MAX_DISTANCE
+-- above): path entries then may carry underground = "entrance" / "exit" (an entrance
+-- is always directly followed by its exit, an exit by a tile straight ahead); the
+-- destination is never an exit (a caller may need to turn its last belt).
 function M.find_path(surf, from, to, force, opts)
   local fx, fy = math.floor(from.x), math.floor(from.y)
   local tx, ty = math.floor(to.x), math.floor(to.y)
@@ -400,6 +422,27 @@ function M.find_path(surf, from, to, force, opts)
 
   local function h(x, y) return math.abs(tx - x) + math.abs(ty - y) end
 
+  local ug_max = (opts and opts.underground) and UG_MAX_DISTANCE or nil
+  local DIR_OF = {}
+  for _, d in ipairs(DIRS) do DIR_OF[d.dir] = d end
+  -- whether an underground belt of the axis of `d` stands on the line through (x, y)
+  -- within UG_MAX_DISTANCE either way (memoized per tile and axis)
+  local ug_axis_cache = {}
+  local function axis_underground_near(x, y, d)
+    local key = tile_key(x, y) .. ":" .. (d.dir % 8)
+    local v = ug_axis_cache[key]
+    if v ~= nil then return v end
+    local ax, bx = x - math.abs(d.dx) * UG_MAX_DISTANCE, x + math.abs(d.dx) * UG_MAX_DISTANCE
+    local ay, by = y - math.abs(d.dy) * UG_MAX_DISTANCE, y + math.abs(d.dy) * UG_MAX_DISTANCE
+    v = false
+    for _, e in pairs(surf.find_entities_filtered{
+        area = {{ax + 0.1, ay + 0.1}, {bx + 0.9, by + 0.9}}, type = "underground-belt"}) do
+      if (e.direction - d.dir) % 8 == 0 then v = true break end
+    end
+    ug_axis_cache[key] = v
+    return v
+  end
+
   local open = {}
   local seq = 0                           -- monotonic push counter, see heap_less above
   seq = seq + 1
@@ -427,7 +470,7 @@ function M.find_path(surf, from, to, force, opts)
     -- same f, so picking a different one among them cannot produce a worse-than-optimal
     -- final path -- see the state_key/goal-test comments below, unaffected by this).
     local cur = heap_pop(open)
-    local ck = state_key(cur.x, cur.y, cur.dir)
+    local ck = state_key(cur.x, cur.y, cur.dir, cur.ug)
     if not visited[ck] then
       visited[ck] = true
       expansions = expansions + 1
@@ -437,16 +480,52 @@ function M.find_path(surf, from, to, force, opts)
         -- among all direction-variants of the goal tile the lowest-g one always has the
         -- lowest f and is popped first (edge costs are non-negative, so g only grows along
         -- a path) -- position-only goal test is correct even though the state space isn't.
-        local path, node = {}, cur
+        -- an exit's predecessor is its entrance (hops start only from non-exit nodes)
+        local path, node, after_exit = {}, cur, false
         while node do
-          table.insert(path, 1, {x = node.x, y = node.y, dir = node.dir})
-          node = came_from[state_key(node.x, node.y, node.dir)]
+          local entry = {x = node.x, y = node.y, dir = node.dir}
+          if node.ug then entry.underground = "exit"
+          elseif after_exit then entry.underground = "entrance" end
+          after_exit = node.ug == true
+          table.insert(path, 1, entry)
+          node = came_from[state_key(node.x, node.y, node.dir, node.ug)]
         end
         return path
       end
+      -- underground hops: from a node entered straight that is not itself an exit
+      if ug_max and cur.dir and not cur.ug then
+        local d = DIR_OF[cur.dir]
+        -- only right before an obstacle: with the tile ahead free, stepping onto it and
+        -- hopping from there costs the same (1 + (k-1) + UG_PENALTY) and reaches one tile
+        -- further, so nothing is lost -- and the axis check (an engine call) runs only
+        -- at obstacles, and only once a free exit tile exists (independent review:
+        -- worst-case tick time)
+        local axis_ok = nil
+        if d and is_blocked(cur.x + d.dx, cur.y + d.dy) then
+          for k = 2, ug_max do
+            local nx, ny = cur.x + d.dx * k, cur.y + d.dy * k
+            if nx < minx or nx > maxx or ny < miny or ny > maxy then break end
+            if not (nx == tx and ny == ty) and not is_blocked(nx, ny) then
+              if axis_ok == nil then axis_ok = not axis_underground_near(cur.x, cur.y, d) end
+              if not axis_ok then break end
+              local ng = cur.g + k + UG_PENALTY + (near_water(nx, ny) and SHORE_PENALTY or 0)
+              local nk = state_key(nx, ny, cur.dir, true)
+              if ng < (gscore[nk] or math.huge) then
+                gscore[nk] = ng
+                came_from[nk] = cur
+                seq = seq + 1
+                heap_push(open, {x = nx, y = ny, dir = cur.dir, g = ng, f = ng + h(nx, ny),
+                                 seq = seq, ug = true})
+              end
+            end
+          end
+        end
+      end
       for _, d in ipairs(DIRS) do
         local nx, ny = cur.x + d.dx, cur.y + d.dy
-        if nx >= minx and nx <= maxx and ny >= miny and ny <= maxy then
+        -- an underground exit only continues straight
+        if (not cur.ug or d.dir == cur.dir)
+            and nx >= minx and nx <= maxx and ny >= miny and ny <= maxy then
           -- No endpoint exemption: the destination tile must be a genuinely valid belt
           -- spot too (not water/occupied), same as every other tile on the route.
           if not is_blocked(nx, ny) then

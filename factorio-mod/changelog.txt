@@ -1,4 +1,21 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.142
+Date: 2026-11-06
+  Changes:
+    - fac_belt_connect_start takes option words: "pure" and/or "underground" (any other
+      word is refused).
+    - "underground": the belt route may cross belts and other obstacles with
+      underground-belt pairs.
+      - Any tile entered straight with an obstacle right ahead, except the start and an
+        exit, may be an entrance.
+      - Its exit stands 2-5 tiles ahead on the same line (yellow tier, max_distance 5)
+        and only continues straight. The goal is never an exit.
+      - A hop costs like a 6-tile detour, so a plain route wins where one exists.
+      - There is no hop where an underground belt of the same axis stands within 5 tiles
+        on that line, because the game would pair with it.
+      Live: a plate route from a row whose exit was enclosed by its own coal belt had no
+      path; with crossings it hops the coal belt and its plates arrive beyond.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.141
 Date: 2026-11-06
   Changes:
