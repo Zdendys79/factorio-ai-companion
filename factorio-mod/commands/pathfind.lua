@@ -209,6 +209,7 @@ end
 -- entrance or exit with it.
 local UG_MAX_DISTANCE = 5
 local UG_PENALTY = 6
+local OWN_PATH_LOOKBACK = 16   -- path tiles a crossing route checks it does not step on
 
 -- Per-run cache: the same neighbor tile is checked from multiple expanded nodes, and
 -- surf.can_place_entity is a real engine call (not a cheap table lookup) -- memoizing
@@ -443,6 +444,22 @@ function M.find_path(surf, from, to, force, opts)
     return v
   end
 
+  -- a route never steps onto its own start or a tile of its recent path: with
+  -- crossings, looping back to enter a hop straight can look cheapest (live 2026-11-06:
+  -- an underground entrance planned on the start tile's own belt). Without crossings a
+  -- loop is never cheaper, so plain routes do not use this. Each node carries its
+  -- parent, so no state-key strings are built on this hot path (independent review).
+  local function on_own_path(node, x, y)
+    if x == fx and y == fy then return true end
+    local n, steps = node, 0
+    while n and steps < OWN_PATH_LOOKBACK do
+      if n.x == x and n.y == y then return true end
+      n = n.parent
+      steps = steps + 1
+    end
+    return false
+  end
+
   local open = {}
   local seq = 0                           -- monotonic push counter, see heap_less above
   seq = seq + 1
@@ -481,12 +498,17 @@ function M.find_path(surf, from, to, force, opts)
         -- lowest f and is popped first (edge costs are non-negative, so g only grows along
         -- a path) -- position-only goal test is correct even though the state space isn't.
         -- an exit's predecessor is its entrance (hops start only from non-exit nodes)
-        local path, node, after_exit = {}, cur, false
+        local path, node, after_exit, seen = {}, cur, false, {}
         while node do
           local entry = {x = node.x, y = node.y, dir = node.dir}
           if node.ug then entry.underground = "exit"
           elseif after_exit then entry.underground = "entrance" end
           after_exit = node.ug == true
+          -- a tile used twice cannot be built (live 2026-11-06: a crossing route looped
+          -- back over its own start) -- the expansion below avoids it; this is the net
+          local tk = tile_key(node.x, node.y)
+          if seen[tk] then return nil, "self-overlap" end
+          seen[tk] = true
           table.insert(path, 1, entry)
           node = came_from[state_key(node.x, node.y, node.dir, node.ug)]
         end
@@ -505,7 +527,8 @@ function M.find_path(surf, from, to, force, opts)
           for k = 2, ug_max do
             local nx, ny = cur.x + d.dx * k, cur.y + d.dy * k
             if nx < minx or nx > maxx or ny < miny or ny > maxy then break end
-            if not (nx == tx and ny == ty) and not is_blocked(nx, ny) then
+            if not (nx == tx and ny == ty) and not is_blocked(nx, ny)
+                and not on_own_path(cur, nx, ny) then
               if axis_ok == nil then axis_ok = not axis_underground_near(cur.x, cur.y, d) end
               if not axis_ok then break end
               local ng = cur.g + k + UG_PENALTY + (near_water(nx, ny) and SHORE_PENALTY or 0)
@@ -515,7 +538,7 @@ function M.find_path(surf, from, to, force, opts)
                 came_from[nk] = cur
                 seq = seq + 1
                 heap_push(open, {x = nx, y = ny, dir = cur.dir, g = ng, f = ng + h(nx, ny),
-                                 seq = seq, ug = true})
+                                 seq = seq, ug = true, parent = cur})
               end
             end
           end
@@ -528,7 +551,7 @@ function M.find_path(surf, from, to, force, opts)
             and nx >= minx and nx <= maxx and ny >= miny and ny <= maxy then
           -- No endpoint exemption: the destination tile must be a genuinely valid belt
           -- spot too (not water/occupied), same as every other tile on the route.
-          if not is_blocked(nx, ny) then
+          if not is_blocked(nx, ny) and not (ug_max and on_own_path(cur, nx, ny)) then
             local turn_penalty = (cur.dir and cur.dir ~= d.dir) and 0.5 or 0
             local shore_penalty = near_water(nx, ny) and SHORE_PENALTY or 0
             local ng = cur.g + 1 + turn_penalty + shore_penalty
@@ -537,7 +560,8 @@ function M.find_path(surf, from, to, force, opts)
               gscore[nk] = ng
               came_from[nk] = cur
               seq = seq + 1
-              heap_push(open, {x = nx, y = ny, dir = d.dir, g = ng, f = ng + h(nx, ny), seq = seq})
+              heap_push(open, {x = nx, y = ny, dir = d.dir, g = ng, f = ng + h(nx, ny), seq = seq,
+                               parent = cur})
             end
           end
         end

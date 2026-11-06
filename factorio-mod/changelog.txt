@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.143
+Date: 2026-11-06
+  Changes:
+    - Belt routes with "underground" crossings no longer step onto their own start tile
+      or a tile of their last 16 path steps. Looping back to enter a hop straight could
+      look cheapest; live, a route planned an underground entrance on its own start
+      belt and failed with "Cannot place underground-belt". A path that still uses a
+      tile twice is refused as "no path" / reason "self-overlap". Plain routes are
+      unchanged, because for them a loop is never cheaper.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.142
 Date: 2026-11-06
   Changes:
