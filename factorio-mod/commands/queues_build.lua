@@ -42,8 +42,9 @@ local SOLID_TYPES = {
 -- outlier too (4 - 0.375 = 3.625, still well above the old 3-tile floor). 3 dropped
 -- from the candidate list entirely (not just de-prioritized) so it can never be
 -- chosen even as a last resort among these candidates; only the very last, all-
--- candidates-blocked fallback below still needs its own check.
-local function find_approach_pos(surf, char_pos, build_pos)
+-- candidates-blocked fallback below still needs its own check. Candidates on tiles that
+-- block characters (u.char_spot_blocked: water, out-of-map) are skipped too.
+local function find_approach_pos(surf, char_pos, build_pos, reach)
   local candidates = {}
   for _, dist in ipairs({5, 4, 6, 7}) do
     for _, angle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
@@ -53,7 +54,7 @@ local function find_approach_pos(surf, char_pos, build_pos)
         y = math.floor(build_pos.y - dist * math.cos(rad) + 0.5)
       }
       local blocked = surf.find_entities_filtered{position = p, radius = 0.5, type = SOLID_TYPES}
-      if #blocked == 0 then
+      if #blocked == 0 and not u.char_spot_blocked(surf, p) then
         candidates[#candidates + 1] = {pos = p, dist = u.distance(char_pos, p)}
       end
     end
@@ -62,7 +63,39 @@ local function find_approach_pos(surf, char_pos, build_pos)
     table.sort(candidates, function(a, b) return a.dist < b.dist end)
     return candidates[1].pos
   end
-  return {x = build_pos.x, y = build_pos.y - 5}
+  -- every candidate blocked: the dry free spot round the old fallback, kept between 4
+  -- tiles from the build (her body off any footprint) and reach-2 (independent review:
+  -- an unbounded search could leave her out of reach, or inside a big footprint)
+  local fallback = {x = build_pos.x, y = build_pos.y - 5}
+  local free = u.dry_char_spot(surf, fallback, 5)
+  local dist = free and u.distance(free, build_pos)
+  if free and dist >= 4 and dist <= (reach or 10) - 2 then return free end
+  return fallback
+end
+
+-- The step-away target after a self-collision (the old fixed south-east diagonal could
+-- lie in a lake -- a power-plant piece on the shore). For each diagonal at distance d,
+-- then d+1: the spot itself if it is dry land, else the nearest free dry tile centre
+-- within 2 that still keeps at least d-0.5 from the build. Entities on the spot are NOT
+-- a reason to skip it: belts are walked over, and the walk-target fix moves her round
+-- the rest (independent review: a belt-dense base rejected every diagonal and failed the
+-- build). nil only when none of these exists.
+local function step_away_spot(surf, build_pos, d, her_pos)
+  for _, dd in ipairs({d, d + 1}) do
+    -- the diagonals nearest to her first (not a fixed order: checklist first-vs-nearest)
+    local diag = {}
+    for _, s in ipairs({{1, 1}, {-1, 1}, {1, -1}, {-1, -1}}) do
+      local p = {x = build_pos.x + s[1] * dd, y = build_pos.y + s[2] * dd}
+      diag[#diag + 1] = {p = p, dist = u.distance(her_pos, p)}
+    end
+    table.sort(diag, function(a, b) return a.dist < b.dist end)
+    for _, c in ipairs(diag) do
+      if not u.char_spot_blocked(surf, c.p) then return c.p end
+      local free = u.dry_char_spot(surf, c.p, 2)
+      if free and u.distance(free, build_pos) >= d - 0.5 then return free end
+    end
+  end
+  return nil
 end
 
 -- Remove trees, small rocks, and loose items from the entity's collision footprint
@@ -160,6 +193,9 @@ end
 -- path, same order of magnitude as this file's other bounded retries (place_verified's
 -- tries=3, direction_achieved's tries=5).
 local MAX_SELF_COLLISION_STEP_AWAY = 2
+-- re-approaches after she drifted out of reach in the BUILDING state, each with a fresh
+-- deadline -- bounded so a build cannot loop approaching/clearing/building forever
+local MAX_REAPPROACH = 3
 
 -- Start a smart build: auto-approach + auto-clear + place
 -- State machine: approaching -> clearing -> building -> done
@@ -178,7 +214,8 @@ function M.start_build(cid, entity_name, position, direction, mirror)
   end
 
   -- Find safe approach position and start walking there
-  local approach = find_approach_pos(c.entity.surface, c.entity.position, position)
+  local approach = find_approach_pos(c.entity.surface, c.entity.position, position,
+                                     c.entity.build_distance or 10)
   storage.walking_queues[cid] = {target = approach}
 
   storage.build_queues[cid] = {
@@ -242,11 +279,14 @@ function M.tick_build_queues()
     -- either way (arrived or timed out) falls through to "approaching" and from there a
     -- normal build attempt, since ANY distance away from where she was already helps.
     if q.state == "stepping_away" then
-      local arrived = u.distance(c.entity.position, q.step_away_target) <= 1
+      -- arrived: the walker stops her up to 2 tiles short of a target and drops its
+      -- queue, so <= 1 never held and every step-away waited out its deadline (review)
+      local arrived = storage.walking_queues[cid] == nil
+        or u.distance(c.entity.position, q.step_away_target) <= 2
       if arrived or game.tick >= q.step_away_deadline then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
-        local approach = find_approach_pos(surf, c.entity.position, q.position)
+        local approach = find_approach_pos(surf, c.entity.position, q.position, reach)
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
@@ -302,10 +342,22 @@ function M.tick_build_queues()
 
       -- Re-check reach (companion may have drifted)
       if u.distance(c.entity.position, q.position) > reach then
-        local approach = find_approach_pos(surf, c.entity.position, q.position)
+        -- a fresh deadline: the first approach's may be long past (independent review);
+        -- bounded, so something that keeps pushing her out of reach ends the build
+        q.reapproach_count = (q.reapproach_count or 0) + 1
+        if q.reapproach_count > MAX_REAPPROACH then
+          storage.walking_queues[cid] = nil
+          q.failed = "cannot stay within reach of the build target (" .. q.position.x .. ","
+            .. q.position.y .. ")"
+          q.run_end_tick = game.tick
+          q.state = "failed"
+          return false
+        end
+        local approach = find_approach_pos(surf, c.entity.position, q.position, reach)
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
+        q.approach_deadline = u.approach_deadline(c.entity.position, approach)
         return false
       end
 
@@ -367,10 +419,11 @@ function M.tick_build_queues()
                                      mirror = q.mirror}
         c.entity.teleport(self_pos)
         q.self_collision_step_away_count = q.self_collision_step_away_count or 0
-        if clear_without_self and q.self_collision_step_away_count < MAX_SELF_COLLISION_STEP_AWAY then
+        local tries_left = q.self_collision_step_away_count < MAX_SELF_COLLISION_STEP_AWAY
+        local step_away = clear_without_self and tries_left
+          and step_away_spot(surf, q.position, step_away_distance(q.entity), c.entity.position)
+        if step_away then
           q.self_collision_step_away_count = q.self_collision_step_away_count + 1
-          local d = step_away_distance(q.entity)
-          local step_away = {x = q.position.x + d, y = q.position.y + d}
           storage.walking_queues[cid] = {target = step_away}
           q.step_away_target = step_away
           q.state = "stepping_away"
@@ -399,7 +452,10 @@ function M.tick_build_queues()
           q.entity, q.position.x, q.position.y, diag.tile, 60, tostring(clear_without_self),
           q.self_collision_step_away_count, table.concat(diag.nearby, ",")),
           "build_queue")
-        q.failed = "Cannot place (collision)"
+        -- her own body was the blocker but no dry spot to step away to: say so (review)
+        q.failed = (clear_without_self and tries_left)
+          and "Cannot place (collision): her own body, and no dry step-away spot"
+          or "Cannot place (collision)"
         q.run_end_tick = game.tick
         q.state = "failed"
         return false

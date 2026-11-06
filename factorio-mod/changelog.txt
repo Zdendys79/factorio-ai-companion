@@ -1,4 +1,27 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.148
+  Bugfixes:
+    - The build queue no longer sends the companion into water (the root cause of
+      RARE-WALK-01).
+      - A self-collision step-away tries the four diagonals at d and d+1, nearest to her
+        first. Each is taken if dry, else the nearest dry free tile centre within 2
+        that keeps d-0.5 from the build. The old fixed south-east diagonal lay in a lake
+        for power-plant pieces on a shore.
+      - Belts no longer reject a diagonal (they are walked over).
+      - With no dry spot at all, the build fails with an explicit reason.
+      - find_approach_pos skips candidates on water / out-of-map, and its all-blocked
+        fallback is a dry spot kept between 4 and reach-2 from the build.
+      - Live (factorio-ai scripts/live_verify_step_away_dry_2026_11_06.py, a pipe on the
+        shore with her standing on it): she steps to a dry diagonal and the pipe is
+        placed. The old code: "Cannot place (collision)".
+    - The step-away counts as arrived when the walker has dropped its queue or she is
+      within 2 tiles. The walker stops up to 2 tiles short, so "<= 1" never held and
+      every step-away waited out its deadline.
+    - A drifted re-approach gets a fresh deadline, bounded to 3 per build
+      (MAX_REAPPROACH).
+    - Shared helpers u.char_spot_blocked / u.dry_char_spot (init.lua), also used by
+      walk_start.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.147
   Bugfixes:
     - A walk path is requested from a free start when the companion's collision box

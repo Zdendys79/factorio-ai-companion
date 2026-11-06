@@ -144,6 +144,26 @@ end
 
 -- Tick-safe logging: appends to the storage.errors ring buffer WITHOUT rcon.print (which is
 -- only valid inside an active RCON command context, not from a tick handler like queues.lua).
+-- Whether a character standing at p (box half-size `half`, default 0.3: her collision box
+-- 0.2 plus a margin) would overlap a tile that blocks characters (the "player" collision
+-- layer: water, out-of-map). Her own movement is transition-aware and lets her partly
+-- into a shore tile; the pathfinder is not, and then finds no path from there (live
+-- RARE-WALK-01, factorio-ai: ~400k ticks on the plant's shore). The one shared check for
+-- walk starts, walk targets and build approach / step-away spots.
+function M.char_spot_blocked(surf, p, half)
+  local h = half or 0.3
+  return surf.count_tiles_filtered{area = {{p.x - h, p.y - h}, {p.x + h, p.y + h}},
+                                   collision_mask = "player"} > 0
+end
+
+-- The nearest free spot for a character within `radius` of p that is a dry tile centre
+-- (force_to_tile_center: her box then lies inside one tile), or nil.
+function M.dry_char_spot(surf, p, radius)
+  local free = surf.find_non_colliding_position("character", p, radius, 0.5, true)
+  if free and not M.char_spot_blocked(surf, free) then return free end
+  return nil
+end
+
 function M.log_error(msg, ctx)
   storage.errors = storage.errors or {}
   table.insert(storage.errors, {context = ctx or "internal", error = tostring(msg), tick = game.tick})

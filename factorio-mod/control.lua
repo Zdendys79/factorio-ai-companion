@@ -297,17 +297,12 @@ end
 -- (force_to_tile_center): her box then lies inside one land tile, checked dry before it
 -- is used (independent review: a transition-aware free spot can still be "wet").
 -- Returns: the start position, and true when it was shifted.
-local function box_blocked(surface, x, y, bb)
-  local hw, hh = (bb.right_bottom.x - bb.left_top.x) / 2, (bb.right_bottom.y - bb.left_top.y) / 2
-  return surface.count_tiles_filtered{area = {{x - hw, y - hh}, {x + hw, y + hh}},
-                                      collision_mask = "player"} > 0
-end
-
 local function walk_start(e)
-  local p, bb = e.position, e.bounding_box
-  if not box_blocked(e.surface, p.x, p.y, bb) then return p, false end
-  local free = e.surface.find_non_colliding_position("character", p, 2, 0.1, true)
-  if not free or box_blocked(e.surface, free.x, free.y, bb) then
+  local p = e.position
+  -- her own box exactly (half 0.2): a margin would shift starts that are merely near water
+  if not u.char_spot_blocked(e.surface, p, 0.2) then return p, false end
+  local free = u.dry_char_spot(e.surface, p, 2)
+  if not free then
     u.log_error(string.format("walk start (%.2f,%.2f) overlaps a blocking tile and no dry "
       .. "tile centre within 2 -- path from her position", p.x, p.y), "walk_start_wet")
     return p, false
