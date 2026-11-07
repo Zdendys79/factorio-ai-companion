@@ -9,14 +9,15 @@
 #   2) MECHANICAL self-review checks (2026-07-05) -- Zdendys, after cubic-dev-ai bot caught
 #      the SAME bug classes 3 times in one night: "run these checks before commit too, so
 #      ChatGPT doesn't have to keep bothering us with spam" + "set it up so that it's always
-#      reliable, not dependent on whether I happen to remember it". A checklist written into
-#      CLAUDE.md/memory still depends on remembering to read it -- this hook does NOT: it
-#      greps the actual staged diff for the exact patterns that caused real bugs and REFUSES
-#      the commit (exit 1) until fixed or explicitly bypassed with `git commit --no-verify`
-#      (a deliberate, visible override, not a silently-ignorable warning).
+#      reliable, not dependent on whether I happen to remember it". A written checklist
+#      still depends on remembering to read it -- this hook does NOT: it greps the actual
+#      staged diff for the exact patterns that caused real bugs and REFUSES the commit
+#      (exit 1) until fixed or explicitly bypassed with `git commit --no-verify` (a
+#      deliberate, visible override, not a silently-ignorable warning).
 #
-# See CLAUDE.md's "CHECKLIST BEFORE EVERY COMMIT" for the full human-readable checklist --
-# this hook mechanically enforces the subset that's actually grep-able.
+# The full human-readable checklist is the pre-commit-checklist skill of the factorio-ai
+# repo (.claude/skills/pre-commit-checklist); this hook enforces its grep-able points 1
+# and 3.
 set -e
 
 info="factorio-mod/info.json"
@@ -137,8 +138,8 @@ fi
 
 if [ "$fail" = "1" ]; then
   echo ""
-  echo "[pre-commit] Blocked by mechanical self-review checks (see CLAUDE.md's"
-  echo "'CHECKLIST PRED KAZDYM COMMITEM' for the full list this only partially automates)."
+  echo "[pre-commit] Blocked by mechanical self-review checks (the full list this only"
+  echo "partially automates: the pre-commit-checklist skill of the factorio-ai repo)."
   echo "Fix the above, or if it's a deliberate false positive, bypass with:"
   echo "  git commit --no-verify"
   exit 1
