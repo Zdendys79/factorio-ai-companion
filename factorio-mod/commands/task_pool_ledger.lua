@@ -41,7 +41,7 @@ local function derive_needs(steps, upto)
     local s = steps[i]
     if s.type == "place" then
       needs[s.entity] = (needs[s.entity] or 0) + 1
-    elseif s.type == "fuel" then
+    elseif s.type == "fuel" or s.type == "insert" then
       needs[s.item] = (needs[s.item] or 0) + (s.count or 1)
     elseif s.type == "remove" then
       needs[s.entity] = (needs[s.entity] or 0) - 1

@@ -6,11 +6,66 @@
 
 local u = require("commands.init")
 local targeting = require("commands.task_pool_targeting")
+local ledger = require("commands.task_pool_ledger")
 
 local step_target_pos = targeting.step_target_pos
 local WALK_REACH = targeting.WALK_REACH
 
 local M = {}
+
+-- an "insert" step's target: the entity of its name nearest its position within this
+-- radius
+local INSERT_RADIUS = 1
+
+-- {type="insert", x=, y=, entity=NAME, item=NAME, count=N}: N of the item from her
+-- inventory into the entity of that name nearest (x, y) within INSERT_RADIUS -- e.g.
+-- the fuel chest an inserter feeds a burner from (commands/upkeep.lua: Zdendys -- she
+-- supplies a production or a chest no belt with that material reaches yet). What went
+-- in leaves the task's reservations (ledger.consume); what could not be taken from her
+-- inventory is taken back out of the target.
+-- @return boolean ok, string|nil err
+function M.run_insert(c, t, step)
+  local pos = step_target_pos(t, step)
+  if not pos then return false, "insert: no target position resolved" end
+  if type(step.item) ~= "string" or not prototypes.item[step.item] then
+    return false, "insert: unknown item " .. tostring(step.item)
+  end
+  local count = tonumber(step.count) or 1
+  if count < 1 or count ~= math.floor(count) then
+    return false, "insert: count must be a whole number >= 1, got " .. tostring(step.count)
+  end
+  local inv = c.entity.get_main_inventory()
+  local have = inv.get_item_count(step.item)
+  if have == 0 then return false, "no " .. step.item .. " in inventory" end
+  local filter = {position = pos, radius = INSERT_RADIUS}
+  if step.entity then filter.name = step.entity end
+  local target, best = nil, math.huge
+  for _, e in pairs(c.entity.surface.find_entities_filtered(filter)) do
+    if e.valid and e ~= c.entity and e.type ~= "resource" then
+      local d = u.distance(e.position, pos)
+      if d < best then target, best = e, d end
+    end
+  end
+  if not target then
+    return false, "insert: no " .. tostring(step.entity or "entity") .. " at the target"
+  end
+  local ok, n = pcall(target.insert, {name = step.item, count = math.min(count, have)})
+  if not ok then
+    u.log_error("insert: " .. target.name .. ".insert failed: " .. tostring(n), "task_pool")
+    return false, "insert: the " .. target.name .. " refused " .. step.item
+  end
+  if n <= 0 then return false, "insert: the " .. target.name .. " took no " .. step.item end
+  local removed = inv.remove{name = step.item, count = n}
+  if removed < n then
+    -- (her inventory held less than it said: what is missing goes back out of the target)
+    target.remove_item{name = step.item, count = n - removed}
+    u.log_error(string.format("insert: %d %s put in, only %d taken from her inventory",
+                              n, step.item, removed), "task_pool")
+  end
+  if removed > 0 then ledger.consume(t, step.item, removed) end
+  if removed <= 0 then return false, "insert: no " .. step.item .. " left in inventory" end
+  return true, nil
+end
 
 function M.run_read_drop_position(c, t, step)
   local pos = step_target_pos(t, step)

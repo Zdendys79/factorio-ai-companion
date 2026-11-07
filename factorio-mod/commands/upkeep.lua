@@ -12,15 +12,29 @@
 -- - its output's fill lowers the part above 1: p' = 1 + (p - 1) x (1 - 0.9 x fill)
 --   (products piling up need the supply less; a full output still leaves a little);
 -- - a mined-out drill or a furnace with nothing to smelt needs no fuel now -- skipped;
--- - an inserter dropping into it (a belt / chest + inserter supply), or a mining drill
---   (a coal pair's drills feed each other), means it is not hers to serve by hand --
---   unless it runs dry all the same (t under FED_DRY_S): then
---   it is served and named underfed (its supply line is short), logged once per
+-- - what feeds it (commands/upkeep_feeds.lua): a supply line of its own (an inserter
+--   from a belt or a chest a fuel line fills, a fuel-mining drill -- a coal pair's
+--   drills feed each other; an inserter from an ore belt or a plate buffer is none)
+--   means it is not hers to serve by hand while one of its sources supplies it
+--   (working, at low power too, or waiting for room in it -- an inserter keeps a
+--   burner at 5 fuel items, a boiler's ~12 s, so its seconds left tell nothing) and its
+--   fuel slot holds at least LINE_MIN_ITEMS (4); a supply line delivering nothing at
+--   two scans in a row (an empty belt, a partner drill without fuel, a slot under 4)
+--   makes it hers like an unfed one, named underfed, logged once per
 --   UNDERFED_LOG_TICKS;
--- - p' > 1 makes an upkeep task: one fuel step at it, the coal to its target (raised to
---   MIN_BATCH, capped by the slot's room and her free coal above COAL_FLOOR; none when
---   the free coal does not reach min(MIN_BATCH, the room) -- "short"), priority p' (kept
---   up to date each scan; the task pool's scheduler
+-- - a fuel chest an inserter feeds it from, supplied by nothing (Zdendys: she supplies
+--   a production or a chest no belt with that material reaches yet), is what she fills:
+--   once one of its burners runs down (it is that burner's nearest fuel chest), one need
+--   for all the burners inserters from it feed: t = (the chest's fuel + theirs) over
+--   their consumption together, target TARGET_S, the least output fill among them; a
+--   burner of it under FED_DRY_S with no inserter from its chest supplying it at two
+--   scans in a row is served by hand too (underfed when the chest has fuel: its
+--   inserter does not deliver); a
+--   chest with no room for coal is full of fuel -- no need;
+-- - p' > 1 makes an upkeep task: one fuel step at the burner (an insert step at a fuel
+--   chest), the coal to its target (raised to MIN_BATCH, capped by the room and her free
+--   coal above COAL_FLOOR; none when the free coal does not reach min(MIN_BATCH, the
+--   room) -- "short"), priority p' (kept up to date each scan; the task pool's scheduler
 --   ranks it with every other task's step by p' ^ (1 / (distance + 1)) -- it may come
 --   between a build's steps).
 -- At most MAX_TASKS upkeep tasks per companion, the highest p' (nearer first on a tie;
@@ -32,6 +46,7 @@
 -- for are listed as "short" in the status and logged.
 local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
+local F = require("commands.upkeep_feeds")
 
 local M = {}
 
@@ -42,17 +57,15 @@ M.MAX_TASKS = 3
 M.FUEL = "coal"
 M.MIN_BATCH = 5             -- coal per upkeep task at least (unless the room is less)
 M.COAL_FLOOR = 10           -- free coal she keeps for the other tasks
--- a fed burner under this many seconds of fuel is served (a scan plus a walk to a far
--- burner take that long -- review: 10 s let it run dry before she arrived)
+-- a chest-fed burner under this many seconds of fuel, no inserter from its chest
+-- supplying it, is served by hand (a scan plus a walk to a far burner take that long --
+-- review: 10 s let it run dry before she arrived)
 M.FED_DRY_S = 30
 M.REPLACE_MARGIN = 0.5      -- a kept task is replaced only by a need this much higher
 local UNDERFED_LOG_TICKS = 18000
 local SHORT_LOG_TICKS = 18000
 -- a burner whose upkeep task failed is left out this long, doubled while it repeats
 local FAIL_BACKOFF_TICKS = 3600
--- an inserter / a drill whose drop position lies within this many tiles of a burner's
--- box counts as feeding it
-local FEED_MARGIN = 0.3
 local BURNER_TYPES = {"furnace", "mining-drill", "boiler"}
 
 function M.init()
@@ -60,7 +73,9 @@ function M.init()
   --   last_scan = {[cid] = tick}, underfed = {[cid] = {[key] = tick logged}},
   --   short = {[cid] = {[key] = tick logged}},
   --   backoff = {[cid] = {[key] = {until_tick, n failures in a row}}},
-  --   blocked = {[cid] = {coal = tick logged: another task waited for coal}}}
+  --   blocked = {[cid] = {coal = tick logged: another task waited for coal}},
+  --   down = {[cid] = {[key] = {first, last}: scan ticks its supply line delivered
+  --   nothing}} (made by the scan)}
   storage.upkeep = storage.upkeep or {}
   storage.upkeep.enabled = storage.upkeep.enabled or {}
   storage.upkeep.tasks = storage.upkeep.tasks or {}
@@ -75,58 +90,18 @@ local function key_of(e)
   return string.format("%.1f,%.1f", e.position.x, e.position.y)
 end
 
--- Whether a mining drill mines a fuel (its resource's product has a fuel value): a coal
--- drill dropping into a burner feeds its fuel, an iron drill dropping into a furnace
--- only its ore.
-local function mines_fuel(drill)
-  local res = drill.mining_target
-  local mineable = res and res.valid and res.prototype.mineable_properties
-  for _, product in pairs((mineable and mineable.products) or {}) do
-    local proto = product.type == "item" and prototypes.item[product.name]
-    if proto and (proto.fuel_value or 0) > 0 then return true end
-  end
-  return false
-end
-
--- Whether something drops fuel into the entity: an inserter (its supply by belt or
--- chest -- what it carries is not known here; one that leaves it dry all the same is
--- caught by FED_DRY_S) or a mining drill mining a fuel (live: a coal pair's drills
--- feed each other -- an emptied one had its fuel back from its partner before any
--- task; an iron drill's ore into a furnace is no fuel).
-local function fed(e)
-  local box = e.bounding_box
-  local area = {{box.left_top.x - 3, box.left_top.y - 3},
-                {box.right_bottom.x + 3, box.right_bottom.y + 3}}
-  for _, src in pairs(e.surface.find_entities_filtered{area = area,
-                                                       type = {"inserter", "mining-drill"}}) do
-    if src ~= e and (src.type == "inserter" or mines_fuel(src)) then
-      local d = src.drop_position
-      if d and d.x >= box.left_top.x - FEED_MARGIN and d.x <= box.right_bottom.x + FEED_MARGIN
-         and d.y >= box.left_top.y - FEED_MARGIN
-         and d.y <= box.right_bottom.y + FEED_MARGIN then
-        return true
-      end
-    end
-  end
-  return false
-end
-
--- (seconds the fuel lasts, seconds a full slot would last, joules per tick) at full
--- consumption; nil when not measurable.
+-- (seconds its fuel lasts, seconds a full slot would last, joules per tick, the joules
+-- it holds) at full consumption; nil when not measurable.
 local function fuel_seconds(e)
   local burner = e.burner
   if not burner or not burner.inventory then return nil end
   local usage = e.prototype.get_max_energy_usage(e.quality)   -- joules per tick
   if not usage or usage <= 0 then return nil end
-  local energy = burner.remaining_burning_fuel or 0
-  for _, item in pairs(burner.inventory.get_contents()) do
-    local proto = prototypes.item[item.name]
-    energy = energy + (proto and proto.fuel_value or 0) * item.count
-  end
+  local energy = (burner.remaining_burning_fuel or 0) + F.inventory_fuel(burner.inventory)
   local coal = prototypes.item[M.FUEL]
   local room = burner.inventory.get_insertable_count(M.FUEL)
   local full = energy + room * ((coal and coal.fuel_value) or 0)
-  return energy / (usage * 60), full / (usage * 60), usage
+  return energy / (usage * 60), full / (usage * 60), usage, energy
 end
 
 -- Its output's fill, 0 .. 1 (products piling up -- nothing takes them off).
@@ -155,27 +130,56 @@ end
 local NO_NEED = {[defines.entity_status.no_minable_resources] = true,
                  [defines.entity_status.no_ingredients] = true}
 
--- A burner's upkeep need: {p, t, target, usage, fill}, or nil (no task: not
--- measurable, needing no fuel now, or not short).
+-- The priority of a need from its time left and target, lowered by an output's fill
+-- (nil: not short).
+local function priority_of(t, target, fill)
+  if target <= 1 then return nil end
+  local p = math.log(target / math.max(1, t), 2)
+  if p <= 1 then return nil end
+  return 1 + (p - 1) * (1 - 0.9 * fill)
+end
+
+-- A burner's upkeep need -- its own slot filled: {p, t, target, usage, fill}, or nil
+-- (no task: not measurable, needing no fuel now, or not short).
 function M.burner_need(e)
   if NO_NEED[e.status] then return nil end
   local t, full, usage = fuel_seconds(e)
   if not t then return nil end
   local target = math.min(M.TARGET_S, full)
-  if target <= 1 then return nil end
-  local p = math.log(target / math.max(1, t), 2)
-  if p <= 1 then return nil end
   local fill = output_fill(e)
-  return {p = 1 + (p - 1) * (1 - 0.9 * fill), t = t, target = target, usage = usage,
-          fill = fill}
+  local p = priority_of(t, target, fill)
+  if not p then return nil end
+  return {p = p, t = t, target = target, usage = usage, fill = fill}
 end
 
--- Coal to the burner's target, capped by its slot's room.
+-- A fuel chest's need for the burners it feeds (group: {chest, usage = their joules per
+-- tick together, energy = the joules they hold, fill = the least output fill among
+-- them}) -- the chest's fuel and theirs over their consumption together (review: each
+-- burner counting the whole chest as its own overrated it N times), no slot cap (the
+-- chest is filled): {p, t, target, usage, fill, into = the chest}, or nil.
+local function chest_need(group)
+  local chest = group.chest
+  local energy = group.energy + F.inventory_fuel(chest.get_inventory(defines.inventory.chest))
+  local t = energy / (group.usage * 60)
+  local p = priority_of(t, M.TARGET_S, group.fill)
+  if not p then return nil end
+  return {p = p, t = t, target = M.TARGET_S, usage = group.usage, fill = group.fill,
+          into = chest}
+end
+
+-- The inventory an upkeep task fills: the fuel chest (need.into) or the burner's slot.
+local function target_inventory(e, need)
+  if need.into then return need.into.get_inventory(defines.inventory.chest) end
+  return e.burner.inventory
+end
+
+-- Coal to the target, capped by the room of what is filled.
 local function coal_wanted(e, need)
   local proto = prototypes.item[M.FUEL]
   if not proto or not proto.fuel_value or proto.fuel_value <= 0 then return 0, 0 end
   local missing_j = math.max(0, (need.target - need.t) * need.usage * 60)
-  local room = e.burner.inventory.get_insertable_count(M.FUEL)
+  local inv = target_inventory(e, need)
+  local room = inv and inv.get_insertable_count(M.FUEL) or 0
   return math.min(math.ceil(missing_j / proto.fuel_value), room), room
 end
 
@@ -202,8 +206,21 @@ local function log_once(name, cid, key, every, msg)
   end
 end
 
+-- The log books' entries older than their interval dropped (review: one entry per key
+-- ever logged stayed for the whole game).
+local LOG_BOOKS = {underfed = UNDERFED_LOG_TICKS, short = SHORT_LOG_TICKS,
+                   blocked = SHORT_LOG_TICKS}
+local function prune_log_books(cid)
+  for name, every in pairs(LOG_BOOKS) do
+    local book = storage.upkeep[name] and storage.upkeep[name][cid]
+    for key, tick in pairs(book or {}) do
+      if game.tick - tick >= every then book[key] = nil end
+    end
+  end
+end
+
 -- The coal an upkeep task for need n would take: the amount wanted raised to MIN_BATCH,
--- capped by the slot's room and the free coal (`extra`: coal a task about to be
+-- capped by the room of what is filled and the free coal (`extra`: coal a task about to be
 -- replaced would release) -- 0 when the free coal does not reach min(MIN_BATCH, the
 -- room) (review: she walked far to hand over 1 coal). (amount, whether free coal is
 -- what limits it)
@@ -252,30 +269,109 @@ local function scan(cid, c)
   storage.upkeep.tasks[cid] = storage.upkeep.tasks[cid] or {}
   local mine = storage.upkeep.tasks[cid]
   prune(cid, mine)
+  prune_log_books(cid)
   local off = storage.upkeep.backoff[cid]
   local pos = c.entity.position
   local needs = {}
+  local function add(need, e)
+    if need then
+      need.e, need.key = e, key_of(e)
+      need.dist = u.distance(pos, e.position)
+      needs[#needs + 1] = need
+    end
+  end
+  local function is_off(e)
+    return off[key_of(e)] ~= nil and game.tick < off[key_of(e)].until_tick
+  end
+  -- a burner whose supply line delivers nothing: {[key] = {first, last scan ticks,
+  -- path: "line" / "chest"}}
+  storage.upkeep.down = storage.upkeep.down or {}
+  storage.upkeep.down[cid] = storage.upkeep.down[cid] or {}
+  local down = storage.upkeep.down[cid]
+  for k, d in pairs(down) do
+    if game.tick - d.last > M.SCAN_TICKS * 3 then down[k] = nil end   -- left the scan
+  end
+  -- Whether the burner's supply (path: its "line" or its fuel "chest") was down at this
+  -- scan and the one before (a record older than the scan before, or of the other
+  -- path, starts afresh -- review: a burner flipping between paths).
+  local function down_twice(key, path)
+    local d = down[key]
+    if not d or d.path ~= path or game.tick - d.last > M.SCAN_TICKS * 3 / 2 then
+      down[key] = {first = game.tick, last = game.tick, path = path}
+      return false
+    end
+    d.last = game.tick
+    return game.tick - d.first >= M.SCAN_TICKS
+  end
+  -- the fuel chests to judge: {[chest key] = chest} (a burner's nearest fuel chest)
+  local groups = {}
   for _, e in pairs(c.entity.surface.find_entities_filtered{
       position = pos, radius = M.SCAN_RADIUS, force = c.entity.force, type = BURNER_TYPES}) do
-    local held_off = e.valid and off[key_of(e)] and game.tick < off[key_of(e)].until_tick
-    if e.valid and e.burner and not held_off then
-      local need = M.burner_need(e)
-      if need then
-        local is_fed = fed(e)
-        if is_fed and need.t >= M.FED_DRY_S then
-          need = nil                         -- its supply line feeds it
-        elseif is_fed then
-          log_once("underfed", cid, key_of(e), UNDERFED_LOG_TICKS,
-                   string.format("[UNDERFED] %s at %s: fed by an inserter / a drill yet "
-                                 .. "%.0f s of fuel left -- its supply is short", e.name,
-                                 key_of(e), need.t))
+    -- (cheap first: a burner whose own fuel lasts TARGET_S / 2 needs nothing either way;
+    -- one fed from a chest that still holds fuel keeps its slot topped up, so its chest
+    -- is judged once its own fuel runs down)
+    local own_t = e.valid and e.burner and not NO_NEED[e.status] and fuel_seconds(e)
+    if own_t and own_t < M.TARGET_S / 2 then
+      local f = F.feeds(e)
+      if f.other then
+        -- its supply line feeds it while one of its sources supplies (the insertion
+        -- limit keeps only a few items in it -- a boiler's ~12 s); down at two scans in
+        -- a row (a sparse belt's inserter waits now and then), it is hers like an
+        -- unfed one, named underfed
+        if f.other_ok then
+          down[key_of(e)] = nil
+        elseif not is_off(e) and down_twice(key_of(e), "line") then
+          local need = M.burner_need(e)
+          if need then
+            log_once("underfed", cid, key_of(e), UNDERFED_LOG_TICKS,
+                     string.format("[UNDERFED] %s at %s: its supply line delivers nothing "
+                                   .. "(%s), %.0f s of fuel left -- served by hand",
+                                   e.name, key_of(e), tostring(f.why), need.t))
+          end
+          add(need, e)
+        end
+      elseif #f.chests > 0 then
+        local chest = f.chests[1]
+        local ck = key_of(chest)
+        groups[ck] = groups[ck] or chest
+        -- running dry with no inserter from its chest supplying it at two scans in a row
+        -- (review: one scan's blip made a task the next one cancelled): served by hand
+        -- (review: the chest's need alone left it dry), named underfed when its chest
+        -- has fuel to give (an inserter from a chest with fuel waits for room in it at
+        -- the insertion limit -- a boiler's ~12 s: no rescue then)
+        if f.chest_ok or own_t >= M.FED_DRY_S then
+          down[key_of(e)] = nil
+        elseif not is_off(e) and down_twice(key_of(e), "chest") then
+          if F.inventory_fuel(chest.get_inventory(defines.inventory.chest)) > 0 then
+            log_once("underfed", cid, key_of(e), UNDERFED_LOG_TICKS,
+                     string.format("[UNDERFED] %s at %s: %.0f s of fuel left though its "
+                                   .. "fuel chest at %s holds fuel -- its chest's inserter "
+                                   .. "does not deliver (%s)", e.name, key_of(e), own_t, ck,
+                                   tostring(f.chest_why)))
+          end
+          add(M.burner_need(e), e)
+        end
+      elseif not is_off(e) then
+        add(M.burner_need(e), e)
+      end
+    end
+  end
+  -- each fuel chest one of whose burners ran down: one need for all the burners it
+  -- feeds (review: the whole chest's burners, not only those under the cheap check);
+  -- a chest with no room for coal is full of fuel -- no need (review: serving its
+  -- burners by hand then went to burners whose chest supplies them)
+  for _, chest in pairs(groups) do
+    local inv = chest.get_inventory(defines.inventory.chest)
+    if inv and inv.get_insertable_count(M.FUEL) > 0 and not is_off(chest) then
+      local g = {chest = chest, usage = 0, energy = 0, fill = 1}
+      for _, b in ipairs(F.chest_burners(chest)) do
+        local _, _, usage, energy = fuel_seconds(b)
+        if usage and not NO_NEED[b.status] then
+          g.usage, g.energy = g.usage + usage, g.energy + energy
+          g.fill = math.min(g.fill, output_fill(b))
         end
       end
-      if need then
-        need.e, need.key = e, key_of(e)
-        need.dist = u.distance(pos, e.position)
-        needs[#needs + 1] = need
-      end
+      if g.usage > 0 then add(chest_need(g), chest) end
     end
   end
   table.sort(needs, function(a, b)
@@ -311,9 +407,12 @@ local function scan(cid, c)
     return wk, wp
   end
   local function submit(n, amount)
-    local r = ledger.submit_task(cid, {{type = "fuel", x = n.e.position.x,
-                                        y = n.e.position.y, item = M.FUEL,
-                                        count = amount}}, "upkeep", n.p)
+    -- a fuel chest is filled by an "insert" step, a burner by a "fuel" step
+    local step = n.into and {type = "insert", x = n.into.position.x, y = n.into.position.y,
+                             entity = n.into.name, item = M.FUEL, count = amount}
+                 or {type = "fuel", x = n.e.position.x, y = n.e.position.y, item = M.FUEL,
+                     count = amount}
+    local r = ledger.submit_task(cid, {step}, "upkeep", n.p)
     if r.task_id then
       mine[n.key] = r.task_id
     else
@@ -400,6 +499,9 @@ function M.set_enabled(cid, on)
   M.init()
   storage.upkeep.enabled[cid] = on or nil
   if not on then
+    -- (its books are not left to grow while it is off -- review)
+    if storage.upkeep.down then storage.upkeep.down[cid] = nil end
+    prune_log_books(cid)
     local active = storage.active_step and storage.active_step[cid]
     for key, task_id in pairs(storage.upkeep.tasks[cid] or {}) do
       local t = storage.tasks[task_id]
@@ -423,8 +525,12 @@ function M.status(cid)
   for key, task_id in pairs((up.tasks and up.tasks[cid]) or {}) do
     local t = storage.tasks[task_id]
     if t and t.status == "active" then
+      -- fills: what the task fills -- the burner's slot ("fuel") or a fuel chest
+      -- ("insert"), at "x,y"
+      local s = t.steps and t.steps[1]
       out.tasks[#out.tasks + 1] = {key = key, task_id = task_id, status = t.status,
-                                   priority = t.priority}
+                                   priority = t.priority, fills = s and s.type,
+                                   at = s and string.format("%.1f,%.1f", s.x, s.y)}
     end
   end
   for key, tick in pairs((up.short and up.short[cid]) or {}) do

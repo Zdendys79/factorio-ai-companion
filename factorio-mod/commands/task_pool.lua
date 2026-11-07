@@ -39,6 +39,10 @@
 --                                                             own drop_position flips side)
 --   {type="remove", which=/x,y/ref=, entity=NAME}
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
+--   {type="insert", x=, y=, entity=NAME, item=NAME, count=N}
+--                                                       -> N into the entity of that name
+--                                                          (a fuel chest -- the upkeep's;
+--                                                          task_pool_steps.run_insert)
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
 --                                                       -> ctx.saved[save_as]
 --   {type="ensure_item", item=NAME, count=N}            -> gathers/crafts NAME
@@ -139,6 +143,7 @@ local run_set_position = steps.run_set_position
 local run_find_patch = steps.run_find_patch
 local run_verify_tile = steps.run_verify_tile
 local run_pick_orientation = steps.run_pick_orientation
+local run_insert = steps.run_insert
 
 -- ensure_item step (2026-07-17, Zdendys's own architecture correction -- see
 -- task_pool_ensure_item.lua's own header for the full design/history): the
@@ -673,6 +678,8 @@ function M.tick()
             end
           end
         end
+      elseif step.type == "insert" then
+        ok, err = run_insert(c, t, step)
       elseif step.type == "find_patch" then
         ok, err = run_find_patch(c, t, step)
       elseif step.type == "find_existing" then

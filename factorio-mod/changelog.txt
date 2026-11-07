@@ -1,4 +1,52 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.154
+  Changes:
+    - A burner with a supply line of its own is judged by its sources' state, not by
+      its seconds of fuel. Live, an inserter keeps a burner at 5 fuel items: a boiler
+      ~12 s, a drill ~140 s. So the old rule (served under 30 s) would serve every
+      inserter-fed boiler by hand.
+      - The line supplies while one of its sources is working (low power too) or
+        waiting for room in the burner, and the burner's fuel slot holds at least 4
+        items (fewer means the fuel does not keep up, whatever the status).
+      - When it delivers nothing at two scans in a row (an empty belt, a stopped
+        inserter, a coal pair partner without fuel, a slot under 4 items), the burner
+        is served like an unfed one. [UNDERFED] names the source's status or the low
+        fuel count.
+      - An inserter from a belt, a filled chest or a logistic chest that carries only
+        items that are no fuel (an ore belt, a plate buffer) is no fuel feed; nor is
+        one from an empty belt / chest whose inserter holds an item that is no fuel (a
+        gap on an ore belt). Ghosts, corpses and characters are never a pickup source.
+    - The upkeep's log books drop entries older than their interval (and the
+      two-scan book is cleared when upkeep is switched off).
+  Features:
+    - Fuel upkeep fills fuel chests. A burner whose only fuel feed is an inserter
+      from a fuel chest is served through that chest. A fuel chest is a plain chest,
+      empty or holding only fuels, that no inserter or drill fills; logistic chests
+      are left to the robots.
+      - Judged once one of its burners runs down (the chest is that burner's nearest
+        fuel chest): one need for all the burners inserters from the chest feed. Time
+        left = the chest's fuel plus theirs, over their consumption together; target
+        300 s; the least output fill among them lowers the priority. The task fills
+        the chest, not the burners.
+      - A burner of it under 30 s of fuel, with no inserter from its chest supplying it
+        (or under 4 fuel items in it) at two scans in a row, is also served by hand. When its chest still holds fuel,
+        [UNDERFED] says its chest's inserter does not deliver (with the inserter's
+        status).
+      - A chest with no room for coal is full of fuel: no need.
+      - The feed classification moved to commands/upkeep_feeds.lua. A chest an
+        inserter or a fuel-mining drill fills, a belt, the ground, or a machine making
+        a fuel counts as a supply line of its own. An ore chest, an ore buffer a drill
+        fills, or a furnace making plates is no fuel feed. An inserter's pickup entity
+        is the nearest at its pickup position.
+    - Task-pool step "insert" {x, y, entity, item, count} (task_pool_steps.run_insert):
+      puts items from her inventory into the entity of that name nearest (x, y)
+      within 1 tile.
+      - The item must exist and the count must be a whole number >= 1.
+      - A refused insert fails the step (logged).
+      - What she could not give is taken back out of the target. What went in leaves
+        the task's reservations.
+      - derive_needs counts it like a fuel step.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.153
   Features:
     - The mod's own fuel upkeep (commands/upkeep.lua; /fac_upkeep <id> [on|off]).
