@@ -6,8 +6,9 @@
 -- under a task_id. The mod derives item NEEDS from those steps, reserves whatever
 -- is already on hand, and works through the remaining steps of ALL currently-
 -- submitted tasks together -- each time the companion goes idle, the NEXT step
--- executed is whichever ready task's next step is CLOSEST to the companion right
--- now (task_id order as the tiebreak), not necessarily the same task as last time.
+-- executed is whichever ready task's next step has the highest priority raised by
+-- nearness (commands/priority.lua; among tasks of one kind: the CLOSEST step; task_id
+-- order as the tiebreak), not necessarily the same task as last time.
 -- This is what lets an unrelated-but-nearby task's step get done WHILE a slow/
 -- distant task is still working out its own next move, instead of the whole
 -- companion sitting idle-but-blocked on one goal (Zdendys: "coal_pair @259k je
@@ -123,6 +124,8 @@ local ledger = require("commands.task_pool_ledger")
 local ensure_item = require("commands.task_pool_ensure_item")
 local targeting = require("commands.task_pool_targeting")
 local steps = require("commands.task_pool_steps")
+local priority = require("commands.priority")
+local activity = require("commands.activity")
 
 local M = {}
 
@@ -178,18 +181,22 @@ M.get_task_status = ledger.get_task_status
 -- ---- main scheduler tick ----
 
 -- Picks the single best (task, step) to advance right now: among all ACTIVE, READY
--- tasks whose companion is currently IDLE, prefer the one whose current step's
--- target is CLOSEST to the companion; ties broken by task_id (older task wins --
--- Zdendys: "stari kroku odpovida cca poradi taskID").
+-- tasks whose companion is currently IDLE, the one whose current step has the highest
+-- priority raised by nearness (commands/priority.lua: p ^ (1 / (distance + 1)), p the
+-- task's base priority by its kind -- build < relocate < dismantle, Zdendys); ties
+-- broken by task_id (older task wins -- Zdendys: "stari kroku odpovida cca poradi
+-- taskID"). With every task of one kind this is the nearest step, as before.
 local function pick_next(cid, c)
-  local best_task_id, best_dist = nil, math.huge
+  local best_task_id, best_eff = nil, -math.huge
   for task_id, t in pairs(storage.tasks) do
     if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps then
       local step = t.steps[t.cursor]
       local pos = step_target_pos(t, step)
-      local dist = pos and u.distance(c.entity.position, pos) or 0  -- instant steps: distance 0, always win ties by task_id
-      if dist < best_dist or (dist == best_dist and (not best_task_id or task_id < best_task_id)) then
-        best_task_id, best_dist = task_id, dist
+      local dist = pos and u.distance(c.entity.position, pos) or 0  -- instant steps: distance 0
+      -- (a task from an older save has no priority: a build's)
+      local eff = priority.effective(t.priority or priority.base(priority.DEFAULT_KIND), dist)
+      if eff > best_eff or (eff == best_eff and (not best_task_id or task_id < best_task_id)) then
+        best_task_id, best_eff = task_id, eff
       end
     end
   end
@@ -316,13 +323,34 @@ local function refresh_needs()
   end
 end
 
+-- an ended gather / build entry ("done" / "failed") keeps holding the pool this long
+-- after its job ended -- its caller's status poll has time to read the result before a
+-- pool step's start_gather / start_build would overwrite it (review); after that it
+-- holds nothing (live: a gather whose status nobody read -- its caller had given up --
+-- blocked every task until the next gather). At least ENDED_GRACE_TICKS, and about
+-- ENDED_GRACE_REAL_S of real time at a high game speed (60 ticks a second x speed).
+local ENDED_GRACE_TICKS = 600
+local ENDED_GRACE_REAL_S = 1
+
+-- Whether a queue entry holds the pool: running, or -- `grace` set: a queue whose
+-- result a pool step could overwrite -- ended within the read window (an entry without
+-- run_end_tick, an older save, holds only while running).
+local function holds_pool(q, grace)
+  if activity.running(q) then return true end
+  if not grace or type(q) ~= "table" or q.run_end_tick == nil then return false end
+  local window = math.max(ENDED_GRACE_TICKS, 60 * ENDED_GRACE_REAL_S * game.speed)
+  return game.tick - q.run_end_tick < window
+end
+
 -- 2026-07-08, task #42: true if cid is busy in gather/fuel/build/belt_queues (see the
--- "Extended" comment at this function's call site below for the full rationale).
+-- "Extended" comment at this function's call site below for the full rationale) --
+-- holds_pool: a running entry; a gather / build one also within its read window (the
+-- pool starts gathers and builds itself, never fuel or belt jobs).
 local function busy_elsewhere(cid)
-  return (storage.gather_queues and storage.gather_queues[cid])
-      or (storage.fuel_queues and storage.fuel_queues[cid])
-      or (storage.build_queues and storage.build_queues[cid])
-      or (storage.belt_queues and storage.belt_queues[cid])
+  return holds_pool(storage.gather_queues and storage.gather_queues[cid], true)
+      or holds_pool(storage.fuel_queues and storage.fuel_queues[cid], false)
+      or holds_pool(storage.build_queues and storage.build_queues[cid], true)
+      or holds_pool(storage.belt_queues and storage.belt_queues[cid], false)
 end
 
 function M.tick()
@@ -794,12 +822,12 @@ function M.tick()
   -- companion is STILL busy for that subsystem's purposes. Without also checking
   -- these, the task pool could grab a companion mid-mine/mid-fuel/mid-build from a
   -- direct (non-task-pool) command and redirect her walking_queues[cid] to its own
-  -- target, corrupting that other queue's in-progress state. None of these are set
-  -- by the task pool itself (task_pool.lua never calls start_gather/start_fuel_group/
-  -- start_belt_connect, and start_build's task-pool-internal use is guarded
-  -- separately at the fac_building_place_start command level, not here), so this
-  -- check is one-directional and safe: it only ever holds off task_pool for a
-  -- companion genuinely busy elsewhere.
+  -- target, corrupting that other queue's in-progress state. The pool's own steps DO
+  -- start some of these (a place step's start_build, ensure_item's start_gather) --
+  -- their entries are covered by active_step[cid] while those steps run. A finished
+  -- entry holds the pool ENDED_GRACE_TICKS more (holds_pool), so a pool step's
+  -- start_build / start_gather cannot overwrite a result its other caller has not
+  -- read yet.
   for cid, c in pairs(storage.companions or {}) do
     if c.entity and c.entity.valid and not storage.active_step[cid]
        and not storage.walking_queues[cid] and not busy_elsewhere(cid) then
@@ -875,6 +903,15 @@ function M.get_diag(cid)
     busy_harvest = (storage.harvest_queues and storage.harvest_queues[cid]) and true or false,
     busy_craft = (storage.craft_queues and storage.craft_queues[cid]) and true or false,
     busy_combat = (storage.combat_queues and storage.combat_queues[cid]) and true or false,
+    -- which of the busy_* entries actually hold the pool (busy_elsewhere / holds_pool:
+    -- running, or a gather / build ended within its read window) -- busy_* alone is
+    -- true for any entry, also a long-finished one
+    holds_pool = {
+      gather = holds_pool(storage.gather_queues and storage.gather_queues[cid], true),
+      fuel = holds_pool(storage.fuel_queues and storage.fuel_queues[cid], false),
+      build = holds_pool(storage.build_queues and storage.build_queues[cid], true),
+      belt = holds_pool(storage.belt_queues and storage.belt_queues[cid], false),
+    },
   }
   if active and active.task_id then
     local t = storage.tasks[active.task_id]

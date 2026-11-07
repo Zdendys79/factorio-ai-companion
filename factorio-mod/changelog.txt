@@ -1,4 +1,26 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.152
+  Features:
+    - Task priorities (commands/priority.lua). The scheduler runs the single step (not
+      the whole task) with the highest p ^ (1 / (distance + 1)). p is the task's base
+      priority by kind: build 2 < relocate 3 < dismantle 4 (Zdendys). The older task
+      wins a tie.
+      - With every task a build, this is the nearest step, as before.
+      - /fac_task_submit takes {"kind": KIND, "steps": [...]}; a plain step array is a
+        build. A task's status carries its kind and priority.
+      - A task from an older save has no priority and counts as a build.
+  Bugfixes:
+    - The task pool waited on any entry in the gather / fuel / build / belt queues,
+      also a finished one ("done" / "failed"). Such an entry stays until its status
+      poll reads it, so a gather whose caller had given up blocked every task until
+      the next gather started. Now a running entry holds the pool. A finished gather or
+      build entry also holds it within a read window after it ended: 600 ticks, or
+      about 1 s of real time at a high game speed (holds_pool). That window lets its
+      caller read the result before a pool step's start_gather / start_build could
+      overwrite it. Fuel and belt entries hold only while running, because the pool
+      never starts those jobs. /fac_task_pool_diag reports which entries hold the pool
+      (holds_pool).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.151
   Features:
     - Activity counters (commands/activity.lua): every 5 ticks, after all queues have

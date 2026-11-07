@@ -44,6 +44,16 @@ function M.init()
   storage.activity = storage.activity or {}
 end
 
+-- Whether a queue entry's job still runs: an entry whose job ended ("done" / "failed")
+-- stays until its status poll reads it, and then holds her no more. (The task pool's
+-- busy_elsewhere uses it too, adding its own read window for a finished gather / build
+-- -- task_pool.lua holds_pool.)
+-- @param q table|nil the entry
+-- @return boolean
+function M.running(q)
+  return type(q) == "table" and not ENDED[q.state]
+end
+
 -- What the companion is doing right now.
 -- @param cid number the companion id
 -- @param entity LuaEntity her character
@@ -52,9 +62,7 @@ function M.state(cid, entity)
   for _, name in ipairs(QUEUE_TABLES) do
     local qs = storage[name]
     local q = qs and qs[cid]
-    if q and type(q) == "table" and not ENDED[q.state] and not q.follow_player then
-      return "busy"
-    end
+    if M.running(q) and not q.follow_player then return "busy" end
   end
   if storage.active_step and storage.active_step[cid] then return "busy" end
   local mining = entity.mining_state

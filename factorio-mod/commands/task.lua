@@ -2,7 +2,9 @@
 local u = require("commands.init")
 local task_pool = require("commands.task_pool")
 
--- Usage: /fac_task_submit <id> <json_step_list>
+-- Usage: /fac_task_submit <id> <json_step_list | {"kind": KIND, "steps": json_step_list}>
+-- KIND: build (the default), relocate, dismantle -- the task's base priority
+-- (commands/priority.lua).
 -- json_step_list is a JSON array of step objects, e.g.
 --   [{"type":"find_patch","resource":"iron-ore"},
 --    {"type":"verify_tile","resource":"iron-ore"},
@@ -26,7 +28,14 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       u.error_response("Invalid step list JSON for companion #" .. id .. ": " .. tostring(steps), "task_submit")
       return
     end
-    local result = task_pool.submit_task(id, steps)
+    -- {"kind": "relocate", "steps": [...]} gives the task its kind (its base priority,
+    -- commands/priority.lua); a plain step array is a build
+    local kind = nil
+    if type(steps) == "table" and type(steps.steps) == "table" then
+      kind = steps.kind
+      steps = steps.steps
+    end
+    local result = task_pool.submit_task(id, steps, kind)
     result.id = id
     u.json_response(result)
   end)

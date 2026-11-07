@@ -7,6 +7,7 @@
 -- and calls into it for the functions below.
 
 local u = require("commands.init")
+local priority = require("commands.priority")
 
 local M = {}
 
@@ -100,10 +101,16 @@ end
 
 -- Submit a new task_list under a fresh task_id (2026-07-07 design). `steps` is a
 -- plain Lua array (already decoded from the caller's JSON via helpers.json_to_table).
-function M.submit_task(cid, steps)
+-- `kind` (commands/priority.lua: build / relocate / dismantle, default build) gives
+-- the task its base priority -- the scheduler runs the step with the highest
+-- priority raised by nearness.
+function M.submit_task(cid, steps, kind)
   local c = u.get_companion(cid)
   if not c then return {error = "Invalid companion"} end
   if not steps or #steps == 0 then return {error = "Empty step list"} end
+  kind = kind or priority.DEFAULT_KIND
+  local base = priority.base(kind)
+  if not base then return {error = "Unknown task kind: " .. tostring(kind)} end
 
   local needs = derive_needs(steps)
   local inv = c.entity.get_main_inventory()
@@ -136,6 +143,8 @@ function M.submit_task(cid, steps)
     reserved = task_reserved,
     needs = remaining_needs,
     status = "active",
+    kind = kind,
+    priority = base,
     created_tick = game.tick,
     -- step_ticks (2026-07-28, action-timing instrumentation): populated by
     -- task_pool.lua's M.tick at each cursor advance -- {[step_index] =
@@ -145,7 +154,7 @@ function M.submit_task(cid, steps)
     -- unresolved" convention Python's own -1/NaN padding already uses.
     step_ticks = {},
   }
-  return {task_id = task_id, needs = remaining_needs}
+  return {task_id = task_id, needs = remaining_needs, kind = kind, priority = base}
 end
 
 function M.get_task_status(task_id)
@@ -168,6 +177,9 @@ function M.get_task_status(task_id)
     created_tick = t.created_tick,
     done_tick = t.done_tick,
     step_ticks = t.step_ticks,
+    -- its kind and base priority (commands/priority.lua; nil: a task from an older save)
+    kind = t.kind,
+    priority = t.priority,
   }
 end
 
