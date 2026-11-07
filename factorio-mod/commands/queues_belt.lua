@@ -71,7 +71,7 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   -- #42) -- safe here (unlike start_build) since task_pool.lua never calls
   -- start_belt_connect internally, only the direct fac_belt_connect command does.
   if storage.active_step and storage.active_step[cid] then
-    return {error = "companion busy with an active task-pool step"}
+    return {error = u.note_busy_refusal(cid)}  -- (init.lua: the pool yields to the controller)
   end
   local surf = c.entity.surface
   local force = c.entity.force

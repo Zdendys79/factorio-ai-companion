@@ -490,7 +490,8 @@ commands.add_command("fac_building_place_start", nil, function(cmd)
     -- This only blocks an EXTERNAL (direct Python) build request from hijacking a
     -- companion the task pool currently owns, mirroring fac_move_to's guard.
     if storage.active_step and storage.active_step[id] then
-      u.error_response("companion busy with an active task-pool step")
+      -- an expected state, answered without the error ring (init.lua note_busy_refusal)
+      u.json_response({error = u.note_busy_refusal(id)})
       return
     end
     local entity = args[2]

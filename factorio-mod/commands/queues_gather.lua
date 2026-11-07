@@ -329,7 +329,7 @@ function M.start_gather(cid, resource, count, exclude, from_task_pool)
   -- (Python's /fac_resource_mine, the opening's own gather() helpers) omits it and
   -- keeps the original guard, byte-identical to before this fix.
   if not from_task_pool and storage.active_step and storage.active_step[cid] then
-    return {error = "companion busy with an active task-pool step"}
+    return {error = u.note_busy_refusal(cid)}  -- (init.lua: the pool yields to the controller)
   end
   -- exclude (2026-07-07, Zdendys/Claude: replacing the Python-side manual
   -- goto_resource()+mine_and_wait() flow, which needed its OWN distance-vs-

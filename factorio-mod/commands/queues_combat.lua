@@ -19,7 +19,7 @@ function M.start_combat(cid, target_pos)
   -- (no Python-side caller exists yet, auto_defend is set but never read), so this
   -- closes a real but not-yet-live gap before anything wires combat up and hits it.
   if storage.active_step and storage.active_step[cid] then
-    return {error = "companion busy with an active task-pool step"}
+    return {error = u.note_busy_refusal(cid)}  -- (init.lua: the pool yields to the controller)
   end
 
   local enemies = c.entity.surface.find_entities_filtered{

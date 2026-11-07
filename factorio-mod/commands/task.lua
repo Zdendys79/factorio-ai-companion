@@ -1,6 +1,29 @@
 -- AI Companion -- RCON entry points for the generic task pool (2026-07-07)
 local u = require("commands.init")
 local task_pool = require("commands.task_pool")
+local priority = require("commands.priority")
+local upkeep = require("commands.upkeep")
+
+-- Usage: /fac_upkeep <id> [on|off] -- the mod's own fuel upkeep for the companion
+-- (commands/upkeep.lua): switched on / off, or (no argument) its state: enabled and
+-- its open upkeep tasks.
+commands.add_command("fac_upkeep", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s*(%S*)$", cmd.parameter)
+    local id = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    if args[2] == "on" then
+      upkeep.set_enabled(id, true)
+    elseif args[2] == "off" then
+      upkeep.set_enabled(id, false)
+    elseif args[2] ~= "" then
+      u.error_response("Usage: fac_upkeep <id> [on|off]"); return
+    end
+    local out = upkeep.status(id)
+    out.id = id
+    u.json_response(out, id)
+  end)
+end)
 
 -- Usage: /fac_task_submit <id> <json_step_list | {"kind": KIND, "steps": json_step_list}>
 -- KIND: build (the default), relocate, dismantle -- the task's base priority
@@ -34,6 +57,10 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     if type(steps) == "table" and type(steps.steps) == "table" then
       kind = steps.kind
       steps = steps.steps
+    end
+    if kind == priority.UPKEEP_KIND then
+      u.error_response("kind \"upkeep\" is the mod's own (commands/upkeep.lua)", "task_submit")
+      return
     end
     local result = task_pool.submit_task(id, steps, kind)
     result.id = id

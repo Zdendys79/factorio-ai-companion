@@ -1,4 +1,52 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.153
+  Features:
+    - The mod's own fuel upkeep (commands/upkeep.lua; /fac_upkeep <id> [on|off]).
+      Every 120 ticks it checks each player burner (furnace, mining drill, boiler)
+      within 150 tiles of her.
+      - Supply. A burner that an inserter (belt / chest + inserter) or a drill mining
+        a fuel (a coal pair) drops into is not hers to serve by hand, until it runs
+        dry all the same (under 30 s of fuel). Then it is served and [UNDERFED] is
+        logged once per 18000 ticks. An iron drill's ore into a furnace is no fuel
+        feed.
+      - Priority. t = the seconds its fuel lasts at full consumption; its target is
+        min(300 s, what a full slot lasts -- a boiler's ~111 s). p = log2(target /
+        max(1, t)); its output's fill lowers the part above 1, p' = 1 + (p - 1)(1 -
+        0.9 fill). A mined-out drill or a furnace with nothing to smelt is skipped.
+      - Tasks. p' > 1 makes a one-step fuel task of kind "upkeep" with priority p',
+        kept up to date each scan. The coal is enough for the target, raised to 5 and
+        capped by the slot's room and her free coal above a floor of 10. When the free
+        coal does not reach min(5, the room), no task: the burner is logged and listed
+        as "short" in the status.
+      - No new upkeep task while another task waits for coal (logged; the status's
+        blocked_by_coal_wait).
+      - The scheduler ranks upkeep with every other step, so it may come between a
+        build's steps. At most 3 upkeep tasks per companion, nearer first on a tie.
+        An open one is replaced only by a need 0.5 higher whose coal fits (counting
+        what the replaced task releases), decided before anything is cancelled.
+      - A task that failed because she could not reach its burner holds that burner
+        off 3600 ticks, doubling while it repeats (up to 16x). Other failures hold
+        nothing off.
+      - A task no longer needed is cancelled quietly (status "cancelled", not an
+        error), unless it is being acted on. Ended upkeep tasks are removed from
+        storage.tasks, also while upkeep is off.
+      - It runs after the pool's own tick (its reservations come first). Off by
+        default. Kind "upkeep" is not open to /fac_task_submit.
+    - Busy refusals (a pool step holds her) of a move, a stop, a build, a gather, a
+      fuel round, a belt route or an attack are answered without the error ring
+      (init.lua note_busy_refusal). When the step holding her is an upkeep step, the
+      pool keeps its upkeep steps back 600 ticks, so the controller's retry gets
+      through.
+  Bugfixes:
+    - Reservations: a task's used-up items leave the shared reservations at once
+      (ledger.consume -- a fuel step's coal, a place step's entity; t.consumed).
+      Before, they stayed reserved until the task ended, so other tasks saw less free
+      than she held.
+    - ensure_item leaves out what other tasks have reserved, in every check: already
+      on hand, the gather amount, the smelt pull and a craft's ingredients. Another
+      task's reserved coal used to let a build's "ensure coal" pass, and its fuel step
+      then waited until the 6000-tick give-up.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.152
   Features:
     - Task priorities (commands/priority.lua). The scheduler runs the single step (not

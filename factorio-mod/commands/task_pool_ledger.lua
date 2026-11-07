@@ -53,11 +53,29 @@ local function derive_needs(steps, upto)
   return needs
 end
 
+-- A task's step used up `n` of `item` (a fuel step's coal, a place step's entity): it
+-- leaves the shared reservations at once (review: a task's used items stayed reserved
+-- until it ended, so upkeep / ensure_item saw less free than she held). t.reserved stays
+-- cumulative -- task_ready compares it with the needs of the steps so far -- and
+-- t.consumed records what release_reservations must not release twice.
+function M.consume(t, item, n)
+  if not item or not n or n <= 0 then return end
+  t.consumed = t.consumed or {}
+  local still = (t.reserved and t.reserved[item] or 0) - (t.consumed[item] or 0)
+  local take = math.min(n, math.max(0, still))
+  if take > 0 then
+    storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - take)
+    t.consumed[item] = (t.consumed[item] or 0) + take
+  end
+end
+
 local function release_reservations(t)
   for item, count in pairs(t.reserved or {}) do
-    storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - count)
+    local left = count - ((t.consumed or {})[item] or 0)
+    storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - left)
   end
   t.reserved = {}
+  t.consumed = {}
   -- reservation_epoch (2026-07-09, root-caused via careful live log re-analysis, task
   -- pool investigation): refresh_needs() below only re-checks a task's needs when
   -- THAT COMPANION's raw inventory total changes -- it has no way to notice that a
@@ -91,6 +109,19 @@ local function fail_task(task_id, reason)
   u.log_error(string.format("task %d failed: %s", task_id, tostring(reason)), "task_pool")
 end
 
+-- A task withdrawn by its own submitter (the mod's upkeep, commands/upkeep.lua: the need
+-- went away or a bigger one replaced it) -- like fail_task, but status "cancelled" and
+-- not an error (review: the cancellations filled the 50-entry error ring and pushed the
+-- real errors out of view).
+local function cancel_task(task_id, reason)
+  local t = storage.tasks[task_id]
+  if not t or t.status ~= "active" then return end
+  release_reservations(t)
+  t.status = "cancelled"
+  t.error = reason
+  t.done_tick = game.tick
+end
+
 local function complete_task(task_id)
   local t = storage.tasks[task_id]
   if not t or t.status ~= "active" then return end
@@ -103,13 +134,19 @@ end
 -- plain Lua array (already decoded from the caller's JSON via helpers.json_to_table).
 -- `kind` (commands/priority.lua: build / relocate / dismantle, default build) gives
 -- the task its base priority -- the scheduler runs the step with the highest
--- priority raised by nearness.
-function M.submit_task(cid, steps, kind)
+-- priority raised by nearness. The mod's own upkeep (commands/upkeep.lua) submits
+-- kind "upkeep" with its computed priority `p` (not open to /fac_task_submit).
+function M.submit_task(cid, steps, kind, p)
   local c = u.get_companion(cid)
   if not c then return {error = "Invalid companion"} end
   if not steps or #steps == 0 then return {error = "Empty step list"} end
   kind = kind or priority.DEFAULT_KIND
-  local base = priority.base(kind)
+  local base
+  if kind == priority.UPKEEP_KIND then
+    base = type(p) == "number" and p or nil
+  else
+    base = priority.base(kind)
+  end
   if not base then return {error = "Unknown task kind: " .. tostring(kind)} end
 
   local needs = derive_needs(steps)
@@ -185,6 +222,7 @@ end
 
 M.derive_needs = derive_needs
 M.fail_task = fail_task
+M.cancel_task = cancel_task
 M.complete_task = complete_task
 
 return M

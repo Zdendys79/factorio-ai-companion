@@ -211,7 +211,19 @@ function M.start_ensure_item_action(c, cid, t)
     return nil, "ensure_item: step.item (string) and step.count (number) required"
   end
   local inv = c.entity.get_main_inventory()
-  if inv.get_item_count(need.item) >= need.count then
+  -- held(item): what she holds of it less what OTHER tasks have reserved -- theirs is
+  -- not this task's (review: an upkeep task's reserved coal made a build's "ensure
+  -- coal" pass, and its fuel step then never got ready until the 6000-tick give-up);
+  -- used by every check below (the raw gather's deficit, the smelt pull, the craft's
+  -- ingredients -- a second review: the first fix covered only this first check)
+  local function held(item)
+    -- this task's own part of storage.reserved: its reservation less what its steps
+    -- used up already (ledger.consume took that out of storage.reserved)
+    local own = ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0)
+    local others = (storage.reserved[item] or 0) - math.max(0, own)
+    return inv.get_item_count(item) - math.max(0, others)
+  end
+  if held(need.item) >= need.count then
     return "satisfied"
   end
   if #stack > ENSURE_ITEM_MAX_DEPTH then
@@ -280,7 +292,7 @@ function M.start_ensure_item_action(c, cid, t)
     -- (a real, previously-observed scenario for coal specifically) would retry
     -- forever with no failure signal. Counts per-item so a task needing several
     -- DIFFERENT raw resources tracks each independently.
-    local deficit = need.count - inv.get_item_count(need.item)
+    local deficit = need.count - held(need.item)
     -- Check a nearby container FIRST (2026-07-18 fix, see pull_from_nearby_
     -- container's own docstring above) -- only fall back to hand-mining for
     -- whatever a chest didn't already cover.
@@ -323,8 +335,8 @@ function M.start_ensure_item_action(c, cid, t)
     -- just sits in the furnace's own output slot -- the wait would run its
     -- entire budget and still fail with a full stack sitting untouched nearby.
     local pulled = pull_from_nearby_furnace_output(c, need.item,
-      need.count - inv.get_item_count(need.item))
-    if pulled > 0 and inv.get_item_count(need.item) >= need.count then
+      need.count - held(need.item))
+    if pulled > 0 and held(need.item) >= need.count then
       return "satisfied"
     end
     t.ctx.smelt_wait_deadline = t.ctx.smelt_wait_deadline or {}
@@ -341,7 +353,7 @@ function M.start_ensure_item_action(c, cid, t)
   end
   for _, ing in ipairs(recipe.ingredients) do
     local needed_amount = math.ceil(need.count / recipe.yield) * ing.amount
-    if inv.get_item_count(ing.name) < needed_amount then
+    if held(ing.name) < needed_amount then
       stack[#stack + 1] = {item = ing.name, count = needed_amount}
       return "push"
     end

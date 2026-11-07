@@ -186,10 +186,19 @@ M.get_task_status = ledger.get_task_status
 -- task's base priority by its kind -- build < relocate < dismantle, Zdendys); ties
 -- broken by task_id (older task wins -- Zdendys: "stari kroku odpovida cca poradi
 -- taskID"). With every task of one kind this is the nearest step, as before.
+-- after a controller's command was refused because a pool step held her (a walk, a
+-- build, a gather, a fuel round, a belt -- init.lua note_busy_refusal), the pool's own
+-- upkeep steps wait this many ticks -- the controller retries a walk every ~0.5 s real
+-- (~480 ticks at speed 16) and would otherwise rarely find a gap between them (review)
+local UPKEEP_YIELD_TICKS = 600
+
 local function pick_next(cid, c)
   local best_task_id, best_eff = nil, -math.huge
+  local refused = storage.busy_refused and storage.busy_refused[cid]
+  local yield = refused and game.tick - refused < UPKEEP_YIELD_TICKS
   for task_id, t in pairs(storage.tasks) do
-    if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps then
+    if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps
+       and not (yield and t.kind == priority.UPKEEP_KIND) then
       local step = t.steps[t.cursor]
       local pos = step_target_pos(t, step)
       local dist = pos and u.distance(c.entity.position, pos) or 0  -- instant steps: distance 0
@@ -659,6 +668,8 @@ function M.tick()
             -- while the real fuel count never moved, hiding the failure completely.
             if delivered == 0 then
               ok, err = false, "no burner nearby had room for " .. step.item
+            else
+              ledger.consume(t, step.item, delivered)   -- used up: out of the reservations
             end
           end
         end
@@ -720,6 +731,8 @@ function M.tick()
         elseif step.which == "secondary" and st.position then
           t.ctx.sx, t.ctx.sy = st.position.x, st.position.y
         end
+        -- the placed entity's item is used up: out of the shared reservations (ledger)
+        ledger.consume(t, step.entity, 1)
         -- step_ticks: see the "ensure_item" cursor-advance site (near line 404) for
         -- the full rationale. This is the "place" step's own completion point.
         t.step_ticks = t.step_ticks or {}

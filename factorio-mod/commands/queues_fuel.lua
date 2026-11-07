@@ -45,7 +45,7 @@ function M.start_fuel_group(cid, per, radius)
   if not c then return {error = "Invalid companion"} end
   -- Same task-pool-ownership guard as start_gather above (2026-07-08, task #42).
   if storage.active_step and storage.active_step[cid] then
-    return {error = "companion busy with an active task-pool step"}
+    return {error = u.note_busy_refusal(cid)}  -- (init.lua: the pool yields to the controller)
   end
   storage.fuel_queues[cid] = {per = per or 20, radius = radius or 200, state = "find",
                               blacklist = {}, served = {}, fueled = 0, machines = 0,

@@ -27,7 +27,10 @@ commands.add_command("fac_move_to", nil, function(cmd)
     -- reached the task-pool step's own destination. Reject instead -- Python's go_to()
     -- callers already retry on their own next decide() cycle when a move is refused.
     if storage.active_step and storage.active_step[id] then
-      u.error_response("companion busy with an active task-pool step")
+      -- an expected state, not an error: answered without the error ring (review: each
+      -- of the controller's busy retries filled an entry of it); note_busy_refusal
+      -- lets the task pool keep its upkeep steps back so the next try gets through
+      u.json_response({error = u.note_busy_refusal(id)})
       return
     end
     -- giveup_enabled (2026-07-16, Zdendys's fast-giveup directive): ONLY fac_move_to's
@@ -82,7 +85,8 @@ commands.add_command("fac_move_stop", nil, function(cmd)
     -- physically stops her mid-route) -- silently breaking the very thing this
     -- guard was meant to protect. Only clear/halt if the task pool doesn't own her.
     if storage.active_step and storage.active_step[id] then
-      u.error_response("companion busy with an active task-pool step -- not stopping")
+      -- an expected state, answered without the error ring (as every busy refusal)
+      u.json_response({error = u.BUSY_REFUSAL .. " -- not stopping"})
       return
     end
     storage.walking_queues[id] = nil

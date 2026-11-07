@@ -4,6 +4,7 @@ local queues = require("commands.queues")
 local spectate = require("commands.spectate")
 local task_pool = require("commands.task_pool")
 local activity = require("commands.activity")
+local upkeep = require("commands.upkeep")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -87,6 +88,7 @@ local function init_storage()
   queues.init()
   task_pool.init()
   activity.init()
+  upkeep.init()
 end
 
 local function cleanup_messages()
@@ -926,6 +928,9 @@ script.on_nth_tick(5, function(ev)
   guard_tick("spectate", spectate.tick_spectators,  ev.tick)
   guard_tick("orphan_mining", queues.tick_orphan_mining_cleanup, ev.tick)
   guard_tick("task_pool", task_pool.tick, ev.tick)
+  -- the mod's own fuel upkeep (upkeep.lua): after the pool's tick, so its reservations
+  -- of newly mined coal come first; its tasks enter the pool for the next tick
+  guard_tick("upkeep", upkeep.tick, ev.tick)
   -- last: after every queue had its turn this tick (commands/activity.lua)
   guard_tick("activity", activity.tick, ev.tick)
 end)
