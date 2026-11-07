@@ -1,4 +1,5 @@
 -- AI Companion v0.9.0
+local activity = require("commands.activity")
 local M = {}
 
 M.COLORS = {
@@ -133,6 +134,9 @@ function M.json_response(data, cid)
     local qs = M.companion_queue_status(cid)
     if qs then data.queues = qs end
   end
+  -- her busy / idle tick counters (commands/activity.lua), free on every reply that names
+  -- her -- Python splits a cycle's game ticks by them
+  if cid and data.activity == nil then data.activity = activity.counters(cid) end
   local ok, result = pcall(helpers.table_to_json, data)
   if not ok then
     rcon.print('{"error":"JSON failed"}')

@@ -1,4 +1,24 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.151
+  Features:
+    - Activity counters (commands/activity.lua): every 5 ticks, after all queues have
+      run, each companion's ticks are credited to "busy" or to "idle".
+      - She is busy when one of her queues holds a running entry (a "done" / "failed"
+        entry waiting for its status poll does not count), a task-pool step is in
+        flight (its own waits included), she hand-crafts (her character's craft queue
+        or the mod's craft queue), or she is mining or walking. A follow-player entry
+        counts only while she walks.
+      - A submitted task waiting for its items, with no step in flight, is idle.
+      - craft_only, a part of busy: hand-crafting is all she does, and she stands.
+      - Ticks while her entity is invalid (a gap over 60 ticks between her samples)
+        are credited to neither; a gone companion's record is dropped.
+      - Every reply that names her carries activity = {busy, idle, craft_only}.
+        /fac_companion_activity <id> is the light read for a cycle boundary.
+      - Purpose: the game ticks that pass while the controller decides are tracked
+        apart from her own action time.
+      - storage.activity is created on init / configuration change and checked before
+        every use (older saves).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.150
   Bugfixes:
     - The rare-symptom save makes at most 3 saves per symptom code in a game

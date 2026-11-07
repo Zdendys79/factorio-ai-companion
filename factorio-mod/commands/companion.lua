@@ -197,6 +197,16 @@ commands.add_command("fac_debug_walk_state", nil, function(cmd)
   end)
 end)
 
+-- Her busy / idle tick counters (commands/activity.lua) and the tick -- the light read
+-- for a cycle boundary (every reply naming her carries them too).
+commands.add_command("fac_companion_activity", nil, function(cmd)
+  u.safe_command(function()
+    local id = u.find_companion(cmd.parameter)
+    if not id then u.not_found(); return end
+    u.json_response({id = id}, id)
+  end)
+end)
+
 commands.add_command("fac_companion_position", nil, function(cmd)
   u.safe_command(function()
     local id, c = u.find_companion(cmd.parameter)

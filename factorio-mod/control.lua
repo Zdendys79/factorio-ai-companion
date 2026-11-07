@@ -3,6 +3,7 @@ local u = require("commands.init")
 local queues = require("commands.queues")
 local spectate = require("commands.spectate")
 local task_pool = require("commands.task_pool")
+local activity = require("commands.activity")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -85,6 +86,7 @@ local function init_storage()
   storage.walk_last_arrived = storage.walk_last_arrived or {}
   queues.init()
   task_pool.init()
+  activity.init()
 end
 
 local function cleanup_messages()
@@ -924,4 +926,6 @@ script.on_nth_tick(5, function(ev)
   guard_tick("spectate", spectate.tick_spectators,  ev.tick)
   guard_tick("orphan_mining", queues.tick_orphan_mining_cleanup, ev.tick)
   guard_tick("task_pool", task_pool.tick, ev.tick)
+  -- last: after every queue had its turn this tick (commands/activity.lua)
+  guard_tick("activity", activity.tick, ev.tick)
 end)
