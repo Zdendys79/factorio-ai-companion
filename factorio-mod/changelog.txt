@@ -1,4 +1,41 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.155
+  Features:
+    - Getting material for the fuel upkeep (commands/upkeep_fetch.lua). When she has no
+      free coal for the burners / fuel chests that need it, she fetches it herself.
+      - Priority p = log2(S) + log2(300 / t): S = the coal those needs want beyond her
+        free coal (at least 1), t = the least time left among them. The scheduler
+        raises it by nearness to the source.
+      - The source: the nearest coal store within 150 tiles (a plain chest holding
+        coal that no inserter picks from and that is not a fuel chest the upkeep
+        fills) holding at least min(S, 5), even a far one (a 150-tile walk is ~20 s,
+        mining 100 coal ~200 s); else she mines it by hand (ensure_item with no_pull
+        and raw). Belts are left alone.
+      - She fetches up to 100 coal, at least S, capped by her inventory room.
+      - One fetch task per companion (kind "upkeep"). Its priority is kept current
+        while she is short; it is withdrawn, unless being acted on, once she is not,
+        and when upkeep is switched off. A failed take leaves its store out 18000
+        ticks (the next fetch goes elsewhere); a failed mining (its 5 gather attempts
+        ran out) or a take that found no room in her inventory holds fetching off
+        3600 ticks. No fetch while another task waits for coal (its own ensure_item
+        gets it); with no room in her inventory nothing is fetched (logged). Every
+        fetch is logged ("take at x,y" / "mine").
+      - /fac_upkeep's status shows it as fetch {task_id, priority, how: "take" /
+        "ensure_item"}; its "short" list holds only burner / chest keys.
+    - Task-pool step "take" {x, y, entity, item, count, store} (task_pool_steps.
+      run_take): up to N of the item out of her force's chest of that name nearest
+      (x, y) within 1 tile into her inventory. The item must exist and the count must
+      be a whole number >= 1; an empty chest fails the step; what does not fit goes
+      back; with store, a chest an inserter now picks from is refused.
+    - ensure_item step options: no_pull (no chest within 5 tiles is emptied first --
+      mining only) and raw (the count is all she holds of the item, not what other
+      tasks have not reserved).
+  Bugfixes:
+    - The upkeep's log books live under storage.upkeep.logs, so a book's name can
+      never be a state field's (a "fetch" book's pruning had deleted the fetch task's
+      id, and a second fetch task came while the first was open). The old top-level
+      books are dropped.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.154
   Changes:
     - A burner with a supply line of its own is judged by its sources' state, not by

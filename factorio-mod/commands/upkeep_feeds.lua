@@ -275,6 +275,15 @@ function M.chest_burners(chest)
   return out
 end
 
+-- Whether an inserter picks up from the chest (it feeds a machine or a line -- its coal
+-- is that machine's, not a store she may take from).
+function M.picked_from(chest)
+  for _, ins in pairs(sources_around(chest)) do
+    if ins.type == "inserter" and pickup_source(ins) == chest then return true end
+  end
+  return false
+end
+
 -- The fuel energy (joules) an inventory holds.
 function M.inventory_fuel(inv)
   local energy = 0

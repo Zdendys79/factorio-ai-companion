@@ -43,11 +43,18 @@
 --                                                       -> N into the entity of that name
 --                                                          (a fuel chest -- the upkeep's;
 --                                                          task_pool_steps.run_insert)
+--   {type="take", x=, y=, entity=NAME, item=NAME, count=N}
+--                                                       -> up to N out of the chest of
+--                                                          that name (the upkeep's
+--                                                          coal store; run_take)
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
 --                                                       -> ctx.saved[save_as]
 --   {type="ensure_item", item=NAME, count=N}            -> gathers/crafts NAME
 --                                                          up to N in inventory
 --                                                          BEFORE the next step
+--     options: no_pull=true (no chest within 5 tiles is emptied first -- mining
+--     only), raw=true (N counts all she holds of NAME, not what other tasks
+--     have not reserved) -- both the upkeep's getting material
 --
 -- ensure_item (2026-07-17, Zdendys's own architecture correction: procurement was
 -- kept OUT of this module by the ORIGINAL v1 design above, back when neither
@@ -144,6 +151,7 @@ local run_find_patch = steps.run_find_patch
 local run_verify_tile = steps.run_verify_tile
 local run_pick_orientation = steps.run_pick_orientation
 local run_insert = steps.run_insert
+local run_take = steps.run_take
 
 -- ensure_item step (2026-07-17, Zdendys's own architecture correction -- see
 -- task_pool_ensure_item.lua's own header for the full design/history): the
@@ -492,7 +500,9 @@ function M.tick()
         -- header comment, near WOOD_CHOP_REACH, for the full design). Genuinely
         -- async (gather/craft/chop can each take many ticks) -- excluded from the
         -- generic ok/err fall-through below the same way "place" is.
-        t.ctx.ensure_stack = t.ctx.ensure_stack or {{item = step.item, count = step.count}}
+        -- (no_pull / raw: the step's options, task_pool_ensure_item.lua)
+        t.ctx.ensure_stack = t.ctx.ensure_stack or
+          {{item = step.item, count = step.count, no_pull = step.no_pull, raw = step.raw}}
         local kind, err2 = ensure_item.start_ensure_item_action(c, cid, t)
         if kind == "satisfied" then
           table.remove(t.ctx.ensure_stack)
@@ -680,6 +690,8 @@ function M.tick()
         end
       elseif step.type == "insert" then
         ok, err = run_insert(c, t, step)
+      elseif step.type == "take" then
+        ok, err = run_take(c, t, step)
       elseif step.type == "find_patch" then
         ok, err = run_find_patch(c, t, step)
       elseif step.type == "find_existing" then

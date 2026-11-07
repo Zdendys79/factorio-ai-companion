@@ -41,12 +41,14 @@
 -- one is replaced only by a need REPLACE_MARGIN higher, so ties do not churn); none
 -- submitted while another task waits for coal (its need comes first). A task no longer
 -- needed (and not being acted on) is cancelled quietly; ended upkeep tasks are removed
--- from storage.tasks (nothing polls them). Coal comes from her inventory only (the
--- stopgap; getting material is a later action of its own) -- burners she has no coal
--- for are listed as "short" in the status and logged.
+-- from storage.tasks (nothing polls them). Coal comes from her inventory (the
+-- stopgap); burners she has no free coal for are listed as "short" in the status and
+-- logged, and getting the coal is an action of its own (commands/upkeep_fetch.lua: a
+-- coal store or mining, priority log2(short) + log2(T / t)).
 local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
 local F = require("commands.upkeep_feeds")
+local Fetch = require("commands.upkeep_fetch")
 
 local M = {}
 
@@ -70,20 +72,22 @@ local BURNER_TYPES = {"furnace", "mining-drill", "boiler"}
 
 function M.init()
   -- storage.upkeep = {enabled = {[cid] = true}, tasks = {[cid] = {[key] = task_id}},
-  --   last_scan = {[cid] = tick}, underfed = {[cid] = {[key] = tick logged}},
-  --   short = {[cid] = {[key] = tick logged}},
+  --   last_scan = {[cid] = tick},
   --   backoff = {[cid] = {[key] = {until_tick, n failures in a row}}},
-  --   blocked = {[cid] = {coal = tick logged: another task waited for coal}},
-  --   down = {[cid] = {[key] = {first, last}: scan ticks its supply line delivered
-  --   nothing}} (made by the scan)}
+  --   down = {[cid] = {[key] = {first, last, path}: scan ticks its supply delivered
+  --   nothing}} (made by the scan), fetch (commands/upkeep_fetch.lua),
+  --   logs = {[book] = {[cid] = {[key] = tick logged}}} -- the books underfed, short,
+  --   blocked (key "coal": another task waited for coal), noroom; under one table so a
+  --   book's name can never be a state field's (review: a "fetch" book's pruning
+  --   deleted the fetch task's id)}
   storage.upkeep = storage.upkeep or {}
   storage.upkeep.enabled = storage.upkeep.enabled or {}
   storage.upkeep.tasks = storage.upkeep.tasks or {}
   storage.upkeep.last_scan = storage.upkeep.last_scan or {}
-  storage.upkeep.underfed = storage.upkeep.underfed or {}
-  storage.upkeep.short = storage.upkeep.short or {}
   storage.upkeep.backoff = storage.upkeep.backoff or {}
-  storage.upkeep.blocked = storage.upkeep.blocked or {}
+  storage.upkeep.logs = storage.upkeep.logs or {}
+  -- (the books of 0.16.154 and before, at the top level: dropped)
+  storage.upkeep.underfed, storage.upkeep.short, storage.upkeep.blocked = nil, nil, nil
 end
 
 local function key_of(e)
@@ -194,10 +198,11 @@ local function coal_wanted_elsewhere(cid)
   return false
 end
 
--- Log at most once per `every` ticks per burner key (book: storage.upkeep[name][cid]).
+-- Log at most once per `every` ticks per burner key (book: storage.upkeep.logs[name][cid]).
 local function log_once(name, cid, key, every, msg)
-  storage.upkeep[name] = storage.upkeep[name] or {}
-  local book = storage.upkeep[name]
+  storage.upkeep.logs = storage.upkeep.logs or {}
+  storage.upkeep.logs[name] = storage.upkeep.logs[name] or {}
+  local book = storage.upkeep.logs[name]
   book[cid] = book[cid] or {}
   local last = book[cid][key]
   if not last or game.tick - last >= every then
@@ -209,10 +214,11 @@ end
 -- The log books' entries older than their interval dropped (review: one entry per key
 -- ever logged stayed for the whole game).
 local LOG_BOOKS = {underfed = UNDERFED_LOG_TICKS, short = SHORT_LOG_TICKS,
-                   blocked = SHORT_LOG_TICKS}
+                   blocked = SHORT_LOG_TICKS, noroom = SHORT_LOG_TICKS}
 local function prune_log_books(cid)
+  local logs = storage.upkeep.logs or {}
   for name, every in pairs(LOG_BOOKS) do
-    local book = storage.upkeep[name] and storage.upkeep[name][cid]
+    local book = logs[name] and logs[name][cid]
     for key, tick in pairs(book or {}) do
       if game.tick - tick >= every then book[key] = nil end
     end
@@ -424,6 +430,8 @@ local function scan(cid, c)
   -- open, a need replaces the weakest open task only when it is REPLACE_MARGIN higher
   -- AND can be submitted (its coal, counting what the replaced task releases) --
   -- decided before anything is cancelled (review)
+  -- the needs she has no free coal for (getting material, commands/upkeep_fetch.lua)
+  local short = {}
   if not blocked then
     for _, n in ipairs(needs) do
       if not mine[n.key] then
@@ -432,6 +440,8 @@ local function scan(cid, c)
           if amount >= 1 then
             submit(n, amount)
           elseif coal_short then
+            local want, room = coal_wanted(n.e, n)
+            short[#short + 1] = {want = math.min(math.max(want, M.MIN_BATCH), room), t = n.t}
             log_once("short", cid, n.key, SHORT_LOG_TICKS,
                      string.format("upkeep: no free coal for %s at %s (%.0f s of fuel "
                                    .. "left; %d free above the floor)", n.e.name, n.key,
@@ -466,6 +476,15 @@ local function scan(cid, c)
       mine[key] = nil
     end
   end
+  -- getting the coal she lacks (not while another task waits for coal: its own
+  -- ensure_item gets it, and a fetch under way is not withdrawn meanwhile)
+  if not blocked then
+    local fills = {}
+    for _, n in ipairs(needs) do
+      if n.into then fills[n.key] = true end
+    end
+    Fetch.update(cid, c, M.FUEL, short, free_coal(), fills, acting, log_once, M.TARGET_S)
+  end
 end
 
 -- The tick handler (control.lua's on_nth_tick(5), after the task pool's own tick so
@@ -478,6 +497,12 @@ function M.tick()
   -- cleared once it ended (review: it stayed until upkeep came on again)
   for cid, mine in pairs(storage.upkeep.tasks) do
     if not storage.upkeep.enabled[cid] and next(mine) then prune(cid, mine) end
+  end
+  for cid, b in pairs(storage.upkeep.fetch or {}) do
+    if not storage.upkeep.enabled[cid] and b.task_id then
+      local active = storage.active_step and storage.active_step[cid]
+      Fetch.cancel(cid, function(task_id) return active and active.task_id == task_id end)
+    end
   end
   for cid, on in pairs(storage.upkeep.enabled) do
     if on then
@@ -503,6 +528,7 @@ function M.set_enabled(cid, on)
     if storage.upkeep.down then storage.upkeep.down[cid] = nil end
     prune_log_books(cid)
     local active = storage.active_step and storage.active_step[cid]
+    Fetch.cancel(cid, function(task_id) return active and active.task_id == task_id end)
     for key, task_id in pairs(storage.upkeep.tasks[cid] or {}) do
       local t = storage.tasks[task_id]
       if t and t.status == "active" and not (active and active.task_id == task_id) then
@@ -533,12 +559,15 @@ function M.status(cid)
                                    at = s and string.format("%.1f,%.1f", s.x, s.y)}
     end
   end
-  for key, tick in pairs((up.short and up.short[cid]) or {}) do
+  local logs = up.logs or {}
+  for key, tick in pairs((logs.short and logs.short[cid]) or {}) do
     if game.tick - tick < SHORT_LOG_TICKS then out.short[#out.short + 1] = key end
   end
   -- another task waited for coal lately (no new upkeep task then)
-  local blocked = up.blocked and up.blocked[cid] and up.blocked[cid].coal
+  local blocked = logs.blocked and logs.blocked[cid] and logs.blocked[cid].coal
   out.blocked_by_coal_wait = blocked ~= nil and game.tick - blocked < SHORT_LOG_TICKS
+  -- getting the coal she lacks: {task_id, priority, how = "take" / "ensure_item"}
+  out.fetch = Fetch.status(cid)
   return out
 end
 

@@ -7,6 +7,7 @@
 local u = require("commands.init")
 local targeting = require("commands.task_pool_targeting")
 local ledger = require("commands.task_pool_ledger")
+local feeds = require("commands.upkeep_feeds")
 
 local step_target_pos = targeting.step_target_pos
 local WALK_REACH = targeting.WALK_REACH
@@ -64,6 +65,50 @@ function M.run_insert(c, t, step)
   end
   if removed > 0 then ledger.consume(t, step.item, removed) end
   if removed <= 0 then return false, "insert: no " .. step.item .. " left in inventory" end
+  return true, nil
+end
+
+-- {type="take", x=, y=, entity=NAME, item=NAME, count=N, store=true|nil}: up to N of
+-- the item from her force's chest of that name nearest (x, y) within INSERT_RADIUS into
+-- her inventory -- the upkeep's getting material (commands/upkeep_fetch.lua: a coal
+-- store). Takes what the chest has (at least 1, else the step fails); what does not fit
+-- into her inventory goes back into the chest. store: the chest must still be a store
+-- on her arrival -- no inserter picks from it (review: one built since the plan would
+-- have been robbed).
+-- @return boolean ok, string|nil err
+function M.run_take(c, t, step)
+  local pos = step_target_pos(t, step)
+  if not pos then return false, "take: no target position resolved" end
+  if type(step.item) ~= "string" or not prototypes.item[step.item] then
+    return false, "take: unknown item " .. tostring(step.item)
+  end
+  local count = tonumber(step.count) or 1
+  if count < 1 or count ~= math.floor(count) then
+    return false, "take: count must be a whole number >= 1, got " .. tostring(step.count)
+  end
+  local filter = {position = pos, radius = INSERT_RADIUS, force = c.entity.force}
+  if step.entity then filter.name = step.entity end
+  local chest, best = nil, math.huge
+  for _, e in pairs(c.entity.surface.find_entities_filtered(filter)) do
+    if e.valid and e.get_inventory(defines.inventory.chest) then
+      local d = u.distance(e.position, pos)
+      if d < best then chest, best = e, d end
+    end
+  end
+  if not chest then
+    return false, "take: no " .. tostring(step.entity or "chest") .. " at the target"
+  end
+  if step.store and feeds.picked_from(chest) then
+    return false, "take: an inserter picks from the " .. chest.name .. " now -- no store"
+  end
+  local inv = chest.get_inventory(defines.inventory.chest)
+  local avail = inv.get_item_count(step.item)
+  if avail <= 0 then return false, "take: the " .. chest.name .. " holds no " .. step.item end
+  local n = inv.remove{name = step.item, count = math.min(count, avail)}
+  if n <= 0 then return false, "take: the " .. chest.name .. " gave no " .. step.item end
+  local got = c.entity.insert{name = step.item, count = n}
+  if got < n then inv.insert{name = step.item, count = n - got} end
+  if got <= 0 then return false, "take: no room in her inventory for " .. step.item end
   return true, nil
 end
 

@@ -217,6 +217,10 @@ function M.start_ensure_item_action(c, cid, t)
   -- used by every check below (the raw gather's deficit, the smelt pull, the craft's
   -- ingredients -- a second review: the first fix covered only this first check)
   local function held(item)
+    -- raw (the step's option -- the upkeep's getting material): the item counts as all
+    -- she holds of it (review: reservations made while she mined moved the target, and
+    -- she mined far more than asked)
+    if need.raw and item == need.item then return inv.get_item_count(item) end
     -- this task's own part of storage.reserved: its reservation less what its steps
     -- used up already (ledger.consume took that out of storage.reserved)
     local own = ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0)
@@ -295,8 +299,10 @@ function M.start_ensure_item_action(c, cid, t)
     local deficit = need.count - held(need.item)
     -- Check a nearby container FIRST (2026-07-18 fix, see pull_from_nearby_
     -- container's own docstring above) -- only fall back to hand-mining for
-    -- whatever a chest didn't already cover.
-    local pulled = pull_from_nearby_container(c, need.item, deficit)
+    -- whatever a chest didn't already cover. no_pull (the step's option -- the
+    -- upkeep's getting material, which chose mining because no chest near is hers to
+    -- take from: review -- the pull emptied the fuel chest she had just filled) skips it.
+    local pulled = need.no_pull and 0 or pull_from_nearby_container(c, need.item, deficit)
     if pulled > 0 then
       deficit = deficit - pulled
     end
