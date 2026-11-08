@@ -25,8 +25,8 @@
 --   burner at 5 fuel items, a boiler's ~12 s, so its seconds left tell nothing) and its
 --   fuel slot holds at least LINE_MIN_ITEMS (4); a supply line delivering nothing at
 --   two scans in a row (an empty belt, a partner drill without fuel, a slot under 4)
---   makes it hers like an unfed one, named underfed, logged once per
---   UNDERFED_LOG_TICKS;
+--   makes it hers like an unfed one once its fuel lasts under LINE_DRY_S (a sparse
+--   belt is slow, not dead), named underfed, logged once per UNDERFED_LOG_TICKS;
 -- - a fuel chest an inserter feeds it from, supplied by nothing (Zdendys: she supplies
 --   a production or a chest no belt with that material reaches yet), is what she fills:
 --   once one of its burners runs down (it is that burner's nearest fuel chest), one need
@@ -80,6 +80,11 @@ M.WOOD_KEEP = 200
 -- supplying it, is served by hand (a scan plus a walk to a far burner take that long --
 -- review: 10 s let it run dry before she arrived)
 M.FED_DRY_S = 30
+-- a burner on a supply line delivering nothing is hers only under this many seconds of
+-- fuel (a sparse belt's inserter waits now and then; a dead line's burner drops below
+-- it, and a scan plus a walk fit in it while she is free -- a near build's steps still
+-- outrank a far upkeep task, as before)
+M.LINE_DRY_S = 60
 M.REPLACE_MARGIN = 0.5      -- a kept task is replaced only by a need this much higher
 local UNDERFED_LOG_TICKS = 18000
 local SHORT_LOG_TICKS = 18000
@@ -187,8 +192,14 @@ local function prune(cid, mine)
         local n = (prev and prev.n or 0) + 1
         local ticks = FAIL_BACKOFF_TICKS * 2 ^ math.min(n - 1, 4)
         off[key] = {until_tick = game.tick + ticks, n = n}
+        -- (where she stands now: a walk that timed out is diagnosed from it -- the
+        -- slow-line smoke's 28 timeouts at two furnaces could not be replayed)
+        local c = u.get_companion(cid)
+        local at = (c and c.entity and c.entity.valid)
+                   and string.format("; she is at %.1f,%.1f", c.entity.position.x,
+                                     c.entity.position.y) or ""
         log("[ai-companion] upkeep: the task at " .. key .. " failed (" ..
-            tostring(t.error) .. ") -- held off " .. ticks .. " ticks")
+            tostring(t.error) .. ") -- held off " .. ticks .. " ticks" .. at)
       elseif t and t.status == "done" and off[key] then
         off[key] = nil                       -- served again: the back-off ends
       end
@@ -277,7 +288,10 @@ local function scan(cid, c)
         -- limit keeps only a few items in it -- a boiler's ~12 s); down at two scans in
         -- a row (a sparse belt's inserter waits now and then), it is hers like an
         -- unfed one, named underfed
-        if f.other_ok then
+        -- (a line delivering nothing while the burner still has LINE_DRY_S of fuel is a
+        -- slow line, not a dead one -- the wood smoke: a sparse coal belt sent her to
+        -- burners with 130 s of fuel 120 times; it is hers once its fuel runs low)
+        if f.other_ok or own_t >= M.LINE_DRY_S then
           down[key_of(e)] = nil
         elseif not is_off(e) and down_twice(key_of(e), "line") then
           local need = M.burner_need(e)

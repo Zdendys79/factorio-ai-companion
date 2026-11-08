@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.157
+  Bugfixes:
+    - A burner on a supply line delivering nothing (an empty moment on a sparse coal
+      belt) was served by hand while it still had minutes of fuel -- a smoke sent her
+      120 times to burners with ~130 s left. Now it is hers only once its fuel lasts
+      under LINE_DRY_S (60 s: a dead line's burner drops below it, a scan and a walk
+      fit in it while she is free); a boiler on its line (~12 s in its slot) is served
+      as before.
+  Changes:
+    - An upkeep task that failed because she could not reach its burner logs where she
+      stands then (the smoke's 28 walk timeouts at two furnaces could not be replayed).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.156
   Features:
     - The fuel upkeep keeps burner inserters too. Live, an inserter that picks up a
