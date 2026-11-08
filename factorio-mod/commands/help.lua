@@ -31,7 +31,7 @@ commands.add_command("fac_help", nil, function()
     move = {"follow", "stop", "to"},
     research = {"get", "progress", "set"},
     resource = {"list", "mine", "nearest"},
-    world = {"nearest", "scan"},
+    world = {"nearest", "reserve_tiles", "scan"},
     player = {"/fac <msg>", "/fac <id> <msg>", "/fac spawn", "/fac list", "/fac kill", "/fac clear", "/fac name"}
   })
 end)

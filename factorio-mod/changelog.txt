@@ -1,4 +1,24 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.162
+  Features:
+    - /fac_reserve_tiles <owner> add x1 y1 [x2 y2 ...] | remove | list, and
+      /fac_reserve_tiles <any> all: book whole tiles to an owner (storage.reserved_tiles)
+      -- tiles a later route must arrive at, such as a block's join tile. The belt and
+      pipe route search treats a reserved tile as blocked unless it is the route's own
+      start or destination (an underground pair may still pass under it; the lookup is
+      built once per search, none when nothing is reserved). add checks every pair
+      before booking any; a tile booked by another owner stays theirs and is listed in
+      the reply's "taken"; remove releases every tile of the owner; list (the owner's)
+      and all (every owner's) give the tile centres as "at". No game state is touched.
+      (factorio-ai: the lab row's green join tile held another route's underground
+      belt, so the green pack belt could never join, "dest-blocked".)
+    - A busy refusal (a pool step holds her) says when the step is an upkeep one: the
+      text ends " (upkeep)" (init.lua BUSY_UPKEEP). Only then does the pool yield to
+      the controller, so only then is its retry worth waiting for (factorio-ai's
+      place_smart / belt_connect / pipe_connect wait it out; a smoke's green block was
+      picked up three times while an upkeep fetch held her). The text still begins
+      with the old refusal.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.161
   Features:
     - The task pool re-evaluates its choice while she walks to a step (factorio-ai

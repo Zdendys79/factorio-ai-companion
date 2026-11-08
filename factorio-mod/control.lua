@@ -214,6 +214,7 @@ require("commands.research")
 require("commands.resource")
 require("commands.task")
 require("commands.world")
+require("commands.reserved_tiles")
 require("commands.combat")
 require("commands.help")
 

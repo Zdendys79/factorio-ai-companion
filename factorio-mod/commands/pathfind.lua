@@ -13,6 +13,8 @@
 -- CORNER with radius 0.3 while resource entities sit at tile CENTRES -- live 2026-10-24 it
 -- matched 0 of 491 ore tiles, so it never blocked ore/coal/stone (only crude oil, whose
 -- collision box is large, could have matched) and was removed.
+local reserved = require("commands.reserved_tiles")
+
 local M = {}
 
 -- MAX_SEARCH_MARGIN raised 15->40 (2026-07-05, Zdendys live-caught: a diagnostic sweep of
@@ -425,6 +427,19 @@ function M.find_path(surf, from, to, force, opts)
   local miny = math.min(fy, ty) - MAX_SEARCH_MARGIN
   local maxy = math.max(fy, ty) + MAX_SEARCH_MARGIN
   local is_blocked = make_is_blocked(surf, force)
+  -- a reserved tile (commands/reserved_tiles.lua: a block's join tile a later route must
+  -- reach) is no tile for this route -- unless it is the route's own start or end
+  local res = reserved.lookup()
+  if res then
+    local placeable = is_blocked
+    is_blocked = function(x, y)
+      local col = res[x]
+      if col and col[y] and not (x == fx and y == fy) and not (x == tx and y == ty) then
+        return true
+      end
+      return placeable(x, y)
+    end
+  end
   if opts and opts.pure then
     local fed = fed_tiles(surf, minx, miny, maxx, maxy)
     if fed[tile_key(tx, ty)] and not (tx == fx and ty == fy) then return nil, "dest-fed" end
