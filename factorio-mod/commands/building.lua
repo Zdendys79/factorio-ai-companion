@@ -4,6 +4,7 @@ local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
 local entity_at = require("commands.entity_at")
 local machine_fill = require("commands.machine_fill")
+local machine_empty = require("commands.machine_empty")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
 requests.register("place", function(cid, a)
@@ -272,59 +273,11 @@ commands.add_command("fac_building_empty", nil, function(cmd)
     if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return   -- must be in reach to extract (no action-at-a-distance)
     end
-    -- Extract ONLY from the entity CLOSEST to the target tile (not any in radius): in a
-    -- tight furnace row, collecting from the wrong furnace mismatches the fed one.
-    -- e.type ~= "resource" excludes raw ore/stone/coal patches -- live-caught 2026-07-04:
-    -- a chest/furnace placed adjacent to its own ore patch sits EXACTLY as close to `pos`
-    -- as the underlying resource tile (both d2=0.5 on integer-aligned placement), and the
-    -- resource entity (no inventory, always extracted=0) would silently win the tie
-    -- whenever Factorio's entity enumeration order happened to list it first --
-    -- non-deterministic flaky "extracted=0" despite the target container being full.
-    local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5}
-    local target, bd = nil, 1e18
-    for _, e in ipairs(es) do
-      if e.valid and e ~= c.entity and e.type ~= "resource" then
-        local dx, dy = e.position.x - pos.x, e.position.y - pos.y
-        local d = dx * dx + dy * dy
-        if d < bd then bd, target = d, e end
-      end
-    end
-    local ext = 0
-    if target then
-      -- defines.inventory.fuel added so surplus can be collected from a self-fueling burner
-      -- (e.g. a coal-drill pair, [[coal_drill_self_fueling]]) -- caller is responsible for
-      -- requesting less than the full amount so the burner keeps a running buffer.
-      -- NOTE: defines.inventory.furnace_result/furnace_source are STALE 1.x names, removed
-      -- in Factorio 2.0's inventory unification -- they are nil here, and indexing
-      -- get_inventory(nil) THROWS (not returns nil), which used to abort this whole loop
-      -- before ever reaching `fuel` unless chest/crafter_output alone already satisfied the
-      -- request. crafter_output already covers furnace output in 2.0+, so no replacement
-      -- entry is needed for the removed furnace_result.
-      for _, it in ipairs({defines.inventory.chest, defines.inventory.crafter_output,
-                           defines.inventory.fuel}) do
-        local inv = target.get_inventory(it)
-        if inv then
-          local av = inv.get_item_count(item)
-          if av > 0 then
-            local rm = inv.remove{name = item, count = math.min(count - ext, av)}
-            if rm > 0 then
-              -- insert()'s own return value MUST be used, not assumed to equal
-              -- `rm` (2026-07-18, same finding independently confirmed for
-              -- task_pool.lua's pull_from_nearby_container, which mirrors this
-              -- function's own idiom): a full companion inventory would
-              -- otherwise silently lose the un-placed remainder (already
-              -- removed here, never actually held) and over-report `extracted`
-              -- to the caller. Put back whatever didn't fit.
-              local ins = c.entity.insert{name = item, count = rm}
-              if ins < rm then inv.insert{name = item, count = rm - ins} end
-              ext = ext + ins
-            end
-          end
-        end
-        if ext >= count then break end
-      end
-    end
-    u.json_response({id = id, extracted = ext, item = item})
+    -- the entity closest to the target tile (machine_empty.empty, shared with the task
+    -- pool's "take_out" step)
+    local r = machine_empty.empty(c, pos, item, count)
+    r.id = id
+    u.json_response(r)
   end)
 end)
 
@@ -352,8 +305,8 @@ commands.add_command("fac_building_clear_wrong_output", nil, function(cmd)
     if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return
     end
-    -- Same closest-entity-to-target-tile lookup as fac_building_empty above (same
-    -- resource-tile tie-break rationale -- see that command's own comment).
+    -- Same closest-entity-to-target-tile lookup as fac_building_empty's (same
+    -- resource-tile tie-break rationale -- see machine_empty.empty's comment).
     local es = c.entity.surface.find_entities_filtered{position = pos, radius = 5}
     local target, bd = nil, 1e18
     for _, e in ipairs(es) do
@@ -372,7 +325,7 @@ commands.add_command("fac_building_clear_wrong_output", nil, function(cmd)
         local rm = inv.remove{name = stack.name, count = stack.count, quality = stack.quality}
         if rm > 0 then
           -- insert()'s own return value MUST be used, not assumed to equal `rm` --
-          -- same fix class as fac_building_empty above (2026-07-18 finding).
+          -- same fix class as machine_empty.empty's (2026-07-18 finding).
           local ins = c.entity.insert{name = stack.name, count = rm, quality = stack.quality}
           if ins < rm then inv.insert{name = stack.name, count = rm - ins, quality = stack.quality} end
           if ins > 0 then

@@ -220,7 +220,8 @@ function M.get_task_status(task_id)
     -- the optional steps that failed, [{step = index, error = reason}] (step_failed;
     -- nil: none failed, or a task from an older save)
     step_errors = t.step_errors,
-    -- what the steps moved, [{step = index, ...}] (a fill's inserted / item / into;
+    -- what the steps moved, [{step = index, ...}] (a fill's inserted / item / into, a
+    -- take_out's extracted / item;
     -- nil: none, or a task from an older save)
     step_results = t.step_results,
   }

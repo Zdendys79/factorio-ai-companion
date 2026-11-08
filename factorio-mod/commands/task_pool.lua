@@ -56,6 +56,12 @@
 --                                                          run_fill) -- its result
 --                                                          {inserted, item, into} in the
 --                                                          task's step_results
+--   {type="take_out", x=, y=, item=NAME, count=N}        -> up to N out of the entity
+--                                                          closest to (x, y): chest,
+--                                                          crafter output, fuel
+--                                                          (fac_building_empty's take;
+--                                                          run_take_out) -- {extracted,
+--                                                          item} in step_results
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
 --                                                       -> ctx.saved[save_as]
 --   {type="ensure_item", item=NAME, count=N}            -> gathers/crafts NAME
@@ -66,7 +72,7 @@
 --     have not reserved) -- both the upkeep's getting material
 -- Any step: optional=true -- when it fails, its error goes into the task's step_errors
 -- and the task goes on with the next step (task_pool_ledger.step_failed).
--- The hand steps (remove, fuel, insert, take, fill) act only within her reach.
+-- The hand steps (remove, fuel, insert, take, fill, take_out) act only within her reach.
 --
 -- ensure_item (2026-07-17, Zdendys's own architecture correction: procurement was
 -- kept OUT of this module by the ORIGINAL v1 design above, back when neither
@@ -152,9 +158,11 @@ local requests = require("commands.controller_requests")
 local picklog = require("commands.task_pool_pick_log")
 local activity = require("commands.activity")
 local entity_at = require("commands.entity_at")
+local machine_steps = require("commands.task_pool_machine_steps")
 
 -- the steps that act on their target by hand, only within her reach (the acting state)
-local REACH_STEPS = {remove = true, fuel = true, insert = true, take = true, fill = true}
+local REACH_STEPS = {remove = true, fuel = true, insert = true, take = true, fill = true,
+                     take_out = true}
 
 local M = {}
 
@@ -519,7 +527,8 @@ function M.tick()
 
     if active.state == "acting" then
       local ok, err, result = true, nil, nil
-      -- A step that acts on a target by hand (remove, fuel, insert, take, fill) acts only
+      -- A step that acts on a target by hand (remove, fuel, insert, take, fill, take_out)
+      -- acts only
       -- within her reach: the walk also ends when the walker gives it up (its queue
       -- dropped -- an entity across water), and the step would then reach from any
       -- distance (independent review: a pick-up mined from tens of tiles away). Out
@@ -828,7 +837,9 @@ function M.tick()
       elseif step.type == "insert" then
         ok, err = run_insert(c, t, step)
       elseif step.type == "fill" then
-        ok, err, result = steps.run_fill(c, t, step)
+        ok, err, result = machine_steps.run_fill(c, t, step)
+      elseif step.type == "take_out" then
+        ok, err, result = machine_steps.run_take_out(c, t, step)
       elseif step.type == "take" then
         ok, err = run_take(c, t, step)
       elseif step.type == "find_patch" then
@@ -858,7 +869,8 @@ function M.tick()
           t.step_ticks = t.step_ticks or {}
           t.step_ticks[t.cursor] = {type = step.type, start = active.step_start_tick, done = game.tick}
           if result then
-            -- what the step moved (a fill's {inserted, item, into}), reported back:
+            -- what the step moved (a fill's {inserted, item, into}, a take_out's
+            -- {extracted, item}), reported back:
             -- [{step = index, ...}] in fac_task_status step_results
             result.step = t.cursor
             t.step_results = t.step_results or {}

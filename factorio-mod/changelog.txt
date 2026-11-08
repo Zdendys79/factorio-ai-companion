@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.167
+  Features:
+    - A "take_out" task step {type="take_out", x, y, item, count}: fac_building_empty's
+      take -- up to count out of the entity closest to (x, y), from its chest, crafter
+      output (a furnace's or an assembler's result) or fuel inventory -- with the mod
+      walking there; a hand step (within her reach only). Taking none is no failure;
+      its result {extracted, item} is in step_results. Used by factorio-ai's
+      CompanionAPI.collect / collect_many.
+  Changes:
+    - fac_building_empty and the take_out step share commands/machine_empty.lua; the
+      fill and take_out step handlers live in commands/task_pool_machine_steps.lua
+      (task_pool_steps.lua stays under the file-size limit).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.166
   Features:
     - A "fill" task step {type="fill", x, y, item, count}: fac_building_fill's load --
