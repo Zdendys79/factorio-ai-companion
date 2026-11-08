@@ -438,6 +438,44 @@ commands.add_command("fac_building_fill", nil, function(cmd)
   end)
 end)
 
+-- fac_building_bar <cid> <x> <y> <slots>: limit the chest nearest (x, y) (within 0.5) to
+-- `slots` usable slots, as a player sets a chest's bar -- she must be in reach (factorio-ai
+-- docs/production_for_every_item.md: a pick point is no store, its machine stops when its
+-- chest is "enough"). 0 slots: no limit. Plain chests only (type container: wooden, iron,
+-- steel -- the mall's). {id, chest, slots} or {error}.
+commands.add_command("fac_building_bar", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+(%d+)$", cmd.parameter)
+    local pos = {x = tonumber(args[2]), y = tonumber(args[3])}
+    local slots = tonumber(args[4])
+    if not (args[1] and pos.x and pos.y and slots) then
+      u.json_response({error = "usage: <cid> <x> <y> <slots>"}); return
+    end
+    local id, c = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
+      u.json_response({id = id, error = "Too far"}); return
+    end
+    local chest, bd = nil, 0.25
+    for _, e in ipairs(c.entity.surface.find_entities_filtered{position = pos, radius = 0.5,
+                                                               type = "container"}) do
+      if e.valid then
+        local d = (e.position.x - pos.x) ^ 2 + (e.position.y - pos.y) ^ 2
+        if d <= bd then chest, bd = e, d end
+      end
+    end
+    if not chest then u.json_response({id = id, error = "No chest"}); return end
+    local inv = chest.get_inventory(defines.inventory.chest)
+    if slots >= #inv then
+      u.json_response({id = id, error = "the " .. chest.name .. " has only " .. #inv ..
+                       " slots"}); return
+    end
+    -- (the bar is the first unusable slot: slots + 1; no limit is #inv + 1)
+    inv.set_bar(slots > 0 and slots + 1 or nil)
+    u.json_response({id = id, chest = chest.name, slots = slots})
+  end)
+end)
+
 -- Realistic tick-based building placement
 -- Mine (destroy) any entity at position - works on crash site wrecks, decoratives, etc.
 commands.add_command("fac_mine_entity", nil, function(cmd)

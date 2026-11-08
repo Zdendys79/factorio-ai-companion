@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.160
+  Features:
+    - /fac_building_bar <cid> <x> <y> <slots>: limit the chest at (x, y) to `slots`
+      usable slots (0: no limit), as a player sets a chest's bar -- she must be in
+      reach. For factorio-ai's mall: a pick-point chest is no store, its machine stops
+      when the chest is "enough".
+---------------------------------------------------------------------------------------------------
 Version: 0.16.159
   Features:
     - Her hand crafts are counted per recipe (both craft paths: /fac_item_craft and the
