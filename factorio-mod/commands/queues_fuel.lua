@@ -4,6 +4,7 @@
 
 local u = require("commands.init")
 local core = require("commands.queues_core")
+local requests = require("commands.controller_requests")
 
 local valid_companion = core.valid_companion
 local process_queue = core.process_queue
@@ -43,10 +44,10 @@ end
 function M.start_fuel_group(cid, per, radius)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
-  -- Same task-pool-ownership guard as start_gather above (2026-07-08, task #42).
-  if storage.active_step and storage.active_step[cid] then
-    return {error = u.note_busy_refusal(cid)}  -- (init.lua: an upkeep step yields to the controller)
-  end
+  -- Task-pool ownership (2026-07-08, task #42): queued while a step holds her
+  -- (controller_requests.lua: never refused, started by the scheduler)
+  local queued = requests.gate(cid, "fuel", {per = per, radius = radius})
+  if queued then return queued end
   storage.fuel_queues[cid] = {per = per or 20, radius = radius or 200, state = "find",
                               blacklist = {}, served = {}, fueled = 0, machines = 0,
                               -- run_start_tick/run_end_tick (2026-07-28, action-timing
@@ -149,5 +150,10 @@ function M.get_fuel_status(cid)
   return {active = true, state = q.state, fueled = q.fueled, machines = q.machines, blacklist = bl,
     run_start_tick = q.run_start_tick, run_end_tick = q.run_end_tick}
 end
+
+-- the controller's queued fuel round, started by the scheduler (controller_requests.lua)
+requests.register("fuel", function(cid, a)
+  return M.start_fuel_group(cid, a.per, a.radius)
+end)
 
 return M

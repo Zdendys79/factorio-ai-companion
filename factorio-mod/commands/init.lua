@@ -128,29 +128,6 @@ local function clean_json_numbers(raw)
   return table.concat(out)
 end
 
--- The controller's command was refused because a task-pool step holds her: an expected
--- state, not an error. When an upkeep step holds her, its tick lets the task pool keep
--- its upkeep steps back a while (task_pool.lua pick_next), so the controller's next try
--- gets through -- and the refusal says so (BUSY_UPKEEP appended: a controller waits
--- such a refusal out; a build step holding her does not yield, waiting only delays).
--- @param cid number the companion
--- @return string the refusal's text (callers' replies keep it)
-M.BUSY_REFUSAL = "companion busy with an active task-pool step"
-M.BUSY_UPKEEP = " (upkeep)"
-function M.note_busy_refusal(cid)
-  -- only an upkeep step holding her makes the pool yield (review: when a build's step
-  -- holds her, holding upkeep back does not let the command through -- it only delays
-  -- upkeep)
-  local active = storage.active_step and storage.active_step[cid]
-  local t = active and storage.tasks and storage.tasks[active.task_id]
-  if t and t.kind == "upkeep" then
-    storage.busy_refused = storage.busy_refused or {}
-    storage.busy_refused[cid] = game.tick
-    return M.BUSY_REFUSAL .. M.BUSY_UPKEEP
-  end
-  return M.BUSY_REFUSAL
-end
-
 function M.json_response(data, cid)
   if data.tick == nil then data.tick = game.tick end
   if cid and data.queues == nil then

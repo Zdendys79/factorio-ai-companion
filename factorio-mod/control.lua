@@ -86,6 +86,9 @@ local function init_storage()
   -- that could be misread as fresh) stash closes the race: Python can now recover
   -- the corrected target even after the queue is gone.
   storage.walk_last_arrived = storage.walk_last_arrived or {}
+  -- (0.16.164: a controller command is queued, never refused -- the refusal's upkeep
+  -- yield is gone)
+  storage.busy_refused = nil
   queues.init()
   task_pool.init()
   activity.init()

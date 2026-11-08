@@ -1,6 +1,7 @@
 -- AI Companion v0.9.0 - Combat commands
 local u = require("commands.init")
 local queues = require("commands.queues")
+local requests = require("commands.controller_requests")
 
 -- Detect nearby enemies
 commands.add_command("fac_world_enemies", nil, function(cmd)
@@ -61,7 +62,8 @@ commands.add_command("fac_action_attack_status", nil, function(cmd)
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    local status = queues.get_combat_status(id)
+    -- a queued attack reports "queued" (or its failed start) first (controller_requests)
+    local status = requests.status(id, "combat") or queues.get_combat_status(id)
     -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
     u.json_response({id = id, status = status}, id)
   end)
@@ -73,8 +75,10 @@ commands.add_command("fac_action_attack_stop", nil, function(cmd)
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
+    -- (a queued attack is dropped too)
+    local cancelled = requests.pending(id, "combat") ~= nil and requests.cancel(id)
     local result = queues.stop_combat(id)
-    u.json_response({id = id, stopped = result.stopped, kills = result.kills or 0})
+    u.json_response({id = id, stopped = result.stopped or cancelled, kills = result.kills or 0})
   end)
 end)
 

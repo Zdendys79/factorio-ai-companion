@@ -1,6 +1,7 @@
 -- AI Companion v0.9.0 - Resource commands
 local u = require("commands.init")
 local queues = require("commands.queues")
+local requests = require("commands.controller_requests")
 
 local normalize = {copper = "copper-ore", iron = "iron-ore", coal = "coal", stone = "stone", uranium = "uranium-ore", oil = "crude-oil"}
 
@@ -102,6 +103,7 @@ commands.add_command("fac_gather", nil, function(cmd)
     end
     local result = queues.start_gather(id, resource, count, exclude)
     if result.error then u.json_response({id = id, error = result.error})
+    elseif result.queued then result.id = id; u.json_response(result)
     else u.json_response({id = id, gathering = true, resource = resource, target = count}) end
   end)
 end)
@@ -112,7 +114,9 @@ commands.add_command("fac_gather_status", nil, function(cmd)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
     -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
-    u.json_response({id = id, status = queues.get_gather_status(id)}, id)
+    -- (a queued gather reports "queued" or its failed start first -- controller_requests)
+    u.json_response({id = id, status = requests.status(id, "gather")
+                                        or queues.get_gather_status(id)}, id)
   end)
 end)
 
@@ -129,6 +133,7 @@ commands.add_command("fac_fuel_group", nil, function(cmd)
     local radius = tonumber(args[3]) or 200
     local result = queues.start_fuel_group(id, per, radius)
     if result.error then u.json_response({id = id, error = result.error})
+    elseif result.queued then result.id = id; u.json_response(result)
     else u.json_response({id = id, fueling = true, per = per, radius = radius}) end
   end)
 end)
@@ -139,7 +144,8 @@ commands.add_command("fac_fuel_group_status", nil, function(cmd)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
     -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
-    u.json_response({id = id, status = queues.get_fuel_status(id)}, id)
+    u.json_response({id = id, status = requests.status(id, "fuel")
+                                        or queues.get_fuel_status(id)}, id)
   end)
 end)
 

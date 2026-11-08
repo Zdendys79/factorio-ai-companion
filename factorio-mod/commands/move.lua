@@ -1,5 +1,31 @@
 -- AI Companion v0.7.0 - Move commands
 local u = require("commands.init")
+local requests = require("commands.controller_requests")
+
+-- Start the controller's walk to (x, y) (fac_move_to now, or its queued request later).
+-- giveup_enabled (2026-07-16, Zdendys's fast-giveup directive): ONLY fac_move_to's OWN
+-- walks opt into process_walking_queues' fast-giveup check (control.lua) -- every OTHER
+-- walking_queues[cid] writer in this mod (queues.start_build's approach walk,
+-- task_pool.lua's step-driven movement) omits this field entirely.
+--
+-- Clear any stale walk_last_outcome (2026-07-16, independent-review finding): without
+-- this, staleness protection relied only on Python's OWN giveup timeout (~8640 ticks)
+-- being much larger than the mod's new one (600 active ticks) -- an implicit numeric
+-- coincidence across two files, not a structural guarantee. Explicitly clearing here
+-- means a NEW walk can never see a leftover outcome from a PREVIOUS one.
+-- The same for walk_last_arrived: fac_companion_position falls back to it as
+-- "walk_target" once the queue is gone. Left over from the PREVIOUS walk, it made a new
+-- walk that gave up at once read as arrived: she stood by the old target, and go_to()
+-- returned True 14 tiles from the new one (live 2026-11-06, factorio-ai
+-- live_verify_lab_pole_route: every pole then "Too far").
+local function start_move(id, x, y)
+  if storage.walk_last_outcome then storage.walk_last_outcome[id] = nil end
+  if storage.walk_last_arrived then storage.walk_last_arrived[id] = nil end
+  storage.walking_queues[id] = {target = {x = x, y = y}, giveup_enabled = true}
+  return {id = id, walking_to = {x = x, y = y}}
+end
+
+requests.register("move", function(cid, a) return start_move(cid, a.x, a.y) end)
 
 commands.add_command("fac_move_to", nil, function(cmd)
   u.safe_command(function()
@@ -16,45 +42,17 @@ commands.add_command("fac_move_to", nil, function(cmd)
       u.error_response("target too close to enemy base")
       return
     end
-    -- Don't steal the walking queue from an ACTIVE task-pool step (2026-07-08, the
-    -- other half of task_pool.lua's own idle-companion guard fix -- see that commit's
-    -- comment for the full race description). storage.active_step[id] means the task
-    -- pool is CURRENTLY driving this companion toward one of its own step targets;
-    -- silently overwriting storage.walking_queues[id] here would leave that task-pool
-    -- step's state stuck in "walking" forever (it polls for walking_queues[id] to
-    -- clear on arrival, which will never happen at ITS target once redirected here) or
-    -- have the companion "arrive" somewhere unrelated and get treated as if she'd
-    -- reached the task-pool step's own destination. Reject instead -- Python's go_to()
-    -- callers already retry on their own next decide() cycle when a move is refused.
-    if storage.active_step and storage.active_step[id] then
-      -- an expected state, not an error: answered without the error ring (review: each
-      -- of the controller's busy retries filled an entry of it); note_busy_refusal
-      -- lets the task pool keep its upkeep steps back so the next try gets through
-      u.json_response({error = u.note_busy_refusal(id)})
+    -- Don't steal the walking queue from an ACTIVE task-pool step (2026-07-08): a step
+    -- walking to its own target would never arrive there once redirected. The walk is
+    -- queued instead (controller_requests.lua: never refused, started by the scheduler;
+    -- fac_companion_position reports walk_queued meanwhile).
+    local queued = requests.gate(id, "move", {x = x, y = y}, {x = x, y = y})
+    if queued then
+      queued.id = id
+      u.json_response(queued)
       return
     end
-    -- giveup_enabled (2026-07-16, Zdendys's fast-giveup directive): ONLY fac_move_to's
-    -- OWN walks opt into process_walking_queues' new fast-giveup check (control.lua) --
-    -- every OTHER walking_queues[cid] writer in this mod (queues.start_build's approach
-    -- walk, task_pool.lua's step-driven movement) omits this field entirely and is
-    -- completely unaffected, byte-identical to before this feature existed.
-    --
-    -- Clear any stale walk_last_outcome (2026-07-16, independent-review finding):
-    -- without this, staleness protection relied only on Python's OWN giveup timeout
-    -- (~8640 ticks) being much larger than the mod's new one (600 active ticks) --
-    -- an implicit numeric coincidence across two files, not a structural guarantee.
-    -- Explicitly clearing here means a NEW walk can never see a leftover outcome
-    -- from a PREVIOUS one for this same companion, regardless of either constant's
-    -- future value.
-    if storage.walk_last_outcome then storage.walk_last_outcome[id] = nil end
-    -- The same for walk_last_arrived: fac_companion_position falls back to it as
-    -- "walk_target" once the queue is gone. Left over from the PREVIOUS walk, it made a
-    -- new walk that gave up at once read as arrived: she stood by the old target, and
-    -- go_to() returned True 14 tiles from the new one (live 2026-11-06, factorio-ai
-    -- live_verify_lab_pole_route: every pole then "Too far").
-    if storage.walk_last_arrived then storage.walk_last_arrived[id] = nil end
-    storage.walking_queues[id] = {target = {x = x, y = y}, giveup_enabled = true}
-    u.json_response({id = id, walking_to = {x = x, y = y}})
+    u.json_response(start_move(id, x, y))
   end)
 end)
 
@@ -83,12 +81,15 @@ commands.add_command("fac_move_stop", nil, function(cmd)
     -- in-progress walk (storage.walking_queues[id]=nil looks like "arrived" to
     -- task_pool.lua's "walking"->"acting" check, and c.entity.walking_state=false
     -- physically stops her mid-route) -- silently breaking the very thing this
-    -- guard was meant to protect. Only clear/halt if the task pool doesn't own her.
+    -- guard was meant to protect. Only clear/halt if the task pool doesn't own her --
+    -- then the controller's own walk is only its queued request: that is dropped.
     if storage.active_step and storage.active_step[id] then
-      -- an expected state, answered without the error ring (as every busy refusal)
-      u.json_response({error = u.BUSY_REFUSAL .. " -- not stopping"})
+      local cancelled = requests.pending(id, "move") ~= nil and requests.cancel(id)
+      u.json_response({id = id, stopped = false, cancelled = cancelled,
+                       reason = "a task-pool step walks her -- its walk is not stopped"})
       return
     end
+    if requests.pending(id, "move") then requests.cancel(id) end
     storage.walking_queues[id] = nil
     c.entity.walking_state = {walking = false}
     u.json_response({id = id, stopped = true})

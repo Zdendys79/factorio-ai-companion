@@ -13,6 +13,7 @@
 
 local u = require("commands.init")
 local core = require("commands.queues_core")
+local requests = require("commands.controller_requests")
 
 local _tile_key = core.tile_key
 local valid_companion = core.valid_companion
@@ -316,8 +317,8 @@ function M.start_gather(cid, resource, count, exclude, from_task_pool)
   -- storage.walking_queues[cid] writers): task_pool.lua's tick() drives a companion
   -- toward its own step targets independently of whatever Python is doing right now:
   -- an unguarded gather() call here would silently overwrite that in-progress walk the
-  -- same way direct move_to() used to. Reject instead -- Python callers already retry
-  -- on their own next cycle when a dispatch is refused.
+  -- same way direct move_to() used to. Queued instead (controller_requests.lua: never
+  -- refused, started by the scheduler).
   --
   -- from_task_pool (2026-07-17, "ensure_item" step type): task_pool.lua's OWN
   -- "acting"/"ensuring" state machine calls this function AS THE IMPLEMENTATION of
@@ -326,10 +327,12 @@ function M.start_gather(cid, resource, count, exclude, from_task_pool)
   -- otherwise reject task_pool.lua's own internal call with the exact error message
   -- meant for a DIFFERENT, external caller trying to steal the companion. This flag
   -- is set ONLY by task_pool.lua's own internal call site; every other caller
-  -- (Python's /fac_resource_mine, the opening's own gather() helpers) omits it and
-  -- keeps the original guard, byte-identical to before this fix.
-  if not from_task_pool and storage.active_step and storage.active_step[cid] then
-    return {error = u.note_busy_refusal(cid)}  -- (init.lua: an upkeep step yields to the controller)
+  -- (Python's /fac_gather, the opening's own gather() helpers) omits it and goes
+  -- through the gate.
+  if not from_task_pool then
+    local queued = requests.gate(cid, "gather", {resource = resource, count = count,
+                                                 exclude = exclude})
+    if queued then return queued end
   end
   -- exclude (2026-07-07, Zdendys/Claude: replacing the Python-side manual
   -- goto_resource()+mine_and_wait() flow, which needed its OWN distance-vs-
@@ -917,5 +920,10 @@ function M.get_gather_status(cid, peek)
     selected = selected_name, mining_state_mining = mining,
     run_start_tick = q.run_start_tick, run_end_tick = q.run_end_tick}
 end
+
+-- the controller's queued gather, started by the scheduler (controller_requests.lua)
+requests.register("gather", function(cid, a)
+  return M.start_gather(cid, a.resource, a.count, a.exclude)
+end)
 
 return M

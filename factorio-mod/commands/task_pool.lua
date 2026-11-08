@@ -139,6 +139,8 @@ local ensure_item = require("commands.task_pool_ensure_item")
 local targeting = require("commands.task_pool_targeting")
 local steps = require("commands.task_pool_steps")
 local priority = require("commands.priority")
+local requests = require("commands.controller_requests")
+local picklog = require("commands.task_pool_pick_log")
 local activity = require("commands.activity")
 
 local M = {}
@@ -201,31 +203,59 @@ M.get_task_status = ledger.get_task_status
 -- task's base priority by its kind -- build < relocate < dismantle, Zdendys); ties
 -- broken by task_id (older task wins -- Zdendys: "stari kroku odpovida cca poradi
 -- taskID"). With every task of one kind this is the nearest step, as before.
--- after a controller's command was refused because a pool step held her (a walk, a
--- build, a gather, a fuel round, a belt -- init.lua note_busy_refusal), the pool's own
--- upkeep steps wait this many ticks -- the controller retries a walk every ~0.5 s real
--- (~480 ticks at speed 16) and would otherwise rarely find a gap between them (review)
-local UPKEEP_YIELD_TICKS = 600
+-- Every task's priority ages (priority.aged: times log2 of the ticks since it was
+-- given -- Zdendys: every command and task), and the controller's pending direct
+-- command competes on the same scale (controller_requests.lua: never refused, queued
+-- while a step holds her) -- picked, it is started instead of a step (M.CONTROLLER).
+M.CONTROLLER = "controller"
 
--- (task_id, its effective priority) of the best step, or nil
-local function pick_next(cid, c)
-  local best_task_id, best_eff = nil, -math.huge
-  local refused = storage.busy_refused and storage.busy_refused[cid]
-  local yield = refused and game.tick - refused < UPKEEP_YIELD_TICKS
+-- A task's current step's effective priority from where she stands.
+local function task_eff(t, c)
+  local step = t.steps[t.cursor]
+  local pos = step_target_pos(t, step)
+  local dist = pos and u.distance(c.entity.position, pos) or 0  -- instant steps: distance 0
+  -- (a task from an older save has no priority: a build's)
+  local p = priority.aged(t.priority or priority.base(priority.DEFAULT_KIND), t.created_tick)
+  return priority.effective(p, dist)
+end
+
+-- (task_id or M.CONTROLLER, its effective priority, its position) of the best step, or nil.
+-- `record`: the idle dispatch's pick -- written to the pick log when that is on
+-- (task_pool_pick_log.lua; not the walk takeover's checks every PREEMPT_CHECK_TICKS)
+local function pick_next(cid, c, record)
+  local best_task_id, best_eff, best_pos = nil, -math.huge, nil
+  local cands = record and picklog.enabled() and {} or nil
   for task_id, t in pairs(storage.tasks) do
-    if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps
-       and not (yield and t.kind == priority.UPKEEP_KIND) then
-      local step = t.steps[t.cursor]
-      local pos = step_target_pos(t, step)
-      local dist = pos and u.distance(c.entity.position, pos) or 0  -- instant steps: distance 0
-      -- (a task from an older save has no priority: a build's)
-      local eff = priority.effective(t.priority or priority.base(priority.DEFAULT_KIND), dist)
+    if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps then
+      local eff = task_eff(t, c)
+      if cands then
+        local pos = step_target_pos(t, t.steps[t.cursor])
+        cands[#cands + 1] = {id = task_id, kind = t.kind, p = t.priority or 0,
+                             age = game.tick - (t.created_tick or game.tick),
+                             d = pos and u.distance(c.entity.position, pos) or 0, eff = eff}
+      end
       if eff > best_eff or (eff == best_eff and (not best_task_id or task_id < best_task_id)) then
         best_task_id, best_eff = task_id, eff
+        best_pos = step_target_pos(t, t.steps[t.cursor])
       end
     end
   end
-  return best_task_id, best_eff
+  local req_eff, req_pos = requests.effective(cid, c)
+  local chosen = best_task_id
+  if req_eff and req_eff >= best_eff then       -- (a tie: the controller's command)
+    chosen, best_eff, best_pos = M.CONTROLLER, req_eff, req_pos
+  end
+  if cands then
+    local r = requests.pending(cid)
+    if r then
+      cands[#cands + 1] = {id = M.CONTROLLER, kind = r.kind,
+                           p = priority.base(priority.DEFAULT_KIND), age = game.tick - r.tick,
+                           d = r.pos and u.distance(c.entity.position, r.pos) or 0,
+                           eff = req_eff}
+    end
+    if #cands > 0 then picklog.write(cid, chosen, cands) end
+  end
+  return chosen, best_eff, best_pos
 end
 
 -- While she walks to a step, the choice is re-evaluated every PREEMPT_CHECK_TICKS from
@@ -241,15 +271,10 @@ local PREEMPT_MARGIN = 1.05
 -- a step with a position of its own (review: a position-less step counts as distance 0,
 -- its full priority -- an ensure_item / the coal fetch's mining, whose gather walks far
 -- itself, would drop every walk; it waits for her to be free, as before).
-local function walk_preempted(cid, c, active, t, step)
-  local best_id, best_eff = pick_next(cid, c)
-  if not best_id or best_id == active.task_id then return false end
-  local bt = storage.tasks[best_id]
-  if not step_target_pos(bt, bt.steps[bt.cursor]) then return false end
-  local pos = step_target_pos(t, step)
-  local cur = priority.effective(t.priority or priority.base(priority.DEFAULT_KIND),
-                                 pos and u.distance(c.entity.position, pos) or 0)
-  return best_eff > cur * PREEMPT_MARGIN
+local function walk_preempted(cid, c, active, t)
+  local best_id, best_eff, best_pos = pick_next(cid, c)
+  if not best_id or best_id == active.task_id or not best_pos then return false end
+  return best_eff > task_eff(t, c) * PREEMPT_MARGIN
 end
 
 -- Re-check every active task's outstanding `needs` against CURRENT inventory
@@ -400,6 +425,8 @@ local function busy_elsewhere(cid)
       or holds_pool(storage.fuel_queues and storage.fuel_queues[cid], false)
       or holds_pool(storage.build_queues and storage.build_queues[cid], true)
       or holds_pool(storage.belt_queues and storage.belt_queues[cid], false)
+      -- (an attack the controller's queued request started -- controller_requests.lua)
+      or (storage.combat_queues and storage.combat_queues[cid]) ~= nil
 end
 
 function M.tick()
@@ -434,7 +461,7 @@ function M.tick()
         ledger.fail_task(active.task_id, "could not reach step target (walking timed out)")
         storage.active_step[cid] = nil
         goto continue
-      elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t, step) then
+      elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t) then
         -- a better step takes over (walk_preempted): the walk dropped, the task keeps its
         -- cursor; the idle pick below starts the better one this same tick
         storage.walking_queues[cid] = nil
@@ -916,8 +943,12 @@ function M.tick()
   for cid, c in pairs(storage.companions or {}) do
     if c.entity and c.entity.valid and not storage.active_step[cid]
        and not storage.walking_queues[cid] and not busy_elsewhere(cid) then
-      local task_id = pick_next(cid, c)
-      if task_id then
+      local task_id = pick_next(cid, c, true)
+      if task_id == M.CONTROLLER then
+        -- the controller's queued command starts now; its own queue holds the pool
+        -- from here (busy_elsewhere / walking_queues)
+        requests.run(cid)
+      elseif task_id then
         local t = storage.tasks[task_id]
         local step = t.steps[t.cursor]
         local pos = step_target_pos(t, step)

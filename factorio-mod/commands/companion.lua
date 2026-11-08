@@ -1,6 +1,7 @@
 -- AI Companion v0.7.0 - Companion commands
 local u = require("commands.init")
 local queues = require("commands.queues")
+local requests = require("commands.controller_requests")
 
 commands.add_command("fac_companion_list", nil, function(cmd)
   u.safe_command(function()
@@ -76,6 +77,7 @@ commands.add_command("fac_companion_spawn", nil, function(cmd)
       storage.companions[id] = {entity = e, color = color, name = name,
                                 label = u.render_label(e, name, color), spawned_tick = game.tick}
       if storage.dead_companions then storage.dead_companions[id] = nil end  -- (re)spawned -> no longer dead
+      requests.cancel(id)            -- a (re)spawned companion has no queued command
       game.print("[" .. name .. " spawned]", u.print_color(color))
       u.json_response({spawned = true, id = id, name = name})
     else
@@ -129,6 +131,7 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
     storage.walking_queues[id] = nil
     -- (her hand-craft count goes with her: a new companion under the id starts at 0)
     if storage.hand_crafts then storage.hand_crafts[id] = nil end
+    requests.cancel(id)            -- and her queued controller command
     game.print("[#" .. id .. " gone]", u.print_color(u.COLORS.system))
     u.json_response({id = id, disappeared = true, dropped = dropped})
   end)
@@ -262,7 +265,12 @@ commands.add_command("fac_companion_position", nil, function(cmd)
       local la = storage.walk_last_arrived[id]
       walk_target = {x = la.x, y = la.y}
     end
-    u.json_response({id = id, position = {x = math.floor(pos.x * 10) / 10, y = math.floor(pos.y * 10) / 10}, nearby = summary, players = players, walk_target = walk_target}, id)
+    -- the controller's walk queued while a task-pool step holds her
+    -- (controller_requests.lua): not started yet -- no walk target (an old one would
+    -- read as arrived), walk_queued for wait_arrive
+    local walk_queued = requests.pending(id, "move") ~= nil
+    if walk_queued then walk_target = nil end
+    u.json_response({id = id, position = {x = math.floor(pos.x * 10) / 10, y = math.floor(pos.y * 10) / 10}, nearby = summary, players = players, walk_target = walk_target, walk_queued = walk_queued}, id)
   end)
 end)
 

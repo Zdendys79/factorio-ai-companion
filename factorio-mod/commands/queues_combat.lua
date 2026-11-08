@@ -3,6 +3,7 @@
 
 local u = require("commands.init")
 local core = require("commands.queues_core")
+local requests = require("commands.controller_requests")
 
 local M = {}
 
@@ -16,11 +17,10 @@ function M.start_combat(cid, target_pos)
   -- got this same guard 2026-07-08 in commit a885b21, "Extend walking_queues[cid]
   -- ownership guard to gather/fuel/build/belt_queues"; combat was missed then, found
   -- 2026-07-11 during an end-of-day stale-task audit. Currently dormant in production
-  -- (no Python-side caller exists yet, auto_defend is set but never read), so this
-  -- closes a real but not-yet-live gap before anything wires combat up and hits it.
-  if storage.active_step and storage.active_step[cid] then
-    return {error = u.note_busy_refusal(cid)}  -- (init.lua: an upkeep step yields to the controller)
-  end
+  -- (no Python-side caller exists yet, auto_defend is set but never read). Queued while
+  -- a step holds her (controller_requests.lua: never refused, started by the scheduler).
+  local queued = requests.gate(cid, "combat", {target = target_pos}, target_pos)
+  if queued then return queued end
 
   local enemies = c.entity.surface.find_entities_filtered{
     position = target_pos,
@@ -120,5 +120,10 @@ function M.stop_combat(cid)
   storage.combat_queues[cid] = nil
   return {stopped = true}
 end
+
+-- the controller's queued attack, started by the scheduler (controller_requests.lua)
+requests.register("combat", function(cid, a)
+  return M.start_combat(cid, a.target)
+end)
 
 return M

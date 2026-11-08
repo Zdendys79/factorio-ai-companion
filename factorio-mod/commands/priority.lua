@@ -22,6 +22,20 @@ function M.base(kind)
   return M.BASE[kind or M.DEFAULT_KIND]
 end
 
+-- A priority aged: p times log2 of the ticks since `since` (Zdendys: every command and
+-- task ages, so one that keeps losing to other steps gains on them -- a far one only
+-- slowly, effective()'s nearness root weakens it; a fresh
+-- one -- under 2 ticks -- counts below p, at most the lowest priority, and is still
+-- done when nothing else waits). A nil `since` (a task from an older save) counts as
+-- fresh.
+-- @param p number the base priority
+-- @param since number|nil the tick the task or command was given
+-- @return number
+function M.aged(p, since)
+  local age = math.max(1, game.tick - (since or game.tick))
+  return p * math.log(age, 2)
+end
+
 -- A priority raised by nearness.
 -- @param p number the priority (>= 1; below 1 the formula inverts -- clamped)
 -- @param distance number tiles to where the step acts (0 for an in-place step)

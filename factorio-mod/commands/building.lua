@@ -1,6 +1,12 @@
 -- AI Companion v0.9.0 - Building commands
 local u = require("commands.init")
 local queues = require("commands.queues")
+local requests = require("commands.controller_requests")
+
+-- the controller's queued build, started by the scheduler (controller_requests.lua)
+requests.register("place", function(cid, a)
+  return queues.start_build(cid, a.entity, {x = a.x, y = a.y}, a.dir)
+end)
 
 commands.add_command("fac_building_can_place", nil, function(cmd)
   u.safe_command(function()
@@ -521,21 +527,16 @@ commands.add_command("fac_building_place_start", nil, function(cmd)
     local args = u.parse_args("^(%S+)%s+(%S+)%s+(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s*(%S*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    -- Task-pool-ownership guard at the DIRECT command entry point (2026-07-08, task
-    -- #42) -- NOT inside queues.start_build itself, which task_pool.lua's own "place"
-    -- step also calls internally WHILE active_step[id] is legitimately set for that
-    -- very call; guarding inside start_build would reject the task pool's own use.
-    -- This only blocks an EXTERNAL (direct Python) build request from hijacking a
-    -- companion the task pool currently owns, mirroring fac_move_to's guard.
-    if storage.active_step and storage.active_step[id] then
-      -- an expected state, answered without the error ring (init.lua note_busy_refusal)
-      u.json_response({error = u.note_busy_refusal(id)})
-      return
-    end
     local entity = args[2]
     local x, y = tonumber(args[3]), tonumber(args[4])
     local dir = args[5] ~= "" and defines.direction[args[5]] or defines.direction.north
-    local result = queues.start_build(id, entity, {x = x, y = y}, dir)
+    -- Task-pool ownership at the DIRECT command entry point (2026-07-08, task #42) --
+    -- NOT inside queues.start_build itself, which task_pool.lua's own "place" step also
+    -- calls WHILE active_step[id] is set. While a step holds her the build is queued
+    -- (controller_requests.lua: never refused, started by the scheduler).
+    local queued = requests.gate(id, "place", {entity = entity, x = x, y = y, dir = dir},
+                                 {x = x, y = y})
+    local result = queued or queues.start_build(id, entity, {x = x, y = y}, dir)
     result.id = id
     u.json_response(result)
   end)
@@ -546,7 +547,8 @@ commands.add_command("fac_building_place_status", nil, function(cmd)
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    local status = queues.get_build_status(id)
+    -- a queued build reports "queued" (or its failed start) before its own queue does
+    local status = requests.status(id, "place") or queues.get_build_status(id)
     -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
     u.json_response({id = id, status = status}, id)
   end)
@@ -651,7 +653,7 @@ commands.add_command("fac_belt_connect_status", nil, function(cmd)
     local args = u.parse_args("^(%S+)$", cmd.parameter)
     local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    local status = queues.get_belt_connect_status(id)
+    local status = requests.status(id, "belt") or queues.get_belt_connect_status(id)
     status.id = id
     -- id passed as 2nd arg (2026-07-05): free queue-status attachment, see init.lua.
     u.json_response(status, id)

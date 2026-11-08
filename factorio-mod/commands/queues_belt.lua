@@ -29,6 +29,7 @@
 local u = require("commands.init")
 local pathfind = require("commands.pathfind")
 local core = require("commands.queues_core")
+local requests = require("commands.controller_requests")
 
 local M = {}
 
@@ -67,11 +68,13 @@ local APPROACH_RETRIES = 2
 function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local c = core.valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
-  -- Same task-pool-ownership guard as start_gather/start_fuel_group (2026-07-08, task
-  -- #42) -- safe here (unlike start_build) since task_pool.lua never calls
-  -- start_belt_connect internally, only the direct fac_belt_connect command does.
-  if storage.active_step and storage.active_step[cid] then
-    return {error = u.note_busy_refusal(cid)}  -- (init.lua: an upkeep step yields to the controller)
+  -- Task-pool ownership (2026-07-08, task #42; task_pool.lua never calls this): while a
+  -- step holds her the route is queued (controller_requests.lua: never refused, started
+  -- by the scheduler); a plan only searches -- it needs no body and runs at once
+  if not (opts and opts.plan) then
+    local queued = requests.gate(cid, "belt", {from = from_pos, to = to_pos, opts = opts},
+                                 from_pos)
+    if queued then return queued end
   end
   local surf = c.entity.surface
   local force = c.entity.force
@@ -359,5 +362,10 @@ function M.get_belt_connect_status(cid)
   end
   return {active = true, tiles_placed = q.tiles_placed, tiles_total = #q.path}
 end
+
+-- the controller's queued route, started by the scheduler (controller_requests.lua)
+requests.register("belt", function(cid, a)
+  return M.start_belt_connect(cid, a.from, a.to, a.opts)
+end)
 
 return M

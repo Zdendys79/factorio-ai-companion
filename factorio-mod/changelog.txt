@@ -1,4 +1,33 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.164
+  Changes:
+    - The mod refuses no command of the controller's (Zdendys: the mod has no right to
+      refuse -- Python's commands must be carried out). A walk, a build, a belt or pipe
+      route, a gather, a fuel round or an attack given while a task-pool step holds
+      her is queued (commands/controller_requests.lua; the reply {queued = true,
+      request, kind}) and started by the scheduler when it picks it; the command's
+      status reports "queued" meanwhile, then the job's own status (a failed start:
+      its reply, once). A newer command replaces a pending one; one given when no step
+      holds her runs at once and drops an older pending one (logged).
+      /fac_controller_cancel <cid> drops a pending request (the controller gave up on
+      it); /fac_move_stop drops a pending walk, and while a task-pool step walks her it
+      answers stopped = false instead of an error. fac_companion_position reports
+      walk_queued. A route plan ("plan") runs at once -- it needs no body.
+    - Every task and command ages: its priority times log2 of the ticks since it was
+      given (priority.aged; a fresh one counts lowest and is still done when nothing
+      else waits), then raised by nearness as before; the controller's queued command
+      competes on the same scale (the base priority of a build), a tie goes to it.
+      The upkeep's yield after a refused command is gone with the refusals.
+    - A command run at once drops an older request's unread failed start too (it
+      answered the new command's status); a (re)spawned companion has no queued
+      command; a queued attack reports "queued" and is dropped by the attack stop.
+  Features:
+    - /fac_task_pool_pick_log on|off (off by default, commands/task_pool_pick_log.lua):
+      every pick of the scheduler's idle dispatch writes one "[pick]" line with all its
+      candidates -- id, kind, base priority, age, distance, effective -- and the chosen
+      one, for the analysis of the priorities (factorio-ai
+      scripts/analyze_pick_priorities.py).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.163
   Features:
     - The freeplay crash site comes at the map's start, not at the first player's join
