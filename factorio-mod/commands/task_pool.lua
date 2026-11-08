@@ -159,7 +159,10 @@ local picklog = require("commands.task_pool_pick_log")
 local activity = require("commands.activity")
 local entity_at = require("commands.entity_at")
 local machine_steps = require("commands.task_pool_machine_steps")
+local fetch = require("commands.task_pool_fetch")
 
+-- an ensure_item craft waits at most this long for her crafting queue to empty
+local CRAFT_QUEUE_WAIT_TICKS = 1800
 -- the steps that act on their target by hand, only within her reach (the acting state)
 local REACH_STEPS = {remove = true, fuel = true, insert = true, take = true, fill = true,
                      take_out = true}
@@ -209,7 +212,7 @@ M.get_task_status = ledger.get_task_status
 -- Withdraw a task its submitter no longer waits for (/fac_task_cancel: Python gave up
 -- on it -- left in the pool, it would still run later, unseen). Status "cancelled",
 -- its reservations released (ledger.cancel_task); when it is her current step, the
--- step is dropped: her walk to it stopped (the step's own walk, or its wood walk), a
+-- step is dropped: her walk to it stopped (the step's own walk, its wood or fetch walk), a
 -- build it started ended (no entity placed after the cancel). A gather or craft
 -- queue a step started while ensuring an item ends by itself, with its own walk, as
 -- for the upkeep's cancellations (independent review: stopping that walk made the
@@ -223,7 +226,8 @@ function M.cancel_task(task_id)
   if active and active.task_id == task_id then
     storage.active_step[t.cid] = nil
     local own_walk = active.state == "walking" or active.state == "building"
-      or (active.state == "ensuring" and active.ensuring_kind == "chop_walk")
+      or (active.state == "ensuring" and (active.ensuring_kind == "chop_walk"
+                                          or active.ensuring_kind == "fetch_walk"))
     if active.state == "building" then storage.build_queues[t.cid] = nil end
     if own_walk then
       storage.walking_queues[t.cid] = nil
@@ -502,7 +506,19 @@ function M.tick()
     local c = u.get_companion(cid)
     if not c then storage.active_step[cid] = nil; goto continue end
     local t = storage.tasks[active.task_id]
-    if not t or t.status ~= "active" then storage.active_step[cid] = nil; goto continue end
+    if not t or t.status ~= "active" then
+      -- (a walk of the step's own stops with it -- review: a task failed or cancelled
+      -- through the ledger left her walking to its target, the idle pick blocked)
+      if active.state == "walking" or (active.state == "ensuring"
+          and (active.ensuring_kind == "chop_walk" or active.ensuring_kind == "fetch_walk")) then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+      end
+      -- (a build it started ends too -- as M.cancel_task: no entity placed after it)
+      if active.state == "building" then storage.build_queues[cid] = nil end
+      storage.active_step[cid] = nil
+      goto continue
+    end
     local step = t.steps[t.cursor]
 
     if active.state == "walking" then
@@ -678,6 +694,7 @@ function M.tick()
             -- window entirely (see task_pool_ensure_item.lua's own SMELT_WAIT_TICKS
             -- docstring).
             t.ctx.smelt_wait_deadline = nil
+            fetch.reset(t)      -- (and its fetch books: task_pool_fetch.lua)
             -- step_ticks (2026-07-28, action-timing instrumentation): recorded at
             -- every cursor advance, keyed by the PRE-increment cursor (the step
             -- that just finished) -- active.step_start_tick was stamped once when
@@ -707,6 +724,9 @@ function M.tick()
         elseif kind == "gather" or kind == "craft" then
           active.state = "ensuring"
           active.ensuring_kind = kind
+        elseif kind == "fetch" then
+          -- a walk to the place holding a smelted ingredient (task_pool_fetch.lua)
+          fetch.begin_walk(c, cid, active, t)
         elseif kind == "chop" then
           -- Skip the walk entirely if already close enough (mirrors "place"'s own
           -- distance check in the idle-dispatch loop below) -- go straight to
@@ -952,8 +972,20 @@ function M.tick()
         active.state = "acting"
       elseif active.ensuring_kind == "craft" then
         local st = queues.get_craft_status(cid)
+        -- (and her own crafting queue empty: the craft queue ends with its last
+        -- begin_crafting, the product comes a craft's time later -- live: the step saw
+        -- 4 of 5 gears and crafted 5 more; bounded: crafts the controller queued too
+        -- count there -- after CRAFT_QUEUE_WAIT_TICKS the step judges her stock anyway)
         if st.active then goto continue end
+        if c.entity.crafting_queue_size > 0 then
+          active.craft_queue_until = active.craft_queue_until
+                                     or game.tick + CRAFT_QUEUE_WAIT_TICKS
+          if game.tick < active.craft_queue_until then goto continue end
+        end
+        active.craft_queue_until = nil
         active.state = "acting"
+      elseif active.ensuring_kind == "fetch_walk" then
+        if fetch.poll(c, cid, active, t) then goto continue end
       elseif active.ensuring_kind == "chop_walk" then
         if not storage.walking_queues[cid] then
           active.ensuring_kind = "chop_mine"  -- arrived -> fall through below, same tick
@@ -1100,6 +1132,13 @@ function M.get_diag(cid)
       ticks_until_deadline = active.approach_deadline and (active.approach_deadline - game.tick) or nil,
       candidate_retry_deadline = active.candidate_retry_deadline,
       candidates_cleared = active.candidates_cleared,
+      ensuring_kind = active.ensuring_kind,
+      fetch_deadline = active.fetch_deadline,
+      craft_queue_until = active.craft_queue_until,
+      fetch_target = (function()
+        local t = storage.tasks[active.task_id]
+        return t and t.ctx and t.ctx.fetch or nil
+      end)(),
     } or nil,
     walk_preempts = storage.walk_preempts and storage.walk_preempts[cid] or 0,
     walking_queue = storage.walking_queues and storage.walking_queues[cid] and {

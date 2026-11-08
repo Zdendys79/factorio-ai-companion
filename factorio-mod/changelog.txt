@@ -1,4 +1,31 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.169
+  Features:
+    - A hand craft's material fetched from places (commands/task_pool_fetch.lua,
+      factorio-ai docs/mod_upkeep_supply.md D): an ensure_item short of an item she
+      cannot hand-craft (a smelted plate) takes the missing amount from the nearest
+      furnace / assembler output or chest holding it -- the whole shortfall's nearest,
+      else the nearest holding 10 -- never one an inserter picks from (a fuel chest, a
+      line's chest or output) nor a furnace the controller loads itself or a stock task
+      is about to take from; never more than fits her inventory. Within 8 tiles at
+      once, farther by a bounded walk, the place judged again on arrival; a place she
+      could not reach or take from is not tried again by that step for that item
+      (logged). The smelt wait stays for when no place holds it (the places searched
+      again every 60 ticks meanwhile). Replaces the 5-tile pull from the nearest machine
+      output, which took from any output. /fac_task_pool_diag shows the fetch.
+    - A task that failed or was cancelled through the ledger while her step walked
+      (its own walk, a wood or a fetch walk) now stops that walk too.
+  Bugfixes:
+    - ensure_item's craft ended when the craft queue issued its last begin_crafting,
+      while that craft was still in her crafting queue: the step saw 4 of 5 gears and
+      crafted 5 more. It now waits for her crafting queue to empty (at most 1800
+      ticks: crafts the controller queued count there too), and crafts only the
+      shortfall (not the whole count again).
+    - ensure_item's pull of a raw item from a chest within 5 tiles took the nearest
+      chest even when it held none of it (one beside it holding it was never tried),
+      and also from a chest an inserter picks from: now the nearest holding it that no
+      inserter picks from.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.168
   Features:
     - Feed upkeep (commands/upkeep_feed.lua, factorio-ai docs/mod_upkeep_supply.md A):

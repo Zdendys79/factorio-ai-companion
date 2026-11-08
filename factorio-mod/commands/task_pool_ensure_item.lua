@@ -7,6 +7,8 @@
 
 local u = require("commands.init")
 local queues = require("commands.queues")
+local fetch = require("commands.task_pool_fetch")
+local F = require("commands.upkeep_feeds")
 
 local M = {}
 
@@ -64,12 +66,6 @@ local ENSURE_ITEM_CONTAINER_SEARCH_RADIUS = 5
 -- seconds = ~0.4 REAL seconds at speed=8) while still being a bounded, honest
 -- wait -- not a silent infinite stall if genuinely no furnace exists yet.
 local SMELT_WAIT_TICKS = 14400
--- ENSURE_ITEM_FURNACE_SEARCH_RADIUS (2026-07-27, same-day follow-up, live-caught
--- gap in SMELT_WAIT_TICKS's own first version): mirrors ENSURE_ITEM_CONTAINER_
--- SEARCH_RADIUS's own radius=5 convention -- "a machine sitting right next to
--- whatever the companion is currently doing".
-local ENSURE_ITEM_FURNACE_SEARCH_RADIUS = 5
-
 -- Real Factorio recipe data for `item`, or nil if `item` has no recipe at all
 -- (every raw/minable resource -- ore, coal, stone, wood -- has zero recipe
 -- ingredients; nil means "raw resource, gather it, don't craft it"). Mirrors
@@ -95,8 +91,9 @@ local function resolve_recipe(item)
   return {ingredients = ingredients, yield = yield, hand_craftable = hand_craftable}
 end
 
--- Extracts up to `deficit` of `item` from the NEAREST container (chest) within
--- ENSURE_ITEM_CONTAINER_SEARCH_RADIUS, inserting straight into the companion's
+-- Extracts up to `deficit` of `item` from the NEAREST container (chest) holding it
+-- within ENSURE_ITEM_CONTAINER_SEARCH_RADIUS that no inserter picks from, inserting
+-- straight into the companion's
 -- own inventory. Returns the amount actually pulled (0 if nothing nearby has
 -- any). Mirrors fac_building_empty's own chest-extraction idiom exactly
 -- (building.lua's defines.inventory.chest lookup + nearest-not-first tie-
@@ -111,20 +108,21 @@ local function pull_from_nearby_container(c, item, deficit)
   if deficit <= 0 then return 0 end
   local candidates = c.entity.surface.find_entities_filtered{
     position = c.entity.position, radius = ENSURE_ITEM_CONTAINER_SEARCH_RADIUS,
-    type = {"container", "logistic-container"}}
-  local target, bd = nil, math.huge
+    type = {"container", "logistic-container"}, force = c.entity.force}
+  -- the nearest one HOLDING it that no inserter picks from (docs/mod_upkeep_supply.md
+  -- D: a fuel chest or a line's chest feeds something; the nearest chest without the
+  -- item made a second one beside it never tried)
+  local target, bd, inv, av = nil, math.huge, nil, 0
   for _, e in ipairs(candidates) do
-    if e.valid then
+    local ei = e.valid and e.get_inventory(defines.inventory.chest)
+    local n = ei and ei.get_item_count(item) or 0
+    if n > 0 then
       local dx, dy = e.position.x - c.entity.position.x, e.position.y - c.entity.position.y
       local d = dx * dx + dy * dy
-      if d < bd then bd, target = d, e end
+      if d < bd and not F.picked_from(e) then bd, target, inv, av = d, e, ei, n end
     end
   end
   if not target then return 0 end
-  local inv = target.get_inventory(defines.inventory.chest)
-  if not inv then return 0 end
-  local av = inv.get_item_count(item)
-  if av <= 0 then return 0 end
   local rm = inv.remove{name = item, count = math.min(deficit, av)}
   if rm <= 0 then return 0 end
   -- insert()'s own return value MUST be used, not assumed to equal `rm`
@@ -142,54 +140,6 @@ local function pull_from_nearby_container(c, item, deficit)
   return ins
 end
 
--- Extracts up to `deficit` of `item` from the OUTPUT slot of the nearest
--- furnace/assembling-machine within ENSURE_ITEM_FURNACE_SEARCH_RADIUS, inserting
--- straight into the companion's own inventory. Returns the amount actually pulled.
---
--- Fix for a same-day gap in SMELT_WAIT_TICKS's own first version (2026-07-27,
--- live-caught): that wait ONLY polls the character's personal inventory count,
--- on the assumption that an already-running furnace will eventually make more
--- appear there -- but a furnace whose OUTPUT SLOT IS ALREADY FULL (entity
--- status "full_output") stops crafting entirely until something takes the
--- existing product out; nothing in the wait loop ever did that, so the wait
--- could run its whole SMELT_WAIT_TICKS budget and still fail even with a
--- 100-item stack of the exact needed product sitting untouched in a furnace 2
--- tiles away (live-confirmed via RCON mid-investigation: an iron-plate need
--- failed this way while a nearby furnace's crafter_output held a full 100-count
--- stack). Mirrors pull_from_nearby_container's own already-proven idiom exactly
--- (nearest-not-first tie-break, insert()'s return value checked and any
--- un-placed remainder put back rather than lost) -- same reasoning, different
--- inventory. NOTE: defines.inventory.furnace_result/furnace_source do NOT
--- exist in this Factorio version (confirmed live via RCON, both read back nil)
--- -- the 2.0 crafter-unification renamed them to crafter_output/crafter_input,
--- used here.
-local function pull_from_nearby_furnace_output(c, item, deficit)
-  if deficit <= 0 then return 0 end
-  local candidates = c.entity.surface.find_entities_filtered{
-    position = c.entity.position, radius = ENSURE_ITEM_FURNACE_SEARCH_RADIUS,
-    type = {"furnace", "assembling-machine"}}
-  local target, bd = nil, math.huge
-  for _, e in ipairs(candidates) do
-    if e.valid then
-      local dx, dy = e.position.x - c.entity.position.x, e.position.y - c.entity.position.y
-      local d = dx * dx + dy * dy
-      if d < bd then bd, target = d, e end
-    end
-  end
-  if not target then return 0 end
-  local inv = target.get_inventory(defines.inventory.crafter_output)
-  if not inv then return 0 end
-  local av = inv.get_item_count(item)
-  if av <= 0 then return 0 end
-  local rm = inv.remove{name = item, count = math.min(deficit, av)}
-  if rm <= 0 then return 0 end
-  local ins = c.entity.insert{name = item, count = rm}
-  if ins < rm then
-    inv.insert{name = item, count = rm - ins}
-  end
-  return ins
-end
-
 -- Starts exactly ONE concrete action toward satisfying the need at the TOP of
 -- t.ctx.ensure_stack (item=, count=) for companion c/cid. Returns a `kind`
 -- string describing what was started ("gather"|"craft"|"chop"|"push"|"satisfied")
@@ -197,7 +147,9 @@ end
 -- need (a short ingredient) was pushed onto the stack -- no queue was started
 -- this cycle, the caller should look at the stack again next "acting" pass.
 -- "satisfied" means the top-of-stack need is ALREADY met (checked fresh here,
--- not assumed) -- pop it and reassess without starting anything.
+-- not assumed) -- pop it and reassess without starting anything. "fetch": a walk to
+-- a place holding a smelted ingredient was set up (task_pool_fetch.begin_walk);
+-- "wait": a furnace may still make it (the smelt wait) -- reassess next pass.
 function M.start_ensure_item_action(c, cid, t)
   local stack = t.ctx.ensure_stack
   local need = stack[#stack]
@@ -334,16 +286,22 @@ function M.start_ensure_item_action(c, cid, t)
     -- smelt_wait_deadline), set ONCE the first time this need is seen, so retries
     -- share the SAME deadline instead of each resetting a fresh window.
     --
-    -- ACTIVELY COLLECT while waiting, not just poll (2026-07-27, same-day
-    -- follow-up, see pull_from_nearby_furnace_output's own docstring for the
-    -- full live-caught incident): a furnace stuck at "full_output" will NEVER
-    -- make inv.get_item_count(need.item) rise on its own, since the product
-    -- just sits in the furnace's own output slot -- the wait would run its
-    -- entire budget and still fail with a full stack sitting untouched nearby.
-    local pulled = pull_from_nearby_furnace_output(c, need.item,
-      need.count - held(need.item))
-    if pulled > 0 and held(need.item) >= need.count then
-      return "satisfied"
+    -- FETCH from places first, at every pass of the wait (factorio-ai
+    -- docs/mod_upkeep_supply.md D, task_pool_fetch.lua): the nearest machine
+    -- output or chest holding it that no inserter picks from -- within her reach at
+    -- once, farther by a walk (a furnace stuck at "full_output" with a stack of the
+    -- product makes nothing more by itself -- 2026-07-27, live: a need failed so
+    -- with 100 plates two tiles away; the earlier 5-tile pull took from any output,
+    -- a plate row's too). The wait below only while no place holds it.
+    -- (no_pull: the step takes nothing from places -- the upkeep's getting material)
+    local fetched, got = nil, 0
+    if not need.no_pull then
+      fetched, got = fetch.start(c, t, need.item, need.count - held(need.item))
+    end
+    if fetched == "fetch" then return "fetch" end
+    if fetched == "taken" and got > 0 then
+      if held(need.item) >= need.count then return "satisfied" end
+      return "push"      -- (the rest from the next place: judged again next tick)
     end
     t.ctx.smelt_wait_deadline = t.ctx.smelt_wait_deadline or {}
     local deadline = t.ctx.smelt_wait_deadline[need.item]
@@ -357,14 +315,16 @@ function M.start_ensure_item_action(c, cid, t)
     return nil, need.item .. " recipe is not hand-craftable and no furnace produced " ..
       "enough within " .. SMELT_WAIT_TICKS .. " ticks (needs a real machine, e.g. smelting)"
   end
+  -- (crafts for the shortfall only, not the whole count -- live: holding 4 of 5 gears
+  -- she crafted 5 more, her plates fetched for them)
+  local craft_count = math.ceil((need.count - held(need.item)) / recipe.yield)
   for _, ing in ipairs(recipe.ingredients) do
-    local needed_amount = math.ceil(need.count / recipe.yield) * ing.amount
+    local needed_amount = craft_count * ing.amount
     if held(ing.name) < needed_amount then
       stack[#stack + 1] = {item = ing.name, count = needed_amount}
       return "push"
     end
   end
-  local craft_count = math.ceil(need.count / recipe.yield)
   local r = queues.start_craft(cid, need.item, craft_count)
   if r.error then return nil, r.error end
   return "craft"

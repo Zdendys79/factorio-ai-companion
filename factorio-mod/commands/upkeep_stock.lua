@@ -208,6 +208,19 @@ function M.status(cid)
   return out
 end
 
+-- Whether an open stock task of any companion takes `item` from the furnace output at
+-- `pos` ("x,y") -- the fetch of a hand craft's material leaves that one (task_pool_fetch:
+-- else the stock task found it emptied and held a good source off).
+function M.claimed(pos, item)
+  local s = storage.upkeep and storage.upkeep.stock
+  for cid, from in pairs((s and s.from) or {}) do
+    local task_id = s.tasks and s.tasks[cid] and s.tasks[cid][item]
+    local t = task_id and storage.tasks[task_id]
+    if from[item] == pos and t and t.status == "active" then return true end
+  end
+  return false
+end
+
 -- Whether the companion has stock task records left (upkeep.tick: clean them up while off).
 function M.has_tasks(cid)
   local s = storage.upkeep and storage.upkeep.stock
