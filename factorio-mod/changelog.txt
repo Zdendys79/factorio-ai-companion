@@ -1,4 +1,21 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.166
+  Features:
+    - A "fill" task step {type="fill", x, y, item, count}: fac_building_fill's load --
+      up to count of what she holds into the entity closest to (x, y) -- with the mod
+      walking there (within her reach, like the other hand steps). Not a need of the
+      task: like the command it loads what she has. Used by factorio-ai's
+      CompanionAPI.fill / fill_many (one task for a list of loads).
+    - Step results: what a step moved is reported back in fac_task_status
+      step_results ([{step = index, ...}] -- a fill's inserted / item / into).
+  Changes:
+    - fac_building_fill and the fill step share commands/machine_fill.lua; what her
+      inventory could not give is taken back out of the target (logged), as the
+      insert step already does; an entity that takes nothing (no inventory -- a pole,
+      a tree) answers "Could not insert (...)" instead of an error (pcall).
+    - (A fill reserves nothing, like the command: it can use up items another task
+      has reserved -- that task's step then fails and is retried as before.)
+---------------------------------------------------------------------------------------------------
 Version: 0.16.165
   Features:
     - Optional task steps: a step with "optional": true that fails (not found, out of

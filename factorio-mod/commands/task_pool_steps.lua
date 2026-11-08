@@ -8,6 +8,7 @@ local u = require("commands.init")
 local targeting = require("commands.task_pool_targeting")
 local ledger = require("commands.task_pool_ledger")
 local feeds = require("commands.upkeep_feeds")
+local machine_fill = require("commands.machine_fill")
 
 local step_target_pos = targeting.step_target_pos
 local WALK_REACH = targeting.WALK_REACH
@@ -66,6 +67,27 @@ function M.run_insert(c, t, step)
   if removed > 0 then ledger.consume(t, step.item, removed) end
   if removed <= 0 then return false, "insert: no " .. step.item .. " left in inventory" end
   return true, nil
+end
+
+-- {type="fill", x=, y=, item=NAME, count=N}: up to N of the item from her inventory
+-- into the entity closest to (x, y) -- fac_building_fill's load, the mod walking there
+-- (machine_fill.fill; factorio-ai CompanionAPI.fill / fill_many). Not a need of the task
+-- (derive_needs): like the command, it loads what she has, up to N. Its result
+-- {inserted, item, into} is the step's result (fac_task_status step_results).
+-- @return boolean ok, string|nil err, table|nil result
+function M.run_fill(c, t, step)
+  local pos = step_target_pos(t, step)
+  if not pos then return false, "fill: no target position resolved" end
+  if type(step.item) ~= "string" or not prototypes.item[step.item] then
+    return false, "fill: unknown item " .. tostring(step.item)
+  end
+  local count = tonumber(step.count) or 1
+  if count < 1 or count ~= math.floor(count) then
+    return false, "fill: count must be a whole number >= 1, got " .. tostring(step.count)
+  end
+  local r = machine_fill.fill(c, pos, step.item, count)
+  if r.error then return false, r.error end
+  return true, nil, r
 end
 
 -- a fuel step's swap: its target is the burner this near its position

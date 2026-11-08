@@ -3,6 +3,7 @@ local u = require("commands.init")
 local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
 local entity_at = require("commands.entity_at")
+local machine_fill = require("commands.machine_fill")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
 requests.register("place", function(cid, a)
@@ -395,31 +396,11 @@ commands.add_command("fac_building_fill", nil, function(cmd)
     if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return   -- must be in reach to load a machine
     end
-    local inv = c.entity.get_inventory(defines.inventory.character_main)
-    local have = inv.get_item_count(item)
-    if have == 0 then u.json_response({id = id, error = "No " .. item}); return end
-    -- Insert ONLY into the entity CLOSEST to the target tile, not the first in radius:
-    -- in a tight furnace row several furnaces are within radius, and feeding the wrong
-    -- one breaks parallel smelting (observed: copper-ore fed an iron furnace -> 0 copper).
-    -- e.type ~= "resource" excludes raw ore/stone/coal patches -- same tie-break bug as
-    -- fac_building_empty above (a resource tile can be exactly as close to `pos` as the
-    -- real target, and would win the tie non-deterministically otherwise).
-    local es = c.entity.surface.find_entities_filtered{position = pos, radius = 3}
-    local target, bd = nil, 1e18
-    for _, e in ipairs(es) do
-      if e.valid and e ~= c.entity and e.type ~= "resource" then
-        local dx, dy = e.position.x - pos.x, e.position.y - pos.y
-        local d = dx * dx + dy * dy
-        if d < bd then bd, target = d, e end
-      end
-    end
-    local ins = 0
-    if target then
-      local r = target.insert{name = item, count = math.min(count, have)}
-      if r > 0 then inv.remove{name = item, count = r}; ins = r end
-    end
-    if ins > 0 then u.json_response({id = id, inserted = ins, item = item, into = target and target.name})
-    else u.json_response({id = id, error = "Could not insert"}) end
+    -- the entity closest to the target tile (machine_fill.fill, shared with the task
+    -- pool's "fill" step)
+    local r = machine_fill.fill(c, pos, item, count)
+    r.id = id
+    u.json_response(r)
   end)
 end)
 
