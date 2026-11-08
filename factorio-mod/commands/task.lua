@@ -2,6 +2,7 @@
 local u = require("commands.init")
 local task_pool = require("commands.task_pool")
 local priority = require("commands.priority")
+local build_plan = require("commands.build_plan")
 local upkeep = require("commands.upkeep")
 local feed_regs = require("commands.upkeep_feed_regs")
 local upkeep_status = require("commands.upkeep_status")
@@ -50,7 +51,9 @@ commands.add_command("fac_upkeep_feed", nil, function(cmd)
   end)
 end)
 
--- Usage: /fac_task_submit <id> <json_step_list | {"kind": KIND, "steps": json_step_list}>
+-- Usage: /fac_task_submit <id> <json_step_list | {"kind": KIND, "steps": json_step_list}
+--                              | {"kind": KIND, "plan": build_plan}>
+-- build_plan: a whole build, split into steps by the mod (commands/build_plan.lua).
 -- KIND: build (the default), relocate, dismantle -- the task's base priority
 -- (commands/priority.lua).
 -- json_step_list is a JSON array of step objects, e.g.
@@ -77,9 +80,19 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       return
     end
     -- {"kind": "relocate", "steps": [...]} gives the task its kind (its base priority,
-    -- commands/priority.lua); a plain step array is a build
-    local kind = nil
-    if type(steps) == "table" and type(steps.steps) == "table" then
+    -- commands/priority.lua); a plain step array is a build. {"kind": ..., "plan":
+    -- {...}}: a whole build plan, split into the task's steps by the mod itself
+    -- (commands/build_plan.lua); the plan's name names the task.
+    local kind, name = nil, nil
+    if type(steps) == "table" and type(steps.plan) == "table" then
+      kind, name = steps.kind, steps.plan.name
+      local expanded, err = build_plan.expand(steps.plan)
+      if not expanded then
+        u.error_response(err .. " (companion #" .. id .. ")", "task_submit")
+        return
+      end
+      steps = expanded
+    elseif type(steps) == "table" and type(steps.steps) == "table" then
       kind = steps.kind
       steps = steps.steps
     end
@@ -88,6 +101,10 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       return
     end
     local result = task_pool.submit_task(id, steps, kind)
+    if result.task_id and type(name) == "string" then
+      storage.tasks[result.task_id].name = name
+      result.name = name
+    end
     result.id = id
     u.json_response(result)
   end)

@@ -514,8 +514,19 @@ function M.tick()
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
       end
-      -- (a build it started ends too -- as M.cancel_task: no entity placed after it)
-      if active.state == "building" then storage.build_queues[cid] = nil end
+      -- (a build it started ends too -- as M.cancel_task: no entity placed after it;
+      -- one that finished in this same tick before the task ended -- the needs
+      -- give-up runs after the build tick -- is still recorded as placed, review)
+      if active.state == "building" then
+        local st = queues.get_build_status(cid)
+        if t and st.placed and st.position then
+          local s = t.steps[t.cursor]
+          t.placed = t.placed or {}
+          t.placed[#t.placed + 1] = {entity = s and s.entity, x = st.position.x,
+                                     y = st.position.y}
+        end
+        storage.build_queues[cid] = nil
+      end
       storage.active_step[cid] = nil
       goto continue
     end
@@ -947,6 +958,14 @@ function M.tick()
         end
         -- the placed entity's item is used up: out of the shared reservations (ledger)
         ledger.consume(t, step.entity, 1)
+        -- what the task put down, at its REAL position (build_plan.placed: what to pick
+        -- up again after a task that did not finish -- for any task, a candidate's or
+        -- a pick_orientation's place too)
+        if st.position then
+          t.placed = t.placed or {}
+          t.placed[#t.placed + 1] = {entity = step.entity, x = st.position.x,
+                                     y = st.position.y}
+        end
         -- step_ticks: see the "ensure_item" cursor-advance site (near line 404) for
         -- the full rationale. This is the "place" step's own completion point.
         t.step_ticks = t.step_ticks or {}

@@ -8,6 +8,7 @@
 
 local u = require("commands.init")
 local priority = require("commands.priority")
+local build_plan = require("commands.build_plan")
 
 local M = {}
 
@@ -190,6 +191,9 @@ function M.submit_task(cid, steps, kind, p)
     -- aborted mid-step) simply never gets an entry, same "absence means
     -- unresolved" convention Python's own -1/NaN padding already uses.
     step_ticks = {},
+    -- what its place steps put down, [{entity, x, y}] at the real positions
+    -- (task_pool.lua's building state; commands/build_plan.lua M.placed)
+    placed = {},
   }
   return {task_id = task_id, needs = remaining_needs, kind = kind, priority = base}
 end
@@ -220,6 +224,11 @@ function M.get_task_status(task_id)
     -- the optional steps that failed, [{step = index, error = reason}] (step_failed;
     -- nil: none failed, or a task from an older save)
     step_errors = t.step_errors,
+    -- a build plan's name (commands/build_plan.lua; nil: a plain step list)
+    name = t.name,
+    -- the pieces its place steps put down, [{entity, x, y}] at their real positions (a
+    -- task that did not finish: what to pick up again; nil: a task from an older save)
+    placed = build_plan.placed(t),
     -- what the steps moved, [{step = index, ...}] (a fill's inserted / item / into, a
     -- take_out's extracted / item;
     -- nil: none, or a task from an older save)

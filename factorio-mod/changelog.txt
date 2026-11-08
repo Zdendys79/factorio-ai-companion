@@ -1,4 +1,22 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.170
+  Features:
+    - Build plans (commands/build_plan.lua, factorio-ai docs/build_plans.md -- Zdendys:
+      the controller hands over the whole plan of a build at once, as one named task,
+      and the mod splits it into its steps itself). /fac_task_submit takes
+      {"kind": KIND, "plan": {name, pieces: [{entity, x, y, dir, role}], fills:
+      [{entity, x, y, item, count}], resource}}: every part ensured twice over (a part a
+      later craft used up is made again), the fill items ensured, the primary piece's
+      tile checked (with a resource), one place per piece in the plan's order (back to
+      front), one optional insert per fill last. A plan that does not check out (an
+      unknown entity, one not placed by its own item, a bad direction or role, a fill
+      without a known item or a whole count, a resource check without a primary piece)
+      is refused with the reason.
+    - A task's status carries its plan's name and "placed": the pieces its place steps
+      put down, at their real positions, recorded as each place finishes -- for any
+      task (what to pick up again after a task that did not finish; absent for a task
+      from an older save).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.169
   Features:
     - A hand craft's material fetched from places (commands/task_pool_fetch.lua,
