@@ -1,4 +1,33 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.165
+  Features:
+    - Optional task steps: a step with "optional": true that fails (not found, out of
+      reach, inventory full, a walk timed out) is recorded in the task's step_errors
+      ([{step, error}], in fac_task_status), the per-step state it left (an
+      ensure_item stack, a smelt wait) cleared, its step_ticks entry marked failed,
+      and the task goes on with its next step; any other failed step still fails the
+      task (task_pool_ledger.step_failed). Used by factorio-ai's pick-ups: one task of
+      "remove" steps for a whole list.
+    - /fac_task_cancel <task_id>: a task its submitter no longer waits for is cancelled
+      (status "cancelled", its reservations released); when it is her current step the
+      step is dropped, her walk to it stopped and a build it started ended; a gather
+      or craft it started ends by itself, with its own walk.
+    - A pick-up (the remove step, fac_building_remove, fac_mine_entity) counts as done
+      only when the entity is gone: mine{}'s result and the entity, not her item count
+      (only the contents of a chest fitting her inventory left the chest standing,
+      "removed").
+    - The task steps that act on a target by hand (remove, fuel, insert, take) act only
+      within her reach: a walk the walker gave up (an entity across water) let the
+      step act from any distance; it fails "Too far: ..." now, as
+      fac_building_remove does.
+  Bugfixes:
+    - The task pool's "remove" step mines the entity the position means -- the nearest
+      of that name and force, and only if the position lies on it -- not the first one
+      found within a tile (a neighbour of the same name could be mined); the same pick
+      as fac_building_remove, now one shared function (commands/entity_at.lua). An
+      unresolved position fails the step cleanly, and a missing entity reports
+      "Not found: ..." as fac_building_remove does.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.164
   Changes:
     - The mod refuses no command of the controller's (Zdendys: the mod has no right to

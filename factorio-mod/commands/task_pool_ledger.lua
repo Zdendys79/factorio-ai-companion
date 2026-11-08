@@ -217,12 +217,44 @@ function M.get_task_status(task_id)
     -- its kind and base priority (commands/priority.lua; nil: a task from an older save)
     kind = t.kind,
     priority = t.priority,
+    -- the optional steps that failed, [{step = index, error = reason}] (step_failed;
+    -- nil: none failed, or a task from an older save)
+    step_errors = t.step_errors,
   }
+end
+
+-- A step of an active task failed. An optional step (step.optional = true -- one
+-- pick-up of a list, where one entity not found must not leave the rest standing) is
+-- recorded in t.step_errors and the task goes on with its next step (done after the
+-- last); any other step fails the task. The per-step state a failed step leaves in the
+-- task's shared ctx (an ensure_item step's stack and smelt wait) is cleared, as a step's
+-- success clears it -- else the next ensure_item step would run on the stale stack
+-- (independent review); its step_ticks entry is written with failed = true. The caller
+-- clears the companion's active step.
+-- @param start_tick the tick the step started (active.step_start_tick), for step_ticks
+local function step_failed(task_id, reason, start_tick)
+  local t = storage.tasks[task_id]
+  if not t or t.status ~= "active" then return end
+  local step = t.steps[t.cursor]
+  if step and step.optional then
+    t.step_errors = t.step_errors or {}
+    t.step_errors[#t.step_errors + 1] = {step = t.cursor, error = tostring(reason)}
+    t.ctx.ensure_stack = nil
+    t.ctx.smelt_wait_deadline = nil
+    t.step_ticks = t.step_ticks or {}
+    t.step_ticks[t.cursor] = {type = step.type, start = start_tick, done = game.tick,
+                              failed = true}
+    t.cursor = t.cursor + 1
+    if t.cursor > #t.steps then complete_task(task_id) end
+  else
+    fail_task(task_id, reason)
+  end
 end
 
 M.derive_needs = derive_needs
 M.fail_task = fail_task
 M.cancel_task = cancel_task
 M.complete_task = complete_task
+M.step_failed = step_failed
 
 return M

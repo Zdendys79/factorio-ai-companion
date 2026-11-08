@@ -2,6 +2,7 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
+local entity_at = require("commands.entity_at")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
 requests.register("place", function(cid, a)
@@ -114,37 +115,15 @@ commands.add_command("fac_building_remove", nil, function(cmd)
     if not id then u.not_found(); return end
     local name, x, y = args[2], tonumber(args[3]), tonumber(args[4])
     if not x or not y then u.error_response("Invalid coordinates"); return end
-    local es = c.entity.surface.find_entities_filtered{name = name, position = {x=x, y=y}, radius = 1, force = c.entity.force}
-    if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
-    -- Nearest to the requested position, not es[1] (2026-11-04): radius 1 around a belt
-    -- tile also matches its 4 neighbours, and es[1] is in no particular order -- a cleanup
-    -- removing "our" stub belt could mine a network belt next to it instead.
-    local t, td = nil, nil
-    for _, e in ipairs(es) do
-      local d = (e.position.x - x) ^ 2 + (e.position.y - y) ^ 2
-      if not td or d < td then t, td = e, d end
-    end
-    -- ...and only if the position is on (or within 0.25 tiles of) that entity: when
-    -- nothing of that name is there, the nearest match is a neighbour, which a cleanup
-    -- must not mine. The margin keeps callers that pass a position slightly off the
-    -- entity's centre working (a snapped pipe up to ~0.6 off); a neighbouring 1x1
-    -- belt's box is 0.5 away from this tile's centre, so it never qualifies.
-    local bb, m = t.selection_box, 0.25
-    if x < bb.left_top.x - m or x > bb.right_bottom.x + m
-       or y < bb.left_top.y - m or y > bb.right_bottom.y + m then
-      u.json_response({id = id, error = "Not found"}); return
-    end
+    -- the entity the position means: the nearest of that name, on it (entity_at.find)
+    local t = entity_at.find(c.entity.surface, name, {x = x, y = y}, c.entity.force)
+    if not t then u.json_response({id = id, error = "Not found"}); return end
     if u.distance(c.entity.position, t.position) > 10 then u.json_response({id = id, error = "Too far"}); return end
-    -- MINE the building (native): its real item + contents go into the companion inventory and the
-    -- game removes it. Never fabricate the item + free-destroy (that minted an item from nothing and
-    -- discarded the building's contents). If the inventory is full, mine{} leaves the building intact.
-    local inv = c.entity.get_main_inventory()
-    local before = inv.get_item_count()
-    t.mine{inventory = inv}
-    if t.valid and inv.get_item_count() == before then
-      u.json_response({id = id, error = "Cannot remove (inventory full?)"})
-    else
+    local ok, err = entity_at.mine_into(c, t)
+    if ok then
       u.json_response({id = id, removed = true, entity = name})
+    else
+      u.json_response({id = id, error = err})
     end
   end)
 end)
@@ -512,9 +491,11 @@ commands.add_command("fac_mine_entity", nil, function(cmd)
     -- NATIVE mining: tree->wood, rock->stone, building->its item + contents, all into the inventory,
     -- then the game removes the entity. If the inventory can't hold the result, mine{} leaves the
     -- entity INTACT (no item loss, no destroy-without-return). The character MINES, never "destroys".
-    target.mine{inventory = inv}
+    -- judged by mine{}'s result and the entity, not the count: only a chest's contents
+    -- fitting her inventory moved them and left the chest standing (independent review)
+    local mined = target.mine{inventory = inv}
     local gained = inv.get_item_count() - before
-    if target.valid and gained == 0 then
+    if not mined or target.valid then
       u.json_response({id = id, error = "Could not mine (inventory full?)", entity = entity_name})
       return
     end

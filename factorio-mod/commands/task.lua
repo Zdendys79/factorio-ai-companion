@@ -78,6 +78,16 @@ commands.add_command("fac_task_status", nil, function(cmd)
   end)
 end)
 
+-- Usage: /fac_task_cancel <task_id> -- withdraw a task (task_pool.cancel_task).
+commands.add_command("fac_task_cancel", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%d+)$", cmd.parameter)
+    local task_id = tonumber(args[1])
+    if not task_id then u.error_response("Usage: fac_task_cancel <task_id>"); return end
+    u.json_response(task_pool.cancel_task(task_id))
+  end)
+end)
+
 -- Usage: /fac_task_pool_diag <cid>
 -- Read-only diagnostic (2026-07-09): dumps active_step/task/walking_queue/busy_elsewhere
 -- state for a companion, to root-cause a stuck task-pool job without guessing.

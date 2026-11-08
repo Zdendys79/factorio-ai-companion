@@ -142,6 +142,10 @@ local priority = require("commands.priority")
 local requests = require("commands.controller_requests")
 local picklog = require("commands.task_pool_pick_log")
 local activity = require("commands.activity")
+local entity_at = require("commands.entity_at")
+
+-- the steps that act on their target by hand, only within her reach (the acting state)
+local REACH_STEPS = {remove = true, fuel = true, insert = true, take = true}
 
 local M = {}
 
@@ -184,6 +188,35 @@ end
 -- submit_task/.get_task_status) keep working unchanged.
 M.submit_task = ledger.submit_task
 M.get_task_status = ledger.get_task_status
+
+-- Withdraw a task its submitter no longer waits for (/fac_task_cancel: Python gave up
+-- on it -- left in the pool, it would still run later, unseen). Status "cancelled",
+-- its reservations released (ledger.cancel_task); when it is her current step, the
+-- step is dropped: her walk to it stopped (the step's own walk, or its wood walk), a
+-- build it started ended (no entity placed after the cancel). A gather or craft
+-- queue a step started while ensuring an item ends by itself, with its own walk, as
+-- for the upkeep's cancellations (independent review: stopping that walk made the
+-- gather blacklist a reachable tile). Returns {cancelled = true} or
+-- {cancelled = false, status | error}.
+function M.cancel_task(task_id)
+  local t = storage.tasks[task_id]
+  if not t then return {cancelled = false, error = "no task " .. tostring(task_id)} end
+  if t.status ~= "active" then return {cancelled = false, status = t.status} end
+  local active = storage.active_step[t.cid]
+  if active and active.task_id == task_id then
+    storage.active_step[t.cid] = nil
+    local own_walk = active.state == "walking" or active.state == "building"
+      or (active.state == "ensuring" and active.ensuring_kind == "chop_walk")
+    if active.state == "building" then storage.build_queues[t.cid] = nil end
+    if own_walk then
+      storage.walking_queues[t.cid] = nil
+      local c = u.get_companion(t.cid)
+      if c then c.entity.walking_state = {walking = false} end
+    end
+  end
+  ledger.cancel_task(task_id, "cancelled by its submitter")
+  return {cancelled = true}
+end
 
 -- step_target_pos/task_ready moved to task_pool_targeting.lua (2026-07-19
 -- size-refactor split) -- see local aliases above (targeting.step_target_pos/
@@ -458,7 +491,7 @@ function M.tick()
         -- and let the caller retry/relocate" pattern instead of spinning forever.
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
-        ledger.fail_task(active.task_id, "could not reach step target (walking timed out)")
+        ledger.step_failed(active.task_id, "could not reach step target (walking timed out)", active.step_start_tick)
         storage.active_step[cid] = nil
         goto continue
       elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t) then
@@ -477,7 +510,19 @@ function M.tick()
 
     if active.state == "acting" then
       local ok, err = true, nil
-      if step.type == "place" then
+      -- A step that acts on a target by hand (remove, fuel, insert, take) acts only
+      -- within her reach: the walk also ends when the walker gives it up (its queue
+      -- dropped -- an entity across water), and the step would then reach from any
+      -- distance (independent review: a pick-up mined from tens of tiles away). Out
+      -- of reach it fails "Too far", as fac_building_remove does.
+      local reach_pos = REACH_STEPS[step.type] and step_target_pos(t, step)
+      local too_far = reach_pos and u.distance(c.entity.position, reach_pos)
+                                    > targeting.step_reach(c.entity, step)
+      if too_far then
+        ok, err = false, string.format("Too far: %s target (%.1f,%.1f) is %.1f tiles from her",
+                                       step.type, reach_pos.x, reach_pos.y,
+                                       u.distance(c.entity.position, reach_pos))
+      elseif step.type == "place" then
         -- Handled entirely inline (not via the generic ok/err fall-through below,
         -- see the bug note there): start_build's OWN failure is reported
         -- immediately (queues.start_build never queues anything in that case, so
@@ -552,7 +597,7 @@ function M.tick()
             if game.tick < active.candidate_retry_deadline then
               goto continue
             end
-            ledger.fail_task(active.task_id, "no candidate position free for " .. step.entity)
+            ledger.step_failed(active.task_id, "no candidate position free for " .. step.entity, active.step_start_tick)
             storage.active_step[cid] = nil
             goto continue
           end
@@ -560,7 +605,7 @@ function M.tick()
         end
         local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror)
         if r.error then
-          ledger.fail_task(active.task_id, r.error)
+          ledger.step_failed(active.task_id, r.error, active.step_start_tick)
           storage.active_step[cid] = nil
         else
           -- Poll build_queues to completion via the SEPARATE "building" state
@@ -642,28 +687,31 @@ function M.tick()
             active.chop_deadline = u.approach_deadline(c.entity.position, t.ctx.wood_target)
           end
         else
-          ledger.fail_task(active.task_id, err2 or "ensure_item failed")
+          ledger.step_failed(active.task_id, err2 or "ensure_item failed", active.step_start_tick)
           storage.active_step[cid] = nil
         end
       elseif step.type == "remove" then
         -- Pick up an existing entity (2026-07-07, coal_pair upgrade task: reuses
         -- the 2 ALREADY-BUILT coal_pair drills rather than crafting new ones --
-        -- Zdendys: "zvedne obe vrtacky, nemusi je vyrabet"). Uses the SAME
-        -- native-mine pattern already proven in commands/building.lua's
-        -- fac_mine_entity (target.mine{inventory=...}, success measured by
-        -- inventory count actually increasing -- mine{} leaves the entity INTACT
-        -- if the inventory can't hold the result, no silent item loss/no cheat).
+        -- Zdendys: "zvedne obe vrtacky, nemusi je vyrabet"). Native mine into her
+        -- inventory (entity_at.mine_into: done only when mine{} succeeds and the
+        -- entity is gone -- mine{} leaves it INTACT if her inventory can't hold it,
+        -- no silent item loss, no cheat).
+        -- The entity is the one the position means (entity_at.find: the nearest of
+        -- that name and force, on it -- not the first found, a neighbour of the same
+        -- name could be mined; the same pick as fac_building_remove). An unresolved
+        -- position fails the step cleanly (the fuel step's nil-pos wedge below).
         local pos = step_target_pos(t, step)
-        local es = c.entity.surface.find_entities_filtered{
-          name = step.entity, position = pos, radius = 1}
-        if #es == 0 then
-          ok, err = false, "no " .. step.entity .. " found to remove at target"
+        local target = pos and entity_at.find(c.entity.surface, step.entity, pos,
+                                              c.entity.force)
+        if not pos then
+          ok, err = false, "remove: no target position resolved"
+        elseif not target then
+          -- "Not found" first, as fac_building_remove's: a caller tells a part already
+          -- gone from a real failure by it (CompanionAPI.pick_up)
+          ok, err = false, "Not found: no " .. step.entity .. " at the target"
         else
-          local inv = c.entity.get_main_inventory()
-          local before = inv.get_item_count()
-          es[1].mine{inventory = inv}
-          ok = (inv.get_item_count() - before) > 0
-          err = ok and nil or "could not mine (inventory full?)"
+          ok, err = entity_at.mine_into(c, target)
         end
       elseif step.type == "fuel" then
         local pos = step_target_pos(t, step)
@@ -802,7 +850,7 @@ function M.tick()
           storage.active_step[cid] = nil
           if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
         else
-          ledger.fail_task(active.task_id, err)
+          ledger.step_failed(active.task_id, err, active.step_start_tick)
           storage.active_step[cid] = nil
         end
       end
@@ -840,7 +888,7 @@ function M.tick()
         storage.active_step[cid] = nil
         if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
       else
-        ledger.fail_task(active.task_id, st.error or "build failed")
+        ledger.step_failed(active.task_id, st.error or "build failed", active.step_start_tick)
         storage.active_step[cid] = nil
       end
     end
