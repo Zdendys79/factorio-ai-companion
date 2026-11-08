@@ -76,11 +76,21 @@ local function sources_around(entity)
                                                type = {"inserter", "mining-drill"}}, box
 end
 
--- The entity an inserter picks up from: the nearest at its pickup position, or nil.
+-- The entity an inserter picks up from: one whose box holds its pickup position (a 2x2
+-- furnace's centre lies 0.7 from it -- live: an iron furnace feeding a steel furnace was
+-- no source by a radius search), else the nearest within PICKUP_RADIUS; or nil.
 local function pickup_source(ins)
   local p = ins.pickup_position
   local best, bd = nil, math.huge
-  for _, s in pairs(ins.surface.find_entities_filtered{position = p, radius = PICKUP_RADIUS}) do
+  local found = ins.surface.find_entities_filtered{position = p}
+  local any = false
+  for _, s in pairs(found) do
+    if s.valid and s ~= ins and not NOT_SOURCES[s.type] then any = true end
+  end
+  if not any then
+    found = ins.surface.find_entities_filtered{position = p, radius = PICKUP_RADIUS}
+  end
+  for _, s in pairs(found) do
     if s.valid and s ~= ins and not NOT_SOURCES[s.type] then
       local d = u.distance(s.position, p)
       if d < bd then best, bd = s, d end
@@ -371,5 +381,13 @@ function M.inventory_fuel(inv)
   end
   return energy
 end
+
+-- (shared with the feed upkeep's input lines, commands/upkeep_lines.lua)
+M.drops_into = drops_into
+M.sources_around = sources_around
+M.pickup_source = pickup_source
+M.supplying = supplying
+M.status_name = status_name
+M.BELT_TYPES = BELT_TYPES
 
 return M

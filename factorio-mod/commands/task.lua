@@ -3,10 +3,13 @@ local u = require("commands.init")
 local task_pool = require("commands.task_pool")
 local priority = require("commands.priority")
 local upkeep = require("commands.upkeep")
+local feed_regs = require("commands.upkeep_feed_regs")
+local upkeep_status = require("commands.upkeep_status")
 
--- Usage: /fac_upkeep <id> [on|off] -- the mod's own fuel upkeep for the companion
--- (commands/upkeep.lua): switched on / off, or (no argument) its state: enabled and
--- its open upkeep tasks.
+-- Usage: /fac_upkeep <id> [on|off] -- the mod's own upkeep for the companion
+-- (commands/upkeep.lua: fuel, feed, stock): switched on / off, or (no argument) its
+-- state (commands/upkeep_status.lua: enabled, the fuel tasks, short, fetch, feed,
+-- stock).
 commands.add_command("fac_upkeep", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s*(%S*)$", cmd.parameter)
@@ -19,7 +22,29 @@ commands.add_command("fac_upkeep", nil, function(cmd)
     elseif args[2] ~= "" then
       u.error_response("Usage: fac_upkeep <id> [on|off]"); return
     end
-    local out = upkeep.status(id)
+    local out = upkeep_status.status(id)
+    out.id = id
+    u.json_response(out, id)
+  end)
+end)
+
+-- Usage: /fac_upkeep_feed <id> <x> <y> <recipe | own | loading | release> -- what a
+-- fresh hand-fed furnace at (x, y) smelts, for the feed upkeep (commands/
+-- upkeep_feed_regs.lua) until the furnace knows it itself (its previous recipe, once it
+-- ran); "own": the controller loads that furnace itself -- the feed and stock upkeep
+-- neither feed it nor take from it (the fuel upkeep still fuels it); "loading" /
+-- "release": the same for a loop of the controller's, dropped when upkeep is switched.
+local FEED_USAGE = "Usage: fac_upkeep_feed <id> <x> <y> <recipe|own|loading|release>"
+commands.add_command("fac_upkeep_feed", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+(%S+)$", cmd.parameter)
+    -- (arguments that do not parse: the usage -- review: find_companion(nil) failed)
+    if not args[1] then u.error_response(FEED_USAGE); return end
+    local id, c = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local x, y = tonumber(args[2]), tonumber(args[3])
+    if not x or not y then u.error_response(FEED_USAGE); return end
+    local out = feed_regs.register(c, x, y, args[4], id)
     out.id = id
     u.json_response(out, id)
   end)

@@ -261,8 +261,8 @@ M.CONTROLLER = "controller"
 
 -- A task's current step's effective priority from where she stands.
 local function task_eff(t, c)
-  local step = t.steps[t.cursor]
-  local pos = step_target_pos(t, step)
+  -- (an ensure_item step ranks from where the task delivers: targeting.rank_pos)
+  local pos = targeting.rank_pos(t)
   local dist = pos and u.distance(c.entity.position, pos) or 0  -- instant steps: distance 0
   -- (a task from an older save has no priority: a build's)
   local p = priority.aged(t.priority or priority.base(priority.DEFAULT_KIND), t.created_tick)
@@ -279,7 +279,7 @@ local function pick_next(cid, c, record)
     if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps then
       local eff = task_eff(t, c)
       if cands then
-        local pos = step_target_pos(t, t.steps[t.cursor])
+        local pos = targeting.rank_pos(t)
         cands[#cands + 1] = {id = task_id, kind = t.kind, p = t.priority or 0,
                              age = game.tick - (t.created_tick or game.tick),
                              d = pos and u.distance(c.entity.position, pos) or 0, eff = eff}
@@ -388,7 +388,17 @@ local function refresh_needs()
   table.sort(ids)
   for _, task_id in ipairs(ids) do
     local t = storage.tasks[task_id]
-    if t.created_tick and game.tick - t.created_tick >= TASK_NEEDS_UNMET_GIVEUP_TICKS then
+    -- counted only while the task cannot go on (its current step's needs unmet): a task
+    -- whose own ensure_item step is still getting what a later step needs is working
+    -- on it (independent review: a feed task mining its ore, a far build waiting
+    -- behind near upkeep, failed "needs never satisfied" from its creation on).
+    -- unready_since nil: a task from an older save, or ready -- starts counting now.
+    if task_ready(t) then
+      t.unready_since = nil
+    else
+      t.unready_since = t.unready_since or game.tick
+    end
+    if t.unready_since and game.tick - t.unready_since >= TASK_NEEDS_UNMET_GIVEUP_TICKS then
       local missing = {}
       for item, deficit in pairs(t.needs) do
         missing[#missing + 1] = item .. "x" .. deficit
@@ -419,14 +429,21 @@ local function refresh_needs()
   local epoch = storage.reservation_epoch or 0
   local epoch_changed = (storage.last_seen_reservation_epoch or -1) ~= epoch
   storage.last_seen_reservation_epoch = epoch
+  -- (per companion, decided once per call: the cache updated on her first task left
+  -- every later task of hers unrefreshed after an inventory change -- independent
+  -- review: a feed task's insert never got the ore its ensure_item had mined)
+  local changed = {}
   for _, task_id in ipairs(ids) do
     local t = storage.tasks[task_id]
     local c = u.get_companion(t.cid)
     if c then
       local inv = c.entity.get_main_inventory()
-      local total = inv.get_item_count()
-      if storage.inv_count_cache[t.cid] ~= total or epoch_changed then
+      if changed[t.cid] == nil then
+        local total = inv.get_item_count()
+        changed[t.cid] = storage.inv_count_cache[t.cid] ~= total
         storage.inv_count_cache[t.cid] = total
+      end
+      if changed[t.cid] or epoch_changed then
         for item, deficit in pairs(t.needs) do
           local have = inv.get_item_count(item)
           local already_reserved = storage.reserved[item] or 0

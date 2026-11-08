@@ -7,6 +7,22 @@ local F = require("commands.upkeep_feeds")
 
 local M = {}
 
+-- (shared by the fuel upkeep and the feed upkeep, commands/upkeep_feed.lua)
+-- the fuel upkeep scans the burners within this many tiles of her
+M.SCAN_RADIUS = 150
+-- a machine on a supply line delivering nothing is hers only under this many seconds of
+-- fuel or input (a sparse belt's inserter waits now and then; a dead line's machine
+-- drops below it, and a scan plus a walk fit in it while she is free)
+M.LINE_DRY_S = 60
+-- below this share of a stack her stock of an item is short (the stock upkeep's
+-- trigger; the feed upkeep leaves her that much of a smelted input)
+M.STOCK_LOW_SHARE = 0.5
+-- what her stock of an item is filled up to (Zdendys: 70 % of a stack); a hand-fed
+-- furnace whose product she holds this much of is not fed (the feed upkeep)
+M.STOCK_TARGET_SHARE = 0.7
+-- an underfed machine (its line delivering nothing) is logged at most once this long
+M.UNDERFED_LOG_TICKS = 18000
+
 -- statuses in which a burner needs no fuel now (a mined-out drill, nothing to smelt)
 M.NO_NEED = {[defines.entity_status.no_minable_resources] = true,
              [defines.entity_status.no_ingredients] = true}

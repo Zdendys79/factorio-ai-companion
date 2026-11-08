@@ -80,6 +80,22 @@ function M.step_target_pos(t, step)
   return nil
 end
 
+-- Where a task's current step ranks from (the scheduler's distance): its own target;
+-- an ensure_item step (it gathers or crafts wherever she is) ranks from the next step
+-- that has a target -- where what it gets is delivered (a feed task's furnace; else a
+-- far feed counted distance 0, full priority, ahead of every near build -- factorio-ai
+-- docs/mod_upkeep_supply.md). nil: no step ahead has a target (distance 0).
+function M.rank_pos(t)
+  local step = t.steps[t.cursor]
+  local pos = M.step_target_pos(t, step)
+  if pos or not step or step.type ~= "ensure_item" then return pos end
+  for i = t.cursor + 1, #t.steps do
+    local p = M.step_target_pos(t, t.steps[i])
+    if p then return p end
+  end
+  return nil
+end
+
 -- A task's CURRENT step is ready to run if every item consumed by steps UP TO AND
 -- INCLUDING the current cursor is already reserved for THIS task (2026-07-10,
 -- root-caused via live reproduction: get_diag()/task_status() polling of a

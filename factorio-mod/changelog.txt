@@ -1,4 +1,83 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.168
+  Features:
+    - Feed upkeep (commands/upkeep_feed.lua, factorio-ai docs/mod_upkeep_supply.md A):
+      with upkeep on, she feeds every furnace on her surface that no line feeds
+      (rule 6: a production without a belt is hers). Its recipe: the running one, else
+      its previous recipe, else a registration. Priority log2(target / seconds of input
+      left) -- the target is 300 s or what a full input stack lasts, whichever is less
+      -- lowered by its output's fill; no feed while its output is half a stack full
+      (nobody takes the product), nor while she holds 70 % of a stack of the product
+      unreserved and no inserter takes it to a line (nobody wants more). A burner
+      furnace without fuel is fed only within the fuel upkeep's 150 tiles of her
+      (beyond them nothing fuels it). Hand feeding is an emergency: at most 4
+      furnaces per input item, the registered and the lately fed ones first (a
+      registration ranks, it is no exception); the rest is listed unfed and logged.
+      A raw input (ore) is
+      gathered by an ensure_item step (no pulling from chests around, mined in chunks
+      of 20) and put in. A smelted input (iron plate for steel) comes only from her
+      free stock, leaving her half a stack (no new task under 5; an open task keeps
+      what it reserved). A wrong item in its output is taken out first (the priority
+      of a furnace with no input left: a stuck furnace makes nothing). At most 2
+      tasks; a failed one backs off 60 s, doubled while it repeats (up to 16x), every
+      failure logged. A line seen feeding a furnace is trusted 600 ticks before it is
+      checked again. The status lists her tasks, hand_fed (what she feeds), unknown
+      (furnaces whose input it cannot tell), unfed (over the hand cap) and held_off
+      (feeds held off after failures); noline and underfed are logged once in a while
+      when a feed goes out, handcap for one over the cap; the log books are pruned
+      with the fuel upkeep's.
+    - /fac_upkeep_feed <id> <x> <y> <recipe | own | loading | release>: registers what
+      a fresh hand-fed furnace smelts, until it knows that itself; "own" marks a
+      furnace the controller loads itself -- the feed and stock upkeep neither feed it
+      nor take from it (the fuel upkeep still fuels it); "loading" / "release" do the
+      same for a loop of the controller's, on top of the registration -- a companion's
+      "loading" marks are dropped when her upkeep is switched on or off (a killed run
+      leaves none behind). The registrations are kept by the furnace's unit number and
+      surface, one word for every companion (commands/upkeep_feed_regs.lua: a furnace
+      replaced at the spot does not inherit it; a visit to another surface keeps
+      them); a recipe the furnace cannot smelt -- not one item ingredient, or none of
+      its crafting categories -- is refused. Switching the upkeep off keeps the
+      registrations and drops the rest of her feed books. A feed task for a furnace
+      that became "own" or "loading" is cancelled even while she acts on it
+      (task_pool.cancel_task stops her step). Her feed books (lines, back-offs,
+      hand-fed) are kept per surface; the status lists her current surface's.
+    - Stock upkeep (commands/upkeep_stock.lua, B): iron, copper and steel plates and
+      stone bricks. When she holds less than half a stack and no build, relocate or
+      dismantle task is ready, she takes up to 70 % of a stack out of a furnace output:
+      the nearest holding the whole shortfall, else the nearest holding at least 10 (or
+      the whole shortfall when it is less). Excluded: an "own" furnace and an output an
+      inserter picks from (it feeds something). Only what fits her inventory. At most
+      2 tasks, their priority following the shortfall, each listed with its source
+      (at); a failed take holds its source off for that item (60 s, doubled while it
+      repeats, up to 16x; every failure logged).
+    - What feeds a machine (commands/upkeep_lines.lua): a drill mining the input, or an
+      inserter dropping into it from a belt, a chest or a machine's output holding the
+      input. It is a line when it has the item at hand and stands not for want of fuel
+      or power, or supplies now; else it is "dry" (the feed upkeep then takes over once
+      the input lasts under 60 s). An empty pickup is judged by what it last held (for
+      up to 36000 ticks): a fuel inserter's empty coal belt is no dry ore line.
+    - /fac_upkeep's reply has feed and stock (commands/upkeep_status.lua).
+  Bugfixes:
+    - An inserter's pickup source was looked up only within a 0.6 radius of its pickup
+      position, which missed a 2x2 machine (a furnace) there: now by position first,
+      the radius only as a fallback.
+    - The task scheduler ranked a task whose current step is an ensure_item at
+      distance 0 (full priority, ahead of every near build); it now ranks it from the
+      next step with a target -- where what it gets is delivered
+      (task_pool_targeting.rank_pos).
+    - Needs refresh: the "needs never satisfied" give-up counted from the task's
+      creation, so a task whose own ensure_item was still mining failed; it now counts
+      only while the task is not ready (unready_since). The inventory-change check
+      updated its cache on a companion's first task, so her later tasks were not
+      refreshed after an inventory change (a feed task's insert never got the ore its
+      ensure_item had mined); it is now decided once per companion per refresh.
+  Changes:
+    - The upkeep's status reply moved to commands/upkeep_status.lua (upkeep.lua stays
+      under the file-size limit); what a furnace needs is commands/upkeep_feed_need.lua,
+      the feed's tasks commands/upkeep_feed.lua; SCAN_RADIUS, LINE_DRY_S,
+      STOCK_LOW_SHARE, STOCK_TARGET_SHARE and UNDERFED_LOG_TICKS are shared by the
+      fuel, feed and stock upkeep (commands/upkeep_need.lua).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.167
   Features:
     - A "take_out" task step {type="take_out", x, y, item, count}: fac_building_empty's
