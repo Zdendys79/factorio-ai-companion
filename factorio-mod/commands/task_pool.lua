@@ -38,7 +38,10 @@
 --                                                             verified: burner-mining-drill's
 --                                                             own drop_position flips side)
 --   {type="remove", which=/x,y/ref=, entity=NAME}
---   {type="fuel", which=/x,y/ref=, item=NAME, count=N}
+--   {type="fuel", which=/x,y/ref=, item=NAME, count=N, swap=true|nil}
+--                                                       -> swap: the target's other fuel
+--                                                          into her inventory first
+--                                                          (task_pool_steps.swap_at_target)
 --   {type="insert", x=, y=, entity=NAME, item=NAME, count=N}
 --                                                       -> N into the entity of that name
 --                                                          (a fuel chest -- the upkeep's;
@@ -660,6 +663,12 @@ function M.tick()
           else
             local remaining = step.count or 1
             local delivered = 0
+            -- swap: the target's other fuel (wood) into her inventory first, so the
+            -- item fits it (task_pool_steps.swap_at_target) -- only at her own burner AT
+            -- the position; one she cannot empty fails the step, no item handed to
+            -- its neighbours (review: they took the whole budget, the step "done")
+            local swap_err = steps.swap_at_target(c, step, es[1], pos)
+            if swap_err then es = {} end
             for _, e in ipairs(es) do
               if remaining <= 0 then break end
               local fi = e.get_fuel_inventory()
@@ -681,7 +690,9 @@ function M.tick()
             -- "succeeded" with delivered=0 -- the caller (_build_coal_row_refuel,
             -- belt_connect_ops.py) logged "topped up unit" every single attempt
             -- while the real fuel count never moved, hiding the failure completely.
-            if delivered == 0 then
+            if swap_err then
+              ok, err = false, swap_err
+            elseif delivered == 0 then
               ok, err = false, "no burner nearby had room for " .. step.item
             else
               ledger.consume(t, step.item, delivered)   -- used up: out of the reservations

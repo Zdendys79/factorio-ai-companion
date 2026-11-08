@@ -4,7 +4,12 @@
 -- queue the less fuel the burner has left.
 --
 -- Every SCAN_TICKS, for each companion with upkeep on (/fac_upkeep <id> on), every
--- player burner (furnace, mining drill, boiler) within SCAN_RADIUS of her:
+-- player burner (furnace, mining drill, boiler, burner inserter) within SCAN_RADIUS of
+-- her:
+-- - a burner inserter: one that picks up a fuel feeds itself (live: it keeps ~1 item)
+--   and is left alone until it stands without fuel at two scans in a row (a drained
+--   one never restarts by itself) -- then served by hand, named underfed; any other one
+--   is served by its fuel time like an unfed burner (the rules below are the others');
 -- - t = the seconds its fuel lasts at its full consumption (the burning fuel's energy
 --   left + its fuel slot's); its target = min(TARGET_S, what a full slot lasts) (a
 --   boiler's full slot lasts ~111 s); p = log2(target / max(1, t)) -- a production's
@@ -29,18 +34,24 @@
 --   their consumption together, target TARGET_S, the least output fill among them; a
 --   burner of it under FED_DRY_S with no inserter from its chest supplying it at two
 --   scans in a row is served by hand too (underfed when the chest has fuel: its
---   inserter does not deliver); a
---   chest with no room for coal is full of fuel -- no need;
+--   inserter does not deliver; one waiting only for the slot to empty -- the chest's
+--   wood does not fit the slot's coal -- counts as supplying); a
+--   chest with no room for coal or wood is full of fuel -- no need;
 -- - p' > 1 makes an upkeep task: one fuel step at the burner (an insert step at a fuel
---   chest), the coal to its target (raised to MIN_BATCH, capped by the room and her free
+--   chest) -- a slot already holding another fuel (wood: no coal fits) topped up with
+--   it from her surplus, else at a burner coal swapped in (the step moves the other
+--   fuel into her inventory), else with it from all she holds unreserved; else with her
+--   wood surplus (above WOOD_KEEP) wood where wood fits, the whole amount from her free
+--   wood; else coal --, the coal to its
+--   target (raised to MIN_BATCH, capped by the room and her free
 --   coal above COAL_FLOOR; none when the free coal does not reach min(MIN_BATCH, the
 --   room) -- "short"), priority p' (kept up to date each scan; the task pool's scheduler
 --   ranks it with every other task's step by p' ^ (1 / (distance + 1)) -- it may come
 --   between a build's steps).
 -- At most MAX_TASKS upkeep tasks per companion, the highest p' (nearer first on a tie;
 -- one is replaced only by a need REPLACE_MARGIN higher, so ties do not churn); none
--- submitted while another task waits for coal (its need comes first). A task no longer
--- needed (and not being acted on) is cancelled quietly; ended upkeep tasks are removed
+-- with coal submitted while another task waits for coal (its need comes first). A task
+-- no longer needed (and not being acted on) is cancelled quietly; ended upkeep tasks are removed
 -- from storage.tasks (nothing polls them). Coal comes from her inventory (the
 -- stopgap); burners she has no free coal for are listed as "short" in the status and
 -- logged, and getting the coal is an action of its own (commands/upkeep_fetch.lua: a
@@ -49,6 +60,8 @@ local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
 local F = require("commands.upkeep_feeds")
 local Fetch = require("commands.upkeep_fetch")
+local N = require("commands.upkeep_need")
+local B = require("commands.upkeep_batch")
 
 local M = {}
 
@@ -59,6 +72,10 @@ M.MAX_TASKS = 3
 M.FUEL = "coal"
 M.MIN_BATCH = 5             -- coal per upkeep task at least (unless the room is less)
 M.COAL_FLOOR = 10           -- free coal she keeps for the other tasks
+M.WOOD = "wood"
+-- wood she keeps for the builds (small poles); above it her wood is burned first -- the
+-- controller's own wood stock cap (factorio-ai opening_targets RAW_MATERIAL_STOCK_CAPS)
+M.WOOD_KEEP = 200
 -- a chest-fed burner under this many seconds of fuel, no inserter from its chest
 -- supplying it, is served by hand (a scan plus a walk to a far burner take that long --
 -- review: 10 s let it run dry before she arrived)
@@ -68,7 +85,8 @@ local UNDERFED_LOG_TICKS = 18000
 local SHORT_LOG_TICKS = 18000
 -- a burner whose upkeep task failed is left out this long, doubled while it repeats
 local FAIL_BACKOFF_TICKS = 3600
-local BURNER_TYPES = {"furnace", "mining-drill", "boiler"}
+-- (an inserter only with a burner: a burner inserter -- electric ones have none)
+local BURNER_TYPES = {"furnace", "mining-drill", "boiler", "inserter"}
 
 function M.init()
   -- storage.upkeep = {enabled = {[cid] = true}, tasks = {[cid] = {[key] = task_id}},
@@ -94,97 +112,21 @@ local function key_of(e)
   return string.format("%.1f,%.1f", e.position.x, e.position.y)
 end
 
--- (seconds its fuel lasts, seconds a full slot would last, joules per tick, the joules
--- it holds) at full consumption; nil when not measurable.
+-- (the need measures live in commands/upkeep_need.lua)
+local NO_NEED = N.NO_NEED
+local output_fill = N.output_fill
+
 local function fuel_seconds(e)
-  local burner = e.burner
-  if not burner or not burner.inventory then return nil end
-  local usage = e.prototype.get_max_energy_usage(e.quality)   -- joules per tick
-  if not usage or usage <= 0 then return nil end
-  local energy = (burner.remaining_burning_fuel or 0) + F.inventory_fuel(burner.inventory)
-  local coal = prototypes.item[M.FUEL]
-  local room = burner.inventory.get_insertable_count(M.FUEL)
-  local full = energy + room * ((coal and coal.fuel_value) or 0)
-  return energy / (usage * 60), full / (usage * 60), usage, energy
+  return N.fuel_seconds(e, M.FUEL)
 end
 
--- Its output's fill, 0 .. 1 (products piling up -- nothing takes them off).
-local function output_fill(e)
-  local s = e.status
-  if s == defines.entity_status.full_output
-     or s == defines.entity_status.waiting_for_space_in_destination then
-    return 1
-  end
-  if e.type == "furnace" then
-    local out = e.get_inventory(defines.inventory.crafter_output)
-    if out and #out > 0 then
-      local fill = 0
-      for _, item in pairs(out.get_contents()) do
-        local proto = prototypes.item[item.name]
-        local stack = proto and proto.stack_size or 50
-        fill = math.max(fill, item.count / stack)
-      end
-      return math.min(1, fill)
-    end
-  end
-  return 0
-end
-
--- statuses in which a burner needs no fuel now (a mined-out drill, nothing to smelt)
-local NO_NEED = {[defines.entity_status.no_minable_resources] = true,
-                 [defines.entity_status.no_ingredients] = true}
-
--- The priority of a need from its time left and target, lowered by an output's fill
--- (nil: not short).
-local function priority_of(t, target, fill)
-  if target <= 1 then return nil end
-  local p = math.log(target / math.max(1, t), 2)
-  if p <= 1 then return nil end
-  return 1 + (p - 1) * (1 - 0.9 * fill)
-end
-
--- A burner's upkeep need -- its own slot filled: {p, t, target, usage, fill}, or nil
--- (no task: not measurable, needing no fuel now, or not short).
+-- A burner's upkeep need -- its own slot filled (upkeep_need.burner_need).
 function M.burner_need(e)
-  if NO_NEED[e.status] then return nil end
-  local t, full, usage = fuel_seconds(e)
-  if not t then return nil end
-  local target = math.min(M.TARGET_S, full)
-  local fill = output_fill(e)
-  local p = priority_of(t, target, fill)
-  if not p then return nil end
-  return {p = p, t = t, target = target, usage = usage, fill = fill}
+  return N.burner_need(e, M.TARGET_S, M.FUEL)
 end
 
--- A fuel chest's need for the burners it feeds (group: {chest, usage = their joules per
--- tick together, energy = the joules they hold, fill = the least output fill among
--- them}) -- the chest's fuel and theirs over their consumption together (review: each
--- burner counting the whole chest as its own overrated it N times), no slot cap (the
--- chest is filled): {p, t, target, usage, fill, into = the chest}, or nil.
 local function chest_need(group)
-  local chest = group.chest
-  local energy = group.energy + F.inventory_fuel(chest.get_inventory(defines.inventory.chest))
-  local t = energy / (group.usage * 60)
-  local p = priority_of(t, M.TARGET_S, group.fill)
-  if not p then return nil end
-  return {p = p, t = t, target = M.TARGET_S, usage = group.usage, fill = group.fill,
-          into = chest}
-end
-
--- The inventory an upkeep task fills: the fuel chest (need.into) or the burner's slot.
-local function target_inventory(e, need)
-  if need.into then return need.into.get_inventory(defines.inventory.chest) end
-  return e.burner.inventory
-end
-
--- Coal to the target, capped by the room of what is filled.
-local function coal_wanted(e, need)
-  local proto = prototypes.item[M.FUEL]
-  if not proto or not proto.fuel_value or proto.fuel_value <= 0 then return 0, 0 end
-  local missing_j = math.max(0, (need.target - need.t) * need.usage * 60)
-  local inv = target_inventory(e, need)
-  local room = inv and inv.get_insertable_count(M.FUEL) or 0
-  return math.min(math.ceil(missing_j / proto.fuel_value), room), room
+  return N.chest_need(group, M.TARGET_S)
 end
 
 -- Whether another active task of the companion still waits for coal.
@@ -223,20 +165,6 @@ local function prune_log_books(cid)
       if game.tick - tick >= every then book[key] = nil end
     end
   end
-end
-
--- The coal an upkeep task for need n would take: the amount wanted raised to MIN_BATCH,
--- capped by the room of what is filled and the free coal (`extra`: coal a task about to be
--- replaced would release) -- 0 when the free coal does not reach min(MIN_BATCH, the
--- room) (review: she walked far to hand over 1 coal). (amount, whether free coal is
--- what limits it)
-local function batch(n, free, extra)
-  local want, room = coal_wanted(n.e, n)
-  local amount = math.min(math.max(want, M.MIN_BATCH), room)
-  local avail = math.max(0, free + (extra or 0))
-  local take = math.min(amount, avail)
-  if take < math.min(M.MIN_BATCH, room) then return 0, avail < amount end
-  return take, avail < amount
 end
 
 -- the error of a task that failed because she could not get to its burner
@@ -309,6 +237,29 @@ local function scan(cid, c)
     d.last = game.tick
     return game.tick - d.first >= M.SCAN_TICKS
   end
+  -- A burner inserter's need (live: one that picks up a fuel feeds itself from what it
+  -- carries and keeps ~1 item -- the 4-item rule of the other burners would flag it
+  -- forever; a fully drained one never restarts by itself, even with coal at its
+  -- pickup): a self-fed one is left alone until it stands without fuel at two scans in
+  -- a row, then served by hand (named underfed); any other one (it moves ore, plates or
+  -- nothing) has no fuel feed -- served by its fuel time like an unfed burner.
+  local function inserter_need(e)
+    local key = key_of(e)
+    if not F.inserter_self_fed(e) then
+      if not is_off(e) then add(M.burner_need(e), e) end
+    elseif e.status ~= defines.entity_status.no_fuel then
+      down[key] = nil
+    elseif not is_off(e) and down_twice(key, "self") then
+      local need = M.burner_need(e)
+      if need then
+        log_once("underfed", cid, key, UNDERFED_LOG_TICKS,
+                 string.format("[UNDERFED] %s at %s: it carries fuel yet stands without "
+                               .. "fuel (drained -- it never restarts by itself) -- served "
+                               .. "by hand", e.name, key))
+      end
+      add(need, e)
+    end
+  end
   -- the fuel chests to judge: {[chest key] = chest} (a burner's nearest fuel chest)
   local groups = {}
   for _, e in pairs(c.entity.surface.find_entities_filtered{
@@ -317,7 +268,9 @@ local function scan(cid, c)
     -- one fed from a chest that still holds fuel keeps its slot topped up, so its chest
     -- is judged once its own fuel runs down)
     local own_t = e.valid and e.burner and not NO_NEED[e.status] and fuel_seconds(e)
-    if own_t and own_t < M.TARGET_S / 2 then
+    if own_t and own_t < M.TARGET_S / 2 and e.type == "inserter" then
+      inserter_need(e)
+    elseif own_t and own_t < M.TARGET_S / 2 then
       local f = F.feeds(e)
       if f.other then
         -- its supply line feeds it while one of its sources supplies (the insertion
@@ -364,11 +317,12 @@ local function scan(cid, c)
   end
   -- each fuel chest one of whose burners ran down: one need for all the burners it
   -- feeds (review: the whole chest's burners, not only those under the cheap check);
-  -- a chest with no room for coal is full of fuel -- no need (review: serving its
-  -- burners by hand then went to burners whose chest supplies them)
+  -- a chest with no room for coal or wood is full of fuel -- no need (review: serving
+  -- its burners by hand then went to burners whose chest supplies them)
   for _, chest in pairs(groups) do
     local inv = chest.get_inventory(defines.inventory.chest)
-    if inv and inv.get_insertable_count(M.FUEL) > 0 and not is_off(chest) then
+    if inv and (inv.get_insertable_count(M.FUEL) > 0 or inv.get_insertable_count(M.WOOD) > 0)
+       and not is_off(chest) then
       local g = {chest = chest, usage = 0, energy = 0, fill = 1}
       for _, b in ipairs(F.chest_burners(chest)) do
         local _, _, usage, energy = fuel_seconds(b)
@@ -392,11 +346,51 @@ local function scan(cid, c)
   local function free_coal()
     return inv.get_item_count(M.FUEL) - (storage.reserved[M.FUEL] or 0) - M.COAL_FLOOR
   end
-  -- another task waiting for coal comes first: no new upkeep task (logged once)
+  -- another task waiting for coal comes first: no new upkeep task with coal (logged
+  -- once; review: wood takes it no coal)
   local blocked = coal_wanted_elsewhere(cid)
   if blocked and #needs > 0 then
     log_once("blocked", cid, "coal", SHORT_LOG_TICKS,
-             "upkeep: another task waits for coal -- no new upkeep task meanwhile")
+             "upkeep: another task waits for coal -- no new upkeep task with coal meanwhile")
+  end
+  -- What she may give of a fuel other than coal: wood above WOOD_KEEP (`keep` false:
+  -- the keep too), any other all she holds unreserved; `extra` as in choose.
+  local function free_other(item, extra, keep)
+    local free = inv.get_item_count(item) - (storage.reserved[item] or 0) + (extra[item] or 0)
+    if item == M.WOOD and keep then free = free - M.WOOD_KEEP end
+    return free
+  end
+  -- The fuel an upkeep task for need n takes (`extra`: what a task about to be replaced
+  -- would release, by item). A slot already holding another fuel (only that fits it --
+  -- review: wood left to run dry): topped up with it from her surplus; else, at a burner,
+  -- coal swapped in (the fuel step moves the other fuel into her inventory -- review:
+  -- topping it up from the keep drained the wood the builds keep, the slot never going
+  -- back to coal); else with it from all she holds unreserved, the keep too (no coal to
+  -- swap in -- too little coal for what comes out, no room for it in her inventory --,
+  -- or another task waits for coal -- a running burner before her wood stock).
+  -- Else her wood surplus where it covers the need (Zdendys: wood is never kept in stock
+  -- beyond what the builds need); else coal, unless another task waits for it.
+  -- (item, amount, whether free coal is what limits it, swap)
+  local function choose(n, extra)
+    extra = extra or {}
+    local held = B.held_fuel(M, n)
+    if held then
+      local amount = B.other(M, n, held, free_other(held, extra, true), true)
+      if amount >= 1 or n.into then return held, amount, false, false end
+      -- (a swap only when her inventory has room for what comes out -- review: else the
+      -- step failed at every scan)
+      local coal_n, coal_short = 0, false
+      if not blocked and B.swap_fits(n, M.FUEL, inv) then
+        coal_n, coal_short = B.coal(M, n, free_coal(), extra[M.FUEL], true)
+      end
+      if coal_n >= 1 then return M.FUEL, coal_n, false, true end
+      amount = B.other(M, n, held, free_other(held, extra, false), true)
+      return held, amount, amount < 1 and coal_short, false
+    end
+    local wood_n = B.other(M, n, M.WOOD, free_other(M.WOOD, extra, true), false)
+    if wood_n >= 1 or blocked then return M.WOOD, wood_n, false, false end
+    local amount, coal_short = B.coal(M, n, free_coal(), extra[M.FUEL])
+    return M.FUEL, amount, coal_short, false
   end
   local function open_count()
     local k = 0
@@ -412,12 +406,13 @@ local function scan(cid, c)
     end
     return wk, wp
   end
-  local function submit(n, amount)
-    -- a fuel chest is filled by an "insert" step, a burner by a "fuel" step
+  local function submit(n, amount, item, swap)
+    -- a fuel chest is filled by an "insert" step, a burner by a "fuel" step (swap: its
+    -- other fuel into her inventory first)
     local step = n.into and {type = "insert", x = n.into.position.x, y = n.into.position.y,
-                             entity = n.into.name, item = M.FUEL, count = amount}
-                 or {type = "fuel", x = n.e.position.x, y = n.e.position.y, item = M.FUEL,
-                     count = amount}
+                             entity = n.into.name, item = item, count = amount}
+                 or {type = "fuel", x = n.e.position.x, y = n.e.position.y, item = item,
+                     count = amount, swap = swap or nil}
     local r = ledger.submit_task(cid, {step}, "upkeep", n.p)
     if r.task_id then
       mine[n.key] = r.task_id
@@ -428,38 +423,43 @@ local function scan(cid, c)
   end
   -- the needs in rank order: a free slot takes the next one; with all MAX_TASKS slots
   -- open, a need replaces the weakest open task only when it is REPLACE_MARGIN higher
-  -- AND can be submitted (its coal, counting what the replaced task releases) --
+  -- AND can be submitted (its fuel, counting what the replaced task releases) --
   -- decided before anything is cancelled (review)
   -- the needs she has no free coal for (getting material, commands/upkeep_fetch.lua)
   local short = {}
-  if not blocked then
-    for _, n in ipairs(needs) do
-      if not mine[n.key] then
-        if open_count() < M.MAX_TASKS then
-          local amount, coal_short = batch(n, free_coal())
-          if amount >= 1 then
-            submit(n, amount)
-          elseif coal_short then
-            local want, room = coal_wanted(n.e, n)
-            short[#short + 1] = {want = math.min(math.max(want, M.MIN_BATCH), room), t = n.t}
-            log_once("short", cid, n.key, SHORT_LOG_TICKS,
-                     string.format("upkeep: no free coal for %s at %s (%.0f s of fuel "
-                                   .. "left; %d free above the floor)", n.e.name, n.key,
-                                   n.t, math.max(0, free_coal())))
+  for _, n in ipairs(needs) do
+    if not mine[n.key] then
+      if open_count() < M.MAX_TASKS then
+        local item, amount, coal_short, swap = choose(n)
+        if amount >= 1 then
+          submit(n, amount, item, swap)
+        elseif coal_short then
+          -- (a burner held by another fuel: what its swap needs -- review: a fetch of
+          -- less never let the swap happen)
+          local want, room = B.wanted(n.e, n, M.FUEL)
+          local least = M.MIN_BATCH
+          if room < 1 and not n.into then
+            local out
+            want, room, out = B.wanted_after_swap(M, n)
+            least = out + M.MIN_BATCH
           end
-        else
-          local wk, wp = weakest()
-          if wk and n.p > wp + M.REPLACE_MARGIN then
-            local old = storage.tasks[mine[wk]]
-            local releases = old and old.reserved and old.reserved[M.FUEL] or 0
-            local amount = batch(n, free_coal(), releases)
-            if amount >= 1 then
-              ledger.cancel_task(mine[wk], "upkeep: replaced by a bigger need")
-              storage.tasks[mine[wk]] = nil
-              mine[wk] = nil
-              local now_free = batch(n, free_coal())   -- (its first value only)
-              if now_free >= 1 then submit(n, math.min(amount, now_free)) end
-            end
+          short[#short + 1] = {want = math.min(math.max(want, least), room), t = n.t}
+          log_once("short", cid, n.key, SHORT_LOG_TICKS,
+                   string.format("upkeep: no free coal for %s at %s (%.0f s of fuel "
+                                 .. "left; %d free above the floor)", n.e.name, n.key,
+                                 n.t, math.max(0, free_coal())))
+        end
+      else
+        local wk, wp = weakest()
+        if wk and n.p > wp + M.REPLACE_MARGIN then
+          local old = storage.tasks[mine[wk]]
+          local _, amount = choose(n, old and old.reserved)
+          if amount >= 1 then
+            ledger.cancel_task(mine[wk], "upkeep: replaced by a bigger need")
+            storage.tasks[mine[wk]] = nil
+            mine[wk] = nil
+            local item, now, _, swap = choose(n)   -- (what it released now free)
+            if now >= 1 then submit(n, now, item, swap) end
           end
         end
       end

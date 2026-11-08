@@ -13,6 +13,9 @@ local CHEST_TYPES = {container = true}
 -- (review: a logistic plate buffer counted as a fuel line)
 local OTHER_STORES = {["logistic-container"] = true, ["infinity-container"] = true,
                       ["linked-container"] = true}
+-- the vehicles an inserter may unload, with their inventory
+local VEHICLE_STORES = {["cargo-wagon"] = defines.inventory.cargo_wagon,
+                        car = defines.inventory.car_trunk}
 -- a source's pickup entity is searched within this radius of its pickup position
 local PICKUP_RADIUS = 0.6
 -- what is never a pickup source (review: a ghost or a corpse at the spot made the
@@ -172,7 +175,50 @@ local function supplying(src)
       or s == defines.entity_status.waiting_for_space_in_destination
 end
 
--- What feeds the burner its fuel: {other, other_ok, why, chests, chest_ok, chest_why}.
+-- Whether an inserter from a fuel chest waits only for the burner's slot to empty: it
+-- waits for source items, the burner's slot holds a fuel, and none of the chest's
+-- fuels fits it (live: a chest of wood for a slot of coal -- the inserter takes the
+-- wood the moment the slot runs empty, the burner never stops; served by hand as a
+-- feed down, its slot was topped up with coal again and again, the wood never used).
+-- Only a fuel the burner burns and the inserter may move counts as waiting (review: a
+-- coal-filtered inserter or a fuel of another category would never deliver it).
+local function burns(e, name)
+  local cats = e.burner.fuel_categories
+  for _, c in ipairs(prototypes.item[name].fuel_categories or {}) do
+    if cats[c] then return true end
+  end
+  return false
+end
+local function moves(ins, name)
+  if not ins.use_filters then return true end
+  local listed = false
+  for i = 1, ins.filter_slot_count do
+    local f = ins.get_filter(i)
+    if f and f.name == name then listed = true end
+  end
+  if ins.inserter_filter_mode == "blacklist" then return not listed end
+  return listed
+end
+local function waits_for_slot(ins, chest, e)
+  if ins.status ~= defines.entity_status.waiting_for_source_items then return false end
+  local slot = e.burner.inventory
+  if slot.is_empty() then return false end
+  local inv = chest.get_inventory(defines.inventory.chest)
+  local any = false
+  for _, item in pairs(inv.get_contents()) do
+    if is_fuel(item.name) and burns(e, item.name) and moves(ins, item.name) then
+      any = true
+      if slot.get_insertable_count({name = item.name, quality = item.quality}) > 0 then
+        return false
+      end
+    end
+  end
+  return any
+end
+
+-- What feeds the burner its fuel: {other, other_ok, why, chests, chest_ok, chest_waits,
+-- chest_why} (chest_waits: chest_ok only because its inserter waits for the slot to
+-- empty -- waits_for_slot -- the LINE_MIN_ITEMS rule not applied).
 -- - other: a supply line of its own -- an inserter from a belt or a chest an inserter
 --   / a fuel-mining drill fills (unless it carries only items that are no fuel: an ore
 --   belt, a plate buffer -- review: an idle ore inserter's status looked like a fuel
@@ -185,7 +231,8 @@ end
 -- - chests: the fuel chests (plain containers, empty or holding only fuels, filled by
 --   nothing) inserters feed it from -- hers to fill -- nearest first;
 -- - chest_ok: one of the inserters from them supplies it and its fuel slot holds at
---   least LINE_MIN_ITEMS; chest_why: what does not supply.
+--   least LINE_MIN_ITEMS, or one waits only for its slot to empty (waits_for_slot --
+--   chest_waits, the slot's count not judged); chest_why: what does not supply.
 -- An iron drill's ore, an inserter from an ore belt, an ore chest, an ore buffer or a
 -- furnace making plates is no fuel feed: such a burner counts as having none.
 function M.feeds(e)
@@ -219,6 +266,8 @@ function M.feeds(e)
           if not filled and fuel_chest(from) then
             if supplying(src) then
               f.chest_ok = true
+            elseif waits_for_slot(src, from, e) then
+              f.chest_ok, f.chest_waits = true, true
             else
               f.chest_why = src.name .. " " .. status_name(src)
             end
@@ -239,7 +288,7 @@ function M.feeds(e)
   if f.other_ok and n < M.LINE_MIN_ITEMS then
     f.other_ok, f.why = false, "only " .. n .. " fuel items in it"
   end
-  if f.chest_ok and n < M.LINE_MIN_ITEMS then
+  if f.chest_ok and not f.chest_waits and n < M.LINE_MIN_ITEMS then
     f.chest_ok, f.chest_why = false, "only " .. n .. " fuel items in it"
   end
   table.sort(f.chests, function(a, b)
@@ -273,6 +322,35 @@ function M.chest_burners(chest)
     end
   end
   return out
+end
+
+-- Whether a burner inserter feeds itself: what it picks up from carries a fuel (a belt
+-- or a chest holding one, a machine making one) -- live: such an inserter refuels from
+-- what it carries and keeps ~1 fuel item; a fully drained one never restarts by itself,
+-- even with coal at its pickup (only a hand delivery revives it).
+-- An empty pickup (a gap on a coal belt, a chest emptied a moment) counts as fuel unless
+-- the inserter holds what is no fuel -- the rule of feeds() (review: a sparse coal
+-- belt's gap made it look unfed and hand-fed at once, the task cancelled next scan).
+function M.inserter_self_fed(ins)
+  local held = ins.held_stack
+  if held and held.valid_for_read and is_fuel(held.name) then return true end
+  local from = pickup_source(ins)
+  if not from then return false end
+  local kind
+  if BELT_TYPES[from.type] then
+    kind = belt_kind(from)
+  elseif CHEST_TYPES[from.type] or OTHER_STORES[from.type] then
+    kind = chest_kind(from)
+  elseif VEHICLE_STORES[from.type] then
+    -- (unloading a wagon / a car -- review: one carrying coal feeds itself too)
+    local inv = from.get_inventory(VEHICLE_STORES[from.type])
+    kind = inv and contents_kind(inv.get_contents()) or "empty"
+  elseif from.type == "furnace" or from.type == "assembling-machine" then
+    return makes_fuel(from)
+  else
+    return false
+  end
+  return kind == "fuel" or (kind == "empty" and not holds_no_fuel(ins))
 end
 
 -- Whether an inserter picks up from the chest (it feeds a machine or a line -- its coal

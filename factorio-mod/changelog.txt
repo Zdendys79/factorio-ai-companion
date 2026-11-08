@@ -1,4 +1,57 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.156
+  Features:
+    - The fuel upkeep keeps burner inserters too. Live, an inserter that picks up a
+      fuel feeds itself from what it carries and keeps about 1 item, and a fully
+      drained one never restarts by itself, even with coal at its pickup.
+      - A self-fed inserter (it holds a fuel; or its pickup -- a belt, a chest, a cargo
+        wagon or a car -- holds one, or is empty with no non-fuel item in its hand, a
+        gap on a coal belt; or a machine making a fuel) is left alone until it stands
+        without fuel at two scans in a row; then it is served by hand and [UNDERFED]
+        names it.
+      - Any other burner inserter (it moves ore or plates, picks up from the ground or
+        from another entity) is served by its fuel time like an unfed burner.
+      - Its priority uses the full 300 s target (its full slot lasts ~2100 s), so it
+        ranks above a boiler with the same time left -- a stopped inserter stops what
+        it feeds too.
+    - The fuel upkeep burns her wood surplus first. Above WOOD_KEEP (200, the
+      controller's wood stock cap -- kept for the builds' small poles), a task takes
+      wood where wood fits (an empty fuel slot, a slot holding wood, a fuel chest -- a
+      slot holding coal takes none): the amount wanted in wood, at least a batch worth
+      5 coal, only when her free wood covers it all. Else coal, as before. This holds
+      for a free task slot and for the replacement of a weaker task; while another
+      task waits for coal, wood tasks are still made (they take it no coal).
+    - A slot already holding wood (no coal fits it) is topped up with wood from her
+      surplus; else, at a burner, coal is swapped in -- the fuel step's new swap
+      option moves the burner's other fuel into her inventory first (topping it up
+      from the keep would drain the wood the builds keep, the slot never going back to
+      coal); else, with no coal to swap in (another task waiting for it, or no room in
+      her inventory for what would come out), topped
+      up with wood from all she holds unreserved, the keep too -- a running burner
+      comes before her wood stock. A fuel chest holding wood: from her surplus only.
+      A swap is made only with coal worth what comes out plus 5 (else it would leave
+      the burner less fuel than before; a coal fetch for it asks for that much too)
+      and with room in her inventory for all that comes out; its coal goes to a slot
+      of coal's target. The step swaps only at her own burner at its position, and
+      only when she holds the step's whole count and has room for all of the other
+      fuel -- else nothing is moved and the step fails, no coal handed to the
+      neighbours.
+  Bugfixes:
+    - A fuel chest holding only wood for a burner whose slot holds coal counted as a
+      feed down: its inserter waits for source items (no wood fits the coal slot), so
+      the burner was served by hand with coal again and again (live: 30 coal into a
+      boiler) and the chest's wood was never used. Live, the inserter takes the wood
+      the moment the slot runs empty and the burner never stops -- such an inserter now
+      counts as supplying (upkeep_feeds waits_for_slot).
+    - A burner holding wood showed no fuel need until its slot ran empty: its full
+      slot was measured by the room for coal alone (none), so its target equalled
+      what it held. A full slot is now measured per slot by the fuel it holds (an
+      empty one by coal); a chest full of partial wood stacks is judged too.
+  Changes:
+    - The upkeep's need measures (fuel time, output fill, priority, a burner's and a
+      fuel chest's need) moved to commands/upkeep_need.lua, its batches (how much of
+      which fuel a task takes) to commands/upkeep_batch.lua.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.155
   Features:
     - Getting material for the fuel upkeep (commands/upkeep_fetch.lua). When she has no

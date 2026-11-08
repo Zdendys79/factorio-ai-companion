@@ -68,6 +68,57 @@ function M.run_insert(c, t, step)
   return true, nil
 end
 
+-- a fuel step's swap: its target is the burner this near its position
+local SWAP_RADIUS = 0.5
+
+-- A fuel step's swap ({type="fuel", ..., swap=true} -- commands/upkeep.lua: a slot
+-- holding wood takes no coal; topping it up with wood drained the wood she keeps for
+-- the builds): every other fuel in the fuel inventory of `target` (the burner nearest
+-- the step's position `pos`) moved into her inventory, so the step's item fits it.
+-- Nothing is moved unless all of it fits her inventory and she holds the step's whole
+-- count (review: a partial swap, or too little coal, left it less fuel than before).
+-- @return nil (no swap asked, or done) or the error (not her burner at the position, too
+-- little of the item, or no room in her inventory for what would come out)
+function M.swap_at_target(c, step, target, pos)
+  if not step.swap then return nil end
+  if not (target and target.valid and target.force.name == c.entity.force.name
+          and u.distance(target.position, pos) <= SWAP_RADIUS) then
+    return "fuel: swap -- no burner of hers at the target"
+  end
+  local fi = target.get_fuel_inventory()
+  if not fi then return "fuel: swap -- the " .. target.name .. " has no fuel inventory" end
+  local inv = c.entity.get_main_inventory()
+  local have, count = inv.get_item_count(step.item), step.count or 1
+  if have < count then
+    return string.format("fuel: swap -- %d %s with her, the step needs %d", have,
+                         step.item, count)
+  end
+  -- (per entry -- the fuel slot of every burner the upkeep keeps is a single one)
+  for _, it in pairs(fi.get_contents()) do
+    if it.name ~= step.item
+       and inv.get_insertable_count({name = it.name, quality = it.quality}) < it.count then
+      return "fuel: swap -- no room in her inventory for the " .. it.name
+    end
+  end
+  for i = 1, #fi do
+    local stack = fi[i]
+    if stack.valid_for_read and stack.name ~= step.item then
+      local name, n = stack.name, stack.count
+      local got = c.entity.insert(stack)
+      if got >= n then
+        stack.clear()
+      else
+        -- (room was checked: logged, what came out stays with her)
+        if got > 0 then stack.count = n - got end
+        u.log_error(string.format("fuel: swap -- %d of %d %s fit her inventory", got, n,
+                                  name), "task_pool")
+        return "fuel: swap -- no room in her inventory for the " .. name
+      end
+    end
+  end
+  return nil
+end
+
 -- {type="take", x=, y=, entity=NAME, item=NAME, count=N, store=true|nil}: up to N of
 -- the item from her force's chest of that name nearest (x, y) within INSERT_RADIUS into
 -- her inventory -- the upkeep's getting material (commands/upkeep_fetch.lua: a coal
