@@ -144,7 +144,6 @@ local activity = require("commands.activity")
 local M = {}
 
 local FUEL_REACH = 3      -- mirrors fac_building_fuel's own radius (building.lua)
-local WALK_REACH = targeting.WALK_REACH
 local step_target_pos = targeting.step_target_pos
 local task_ready = targeting.task_ready
 local run_read_drop_position = steps.run_read_drop_position
@@ -186,7 +185,7 @@ M.get_task_status = ledger.get_task_status
 
 -- step_target_pos/task_ready moved to task_pool_targeting.lua (2026-07-19
 -- size-refactor split) -- see local aliases above (targeting.step_target_pos/
--- task_ready/WALK_REACH).
+-- task_ready; the walk's end: targeting.step_reach).
 
 -- The 6 run_* synchronous step handlers (read_drop_position/find_existing/
 -- set_position/find_patch/verify_tile/pick_orientation) + their private
@@ -413,8 +412,17 @@ function M.tick()
     local step = t.steps[t.cursor]
 
     if active.state == "walking" then
+      local walk_pos = step_target_pos(t, step)
       if not storage.walking_queues[cid] then
         -- Arrived (or walking_queue was never set for a non-walk step) -> act.
+        active.state = "acting"
+      elseif walk_pos and u.distance(c.entity.position, walk_pos)
+                          <= targeting.step_reach(c.entity, step) then
+        -- within the step's reach (targeting.step_reach: a build, take, fill or empty
+        -- reaches 10 tiles): no need to come closer -- an enclosed burner's centre was
+        -- never reached, the walk timed out 2.5 tiles from it
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
         active.state = "acting"
       elseif active.approach_deadline and game.tick >= active.approach_deadline then
         -- Bounded give-up (2026-07-08/09, task-pool's OWN walking phase previously had
@@ -913,7 +921,7 @@ function M.tick()
         local t = storage.tasks[task_id]
         local step = t.steps[t.cursor]
         local pos = step_target_pos(t, step)
-        if pos and u.distance(c.entity.position, pos) > WALK_REACH then
+        if pos and u.distance(c.entity.position, pos) > targeting.step_reach(c.entity, step) then
           storage.walking_queues[cid] = {target = pos}
           -- approach_deadline (2026-07-08/09, live-caught: run_reactive's own new
           -- async-pending stale-exemption -- added specifically to stop penalizing

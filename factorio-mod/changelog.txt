@@ -1,4 +1,27 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.163
+  Features:
+    - The freeplay crash site comes at the map's start, not at the first player's join
+      (commands/crash_site_start.lua; Zdendys: the companion is no player -- on a server
+      nobody joins the wreck never came, and a late join dropped its burning wreckage
+      onto her buildings). Once per save: a map within its first game minute gets the
+      crashed ship and its wreckage from freeplay's own items and parts (the same
+      core/lualib crash-site.lua call, at {-5, -6}) once the 3x3 chunks round it are
+      generated; freeplay's own crash site is disabled before, so the first join gets
+      freeplay's start (items, charted area, intro) without a second ship or the
+      cutscene. A save past its start that never had a player only gets freeplay's
+      crash site disabled. A failed build is logged once, never repeated.
+  Bugfixes:
+    - A task-pool step that acts on an entity -- fuel, insert, take, remove (the
+      character's reach_distance) and place (its build_distance; the build queue
+      approaches by itself) -- ends its walk within that reach, 10 tiles, instead of
+      within 2 tiles of the target's centre (task_pool_targeting.step_reach; Zdendys:
+      building, taking, filling and emptying all reach 10 tiles). A smoke's upkeep
+      fuel walk to an enclosed furnace timed out 8 times with her 2.5 tiles from it,
+      one iron producer unfed in 19 of 187 windows. set_position and
+      read_drop_position (data steps) need no walk at all; every other step still
+      walks to within 2 tiles.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.162
   Features:
     - /fac_reserve_tiles <owner> add x1 y1 [x2 y2 ...] | remove | list, and

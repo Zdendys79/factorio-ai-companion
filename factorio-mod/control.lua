@@ -5,6 +5,7 @@ local spectate = require("commands.spectate")
 local task_pool = require("commands.task_pool")
 local activity = require("commands.activity")
 local upkeep = require("commands.upkeep")
+local crash_site_start = require("commands.crash_site_start")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -937,6 +938,9 @@ script.on_nth_tick(5, function(ev)
   if ev.tick % 1800 == 0 then cleanup_messages() end
   -- Update map markers every 30 ticks (0.5 sec)
   if ev.tick % 30 == 0 then update_companion_markers() end
+  -- the freeplay crash site at the map's start, not at the first join (one decision
+  -- per save -- commands/crash_site_start.lua)
+  guard_tick("crash_site", crash_site_start.tick, ev.tick)
   -- Process all tick-based queues (each guarded so one failure can't kill the rest)
   guard_tick("harvest", queues.tick_harvest_queues, ev.tick)
   guard_tick("gather",  queues.tick_gather_queues,  ev.tick)

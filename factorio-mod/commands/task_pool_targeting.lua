@@ -10,6 +10,32 @@ local M = {}
 
 M.WALK_REACH = 2      -- mirrors MINE_ADJACENT_RANGE-class "close enough" used elsewhere
 
+-- The steps that act on an entity from where she stands: within the character's own
+-- reach (prototype: build_distance 10, reach_distance 10 -- Zdendys: building, taking,
+-- filling and emptying all reach 10 tiles) she need not come closer. A walk to within
+-- WALK_REACH of an enclosed burner's centre never arrived (a smoke: an upkeep fuel step
+-- timed out 8 times with her 2.5 tiles from the furnace). A place step's own build
+-- queue approaches to build_distance itself (queues_build.find_approach_pos).
+-- set_position (it only sets ctx.px/py) and read_drop_position (it only reads a
+-- drill's drop_position) need no walk at all (independent review: with x/y they still
+-- walked her to within 2 tiles of a boxed-in drill -- the same timeout).
+local REACH_KIND = {place = "build", fuel = "reach", remove = "reach", insert = "reach",
+                    take = "reach", set_position = "none", read_drop_position = "none"}
+
+-- The distance within which `step` acts without walking closer: the character's
+-- build / reach distance for the steps above, no limit for the two data steps,
+-- WALK_REACH for every other step.
+-- @param entity LuaEntity the companion's character
+-- @param step table the task step
+-- @return number tiles
+function M.step_reach(entity, step)
+  local kind = REACH_KIND[step.type]
+  if kind == "build" then return entity.build_distance or 10 end
+  if kind == "reach" then return entity.reach_distance or 10 end
+  if kind == "none" then return math.huge end
+  return M.WALK_REACH
+end
+
 -- ---- step readiness + target position (for distance-priority scheduling) ----
 
 -- Returns the world position a given step will act at (nil if the step doesn't
