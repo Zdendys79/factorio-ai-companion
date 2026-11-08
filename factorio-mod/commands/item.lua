@@ -24,7 +24,22 @@ commands.add_command("fac_item_craft", nil, function(cmd)
     -- headless: the companion's craft does not fire craft-item research triggers ->
     -- compensate (e.g. crafting a lab unlocks the automation-science-pack recipe).
     u.fire_craft_triggers(c.entity.force, item, crafted)
+    u.note_hand_craft(id, item, crafted)
     u.json_response({id = id, crafted = crafted, item = item})
+  end)
+end)
+
+-- fac_item_hand_crafts <cid>: her hand crafts so far per recipe (u.note_hand_craft) --
+-- {id, crafts = {[recipe] = n}, total}. Read-only.
+commands.add_command("fac_item_hand_crafts", nil, function(cmd)
+  u.safe_command(function()
+    local args = u.parse_args("^(%S+)$", cmd.parameter)
+    local id = u.find_companion(args[1])
+    if not id then u.not_found(); return end
+    local book = storage.hand_crafts and storage.hand_crafts[id] or {}
+    local total = 0
+    for _, n in pairs(book) do total = total + n end
+    u.json_response({id = id, crafts = book, total = total})
   end)
 end)
 

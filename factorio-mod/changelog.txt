@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.159
+  Features:
+    - Her hand crafts are counted per recipe (both craft paths: /fac_item_craft and the
+      craft queue the task pool's ensure_item uses) -- the metric of factorio-ai's
+      production-for-every-item plan (hand crafting is to be minimised).
+      /fac_item_hand_crafts <cid> reads it: {id, crafts = {[recipe] = n}, total}. The
+      count lives in the save (a run from a saved state reads it before and after);
+      it goes with a companion that disappears.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.158
   Changes:
     - The upkeep's coal fetch mines by hand in chunks: at most max(min(the most urgent

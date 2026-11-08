@@ -127,6 +127,8 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
     storage.context_clear_requests[id] = game.tick
     storage.companions[id] = nil
     storage.walking_queues[id] = nil
+    -- (her hand-craft count goes with her: a new companion under the id starts at 0)
+    if storage.hand_crafts then storage.hand_crafts[id] = nil end
     game.print("[#" .. id .. " gone]", u.print_color(u.COLORS.system))
     u.json_response({id = id, disappeared = true, dropped = dropped})
   end)

@@ -57,6 +57,7 @@ function M.tick_craft_queues()
     end
     -- headless: fire craft-item research triggers the scripted craft would otherwise miss
     u.fire_craft_triggers(c.entity.force, q.recipe, crafted)
+    u.note_hand_craft(cid, q.recipe, crafted)
 
     q.crafted = q.crafted + 1
     q.tick_start = game.tick

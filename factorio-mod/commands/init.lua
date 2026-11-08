@@ -376,6 +376,17 @@ function M.render_label(entity, text, color)
   }
 end
 
+-- Count a companion's hand crafts per recipe (docs/production_for_every_item.md, factorio-ai:
+-- hand crafting is to be minimised -- the count per episode is its metric; /fac_item_
+-- hand_crafts reads it): storage.hand_crafts = {[cid] = {[recipe] = crafts begun}}.
+function M.note_hand_craft(cid, recipe, crafted)
+  if not cid or not recipe or (crafted or 0) < 1 then return end
+  storage.hand_crafts = storage.hand_crafts or {}
+  storage.hand_crafts[cid] = storage.hand_crafts[cid] or {}
+  local book = storage.hand_crafts[cid]
+  book[recipe] = (book[recipe] or 0) + crafted
+end
+
 -- Factorio 2.0 "craft-item" research triggers fire only when a PLAYER completes a
 -- craft; a headless scripted companion's begin_crafting does NOT fire them, so a
 -- crafted item that should unlock a technology (e.g. crafting a lab unlocks the

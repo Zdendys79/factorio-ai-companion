@@ -26,7 +26,7 @@ commands.add_command("fac_help", nil, function()
     chat = {"get", "say"},
     companion = {"disappear", "health", "inventory", "position", "spawn"},
     context = {"clear", "check"},
-    item = {"craft", "pick", "recipes"},
+    item = {"craft", "hand_crafts", "pick", "recipes"},
     move = {"follow", "stop", "to"},
     research = {"get", "progress", "set"},
     resource = {"list", "mine", "nearest"},
