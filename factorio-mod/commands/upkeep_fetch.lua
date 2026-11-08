@@ -18,18 +18,27 @@
 --   walk of 150 tiles takes ~20 s, mining 100 coal by hand ~200 s. Belts are left
 --   alone: they carry coal to the production.
 -- - She fetches up to STOCK coal (the fuel range: two stacks), at least S, capped by her
---   inventory room.
+--   inventory room -- from a store; mining, at most max(min(the most urgent need's
+--   coal, MINE_CHUNK) + what keeps her coal floor, MINE_CHUNK) at a time (the burners'
+--   tasks wait while she mines). No new fetch while one of her open upkeep tasks holds
+--   coal reserved and the scheduler would pick it before the fetch (its effective
+--   priority from where she stands at least the fetch's p): that delivery comes first.
 -- - One fetch task per companion (kind "upkeep"); its priority kept up to date while
 --   she is short; withdrawn (unless being acted on) once she is not. A failed take
 --   leaves its store out BAD_STORE_TICKS (the next fetch goes to another store or to
 --   mining); a failed mining holds fetching off FAIL_BACKOFF_TICKS.
 local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
+local priority = require("commands.priority")
 local F = require("commands.upkeep_feeds")
 
 local M = {}
 
 M.STOCK = 100              -- coal she fetches up to (the fuel range's two stacks)
+-- coal she mines by hand in one fetch at most (unless more is short): ~50 s of hand
+-- mining -- the burners' tasks wait while she mines (a smoke: 80-100 coal, ~200 s, the
+-- tasks waiting); a next fetch follows while she is still short
+M.MINE_CHUNK = 25
 M.MIN_TAKE = 5             -- a store holding less than min(S, this) is passed over
 M.SOURCE_RADIUS = 150
 local FAIL_BACKOFF_TICKS = 3600
@@ -71,15 +80,38 @@ local function nearest_store(c, item, least, fills, bad)
 end
 
 -- The fetch task's steps for `amount` of `item` (she holds `have`): a take at the
--- nearest store, else mining to hold `have + amount`; and how ("take at x,y" / "mine").
-local function fetch_steps(c, item, amount, least, have, fills, bad)
+-- nearest store, else mining to hold `have + mined` -- `mined` = min(amount,
+-- max(least_mined, MINE_CHUNK)); and how ("take at x,y" / "mine"), and the amount
+-- fetched.
+local function fetch_steps(c, item, amount, least_mined, least, have, fills, bad)
   local store = nearest_store(c, item, least, fills, bad)
   if store then
     return {{type = "take", x = store.position.x, y = store.position.y, store = true,
-             entity = store.name, item = item, count = amount}}, "take at " .. key_of(store)
+             entity = store.name, item = item, count = amount}}, "take at " .. key_of(store),
+           amount
   end
-  return {{type = "ensure_item", item = item, count = have + amount, no_pull = true,
-           raw = true}}, "mine"
+  local mined = math.min(amount, math.max(least_mined, M.MINE_CHUNK))
+  return {{type = "ensure_item", item = item, count = have + mined, no_pull = true,
+           raw = true}}, "mine", mined
+end
+
+-- Whether one of her open upkeep tasks still holds `item` reserved (she carries it for
+-- that task) AND would be picked before a fetch of priority p (the scheduler's
+-- effective priority from where she stands; a fetch's step has no position: its full
+-- p) -- that delivery comes first. (review: a block on any coal-holding task let a far
+-- one, outranked by every near build step, hold the fetch off while near burners died)
+local function delivers_first(cid, c, item, p)
+  local pos = c.entity.position
+  for _, task_id in pairs(storage.upkeep.tasks and storage.upkeep.tasks[cid] or {}) do
+    local t = storage.tasks[task_id]
+    local s = t and t.steps and t.steps[1]
+    if t and t.status == "active" and t.reserved and s and s.x and s.y
+       and (t.reserved[item] or 0) - ((t.consumed or {})[item] or 0) > 0
+       and priority.effective(t.priority or 1, u.distance(pos, {x = s.x, y = s.y})) >= p then
+      return true
+    end
+  end
+  return false
 end
 
 -- The expired left-out stores dropped; the ended fetch task forgotten -- a failed take
@@ -128,10 +160,10 @@ function M.update(cid, c, item, short, free, fills, acting, log_once, target_s)
     end
     return
   end
-  local want, t_min = 0, math.huge
+  local want, t_min, urgent = 0, math.huge, 0
   for _, n in ipairs(short) do
     want = want + n.want
-    t_min = math.min(t_min, n.t)
+    if n.t < t_min then t_min, urgent = n.t, n.want end
   end
   local S = math.max(1, want - math.max(0, free))
   local p = math.log(S, 2) + math.log(target_s / math.max(1, t_min), 2)
@@ -140,6 +172,10 @@ function M.update(cid, c, item, short, free, fills, acting, log_once, target_s)
     return
   end
   if b.off_until and game.tick < b.off_until then return end
+  -- what she carries for an open upkeep task the scheduler would pick first is delivered
+  -- first (review: a fetch has no position, its full priority beat every far fuel task
+  -- -- chunk after chunk mined while the burners waited)
+  if delivers_first(cid, c, item, p) then return end
   local inv = c.entity.get_main_inventory()
   local have = inv.get_item_count(item)
   local amount = math.min(math.max(S, M.STOCK - have), inv.get_insertable_count(item))
@@ -148,25 +184,32 @@ function M.update(cid, c, item, short, free, fills, acting, log_once, target_s)
              " but no room in her inventory to fetch it")
     return
   end
-  local steps, how = fetch_steps(c, item, amount, math.min(S, M.MIN_TAKE), have, fills, b.bad)
+  -- mining: the most urgent need's coal (a chunk of it at most -- an upkeep task takes a
+  -- part too; review: a boiler's whole slot room was ~50) and what keeps her coal floor
+  -- (free below 0), at least MINE_CHUNK (review: the whole shortage of several boilers
+  -- was ~100 again)
+  local least_mined = math.min(urgent, M.MINE_CHUNK) + math.max(0, -free)
+  local steps, how, got = fetch_steps(c, item, amount, least_mined, math.min(S, M.MIN_TAKE),
+                                      have, fills, b.bad)
   local r = ledger.submit_task(cid, steps, "upkeep", p)
   if r.task_id then
-    b.task_id = r.task_id
+    b.task_id, b.got = r.task_id, got
     -- (every one logged: one at a time, a failed one held off -- rare)
     log(string.format("[ai-companion] upkeep: fetching %d %s (task %d, %s; short %d, "
-                      .. "%.0f s left, p %.2f)", amount, item, r.task_id, how, S, t_min, p))
+                      .. "%.0f s left, p %.2f)", got, item, r.task_id, how, S, t_min, p))
   else
     u.log_error("upkeep: the fetch submit failed: " .. tostring(r.error), "upkeep")
   end
 end
 
--- The fetch task of cid for the status: {task_id, priority, how} or nil.
+-- The fetch task of cid for the status: {task_id, priority, how, count = the amount
+-- fetched} or nil.
 function M.status(cid)
   local b = storage.upkeep and storage.upkeep.fetch and storage.upkeep.fetch[cid]
   local t = b and b.task_id and storage.tasks[b.task_id]
   if not t or t.status ~= "active" then return nil end
   local s = t.steps[1]
-  return {task_id = b.task_id, priority = t.priority, how = s and s.type}
+  return {task_id = b.task_id, priority = t.priority, how = s and s.type, count = b.got}
 end
 
 -- Withdraw cid's fetch task (upkeep switched off), unless it is being acted on; an

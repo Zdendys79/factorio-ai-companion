@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.158
+  Changes:
+    - The upkeep's coal fetch mines by hand in chunks: at most max(min(the most urgent
+      need's coal, 25) + what keeps her coal floor, MINE_CHUNK 25) per fetch (a smoke:
+      she mined 80-100 coal, ~200 s, while the burners' tasks waited); a take from a
+      coal store still brings up to 100. No new fetch while one of her open upkeep
+      tasks holds coal reserved and would be picked before it (its effective priority
+      from where she stands at least the fetch's p) -- that delivery comes first (a
+      fetch has no position, so its full priority beat every far fuel task); a far one
+      whose effective priority is below the fetch's does not hold it off. The status's fetch names the
+      amount fetched (count), as does its log line.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.157
   Bugfixes:
     - A burner on a supply line delivering nothing (an empty moment on a sparse coal
