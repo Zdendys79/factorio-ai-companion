@@ -1,4 +1,24 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.161
+  Features:
+    - The task pool re-evaluates its choice while she walks to a step (factorio-ai
+      docs/architecture_roles.md, Zdendys: the queue reorders dynamically by the
+      priorities): every 60 ticks, from where she stands, a step whose effective
+      priority beats the walked-to one's by 1.05 times takes over -- the walk is
+      dropped, the walked-to task keeps its place (its cursor), the better step starts
+      the same tick -- only a step with a position of its own (a position-less one,
+      e.g. an ensure_item, counts as distance 0 and waits for her to be free, as
+      before). A step being acted on is never preempted. The count of such takeovers
+      is in the task pool's diag (walk_preempts); a dropped walk's ticks are not in
+      the task's step_ticks.
+  Bugfixes:
+    - The task pool's walk deadline was set from the straight distance alone; a route
+      round a lake is longer, and a smoke's upkeep walks timed out 63 and 103 tiles
+      from their targets. Once her route is found, the deadline grows to the route's
+      length (25 ticks a tile, at least 1800), never shrinks -- by the walk's first
+      route only (a stuck walk re-paths every ~150 ticks; later routes extending it
+      would make a walk that never ends).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.160
   Features:
     - /fac_building_bar <cid> <x> <y> <slots>: limit the chest at (x, y) to `slots`

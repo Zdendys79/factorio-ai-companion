@@ -369,6 +369,26 @@ script.on_event(defines.events.on_script_path_request_finished, function(ev)
   if ev.path and #ev.path > 0 then
     q.path = ev.path           -- array of {position=, needs_destroy_to_reach=}
     q.path_idx = 1
+    -- the task pool's walk to a step: its deadline was set from the straight distance;
+    -- a route round a lake is longer -- the deadline grows to the route's length (25
+    -- ticks a tile, as u.approach_deadline), never shrinks (factorio-ai: a smoke's
+    -- upkeep walks timed out 63 and 103 tiles from their targets). Only by the walk's
+    -- FIRST route (route_extend, set at the walk's start): a stuck walk re-paths every
+    -- ~150 ticks, and each later route would push the deadline out again -- a walk
+    -- that never ends (review)
+    local active = storage.active_step and storage.active_step[cid]
+    if active and active.state == "walking" and active.approach_deadline
+       and active.route_extend then
+      active.route_extend = nil
+      local len, prev = 0, ev.path[1].position
+      for i = 2, #ev.path do
+        local p = ev.path[i].position
+        len = len + u.distance(prev, p)
+        prev = p
+      end
+      local by_route = game.tick + math.max(1800, math.floor(len * 25))
+      if by_route > active.approach_deadline then active.approach_deadline = by_route end
+    end
     -- DIAGNOSTIC (task #49, 2026-07-09): needs_destroy_to_reach is stored above but was
     -- NEVER consulted anywhere in process_walking_queues -- if the pathfinder's route
     -- requires destroying something (a rock too big for the generic radius=2/4

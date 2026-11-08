@@ -208,6 +208,7 @@ M.get_task_status = ledger.get_task_status
 -- (~480 ticks at speed 16) and would otherwise rarely find a gap between them (review)
 local UPKEEP_YIELD_TICKS = 600
 
+-- (task_id, its effective priority) of the best step, or nil
 local function pick_next(cid, c)
   local best_task_id, best_eff = nil, -math.huge
   local refused = storage.busy_refused and storage.busy_refused[cid]
@@ -225,7 +226,31 @@ local function pick_next(cid, c)
       end
     end
   end
-  return best_task_id
+  return best_task_id, best_eff
+end
+
+-- While she walks to a step, the choice is re-evaluated every PREEMPT_CHECK_TICKS from
+-- where she stands (factorio-ai docs/architecture_roles.md, Zdendys: the queue changes
+-- its order dynamically by the priorities): a step whose effective priority beats the
+-- walked-to one's by PREEMPT_MARGIN times takes over -- the walk is dropped, the walked-to
+-- task keeps its place (its cursor), the next pick starts the better one. A step being
+-- acted on is never preempted. (the margin: no flapping between two near equals)
+local PREEMPT_CHECK_TICKS = 60
+local PREEMPT_MARGIN = 1.05
+
+-- Whether the walk of `active` (task t, its step) gives way to a better step now -- only
+-- a step with a position of its own (review: a position-less step counts as distance 0,
+-- its full priority -- an ensure_item / the coal fetch's mining, whose gather walks far
+-- itself, would drop every walk; it waits for her to be free, as before).
+local function walk_preempted(cid, c, active, t, step)
+  local best_id, best_eff = pick_next(cid, c)
+  if not best_id or best_id == active.task_id then return false end
+  local bt = storage.tasks[best_id]
+  if not step_target_pos(bt, bt.steps[bt.cursor]) then return false end
+  local pos = step_target_pos(t, step)
+  local cur = priority.effective(t.priority or priority.base(priority.DEFAULT_KIND),
+                                 pos and u.distance(c.entity.position, pos) or 0)
+  return best_eff > cur * PREEMPT_MARGIN
 end
 
 -- Re-check every active task's outstanding `needs` against CURRENT inventory
@@ -400,6 +425,15 @@ function M.tick()
         c.entity.walking_state = {walking = false}
         ledger.fail_task(active.task_id, "could not reach step target (walking timed out)")
         storage.active_step[cid] = nil
+        goto continue
+      elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t, step) then
+        -- a better step takes over (walk_preempted): the walk dropped, the task keeps its
+        -- cursor; the idle pick below starts the better one this same tick
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        storage.active_step[cid] = nil
+        storage.walk_preempts = storage.walk_preempts or {}
+        storage.walk_preempts[cid] = (storage.walk_preempts[cid] or 0) + 1
         goto continue
       else
         goto continue  -- still walking, check again next tick
@@ -904,9 +938,11 @@ function M.tick()
           -- cursor-advance sites) reflects the full wall-to-wall duration, not
           -- just the "acting" sub-phase. Never reset by the later
           -- walking->acting transition (M.tick just flips active.state in place).
+          -- route_extend: the walk's first route may extend the deadline to its length
+          -- (control.lua on_script_path_request_finished)
           storage.active_step[cid] = {task_id = task_id, state = "walking",
                                        approach_deadline = walk_deadline,
-                                       step_start_tick = game.tick}
+                                       step_start_tick = game.tick, route_extend = true}
         else
           storage.active_step[cid] = {task_id = task_id, state = "acting",
                                        step_start_tick = game.tick}
@@ -931,6 +967,7 @@ function M.get_diag(cid)
       candidate_retry_deadline = active.candidate_retry_deadline,
       candidates_cleared = active.candidates_cleared,
     } or nil,
+    walk_preempts = storage.walk_preempts and storage.walk_preempts[cid] or 0,
     walking_queue = storage.walking_queues and storage.walking_queues[cid] and {
       target = storage.walking_queues[cid].target,
     } or nil,
