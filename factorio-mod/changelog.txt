@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.174
+  Features:
+    - A build plan's piece may carry a recipe ({"recipe": NAME}): its place step is
+      followed by a set_recipe step -- the task pool's new hand step {type =
+      "set_recipe", x, y, entity, recipe} sets the recipe of her machine of that name
+      there (an assembler, a chemical plant, a refinery). The plan check (with her
+      force) refuses an unknown recipe, a piece that is no assembling machine, a recipe
+      the machine cannot make ("build plan: ...") and a recipe not unlocked yet ("build
+      plan recipe locked: ..." -- not the build's site's fault) -- before anything is
+      placed. What set_recipe takes out of a machine comes back to her inventory (the
+      rest spilled there).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.173
   Changes:
     - A build plan's fill items are ensured by an optional step: a fill item she cannot

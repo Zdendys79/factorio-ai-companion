@@ -16,7 +16,8 @@
 --      item she cannot get leaves the build standing -- the inserts put in what she
 --      has; the task's step_errors say so);
 --   5. one place step per piece, in the plan's order (role -> which: the task's ctx
---      records the placed position);
+--      records the placed position), a piece with a recipe followed by its
+--      set_recipe step (0.16.174: an assembler, a chemical plant, a refinery);
 --   6. one insert step per fill, optional (a fill that fails leaves the build
 --      standing; the task's step_errors say so) -- the fuel goes in only once the
 --      whole chain stands.
@@ -25,7 +26,7 @@
 --
 -- Plan JSON: {"name": "...", "resource": "iron-ore" | nil,
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
---               "secondary" | nil, "mirror": true | nil}, ...],
+--               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil}, ...],
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
@@ -46,8 +47,37 @@ local function placing_item(name)
   return name
 end
 
--- The plan checked; nil or the reason it is refused.
-local function check(plan)
+-- A piece's recipe checked (0.16.174 review): the recipe known, the piece an assembling
+-- machine (a furnace picks its recipe from its input, a silo's is fixed: set_recipe
+-- exists only for assembling machines), a crafting category of the machine one of the
+-- recipe's (2.1: recipe.categories, an array; crafting_categories, a dictionary), and
+-- -- with her force -- unlocked. nil, or the reason and whether it is only locked (a
+-- locked recipe is no fault of the plan's site: LOCKED_PREFIX).
+local function recipe_problem(p, force)
+  local r = prototypes.recipe[p.recipe]
+  if not r then return "unknown recipe " .. tostring(p.recipe) end
+  local e = prototypes.entity[p.entity]
+  if e.type ~= "assembling-machine" then
+    return p.entity .. " takes no recipe (not an assembling machine)"
+  end
+  local cats, fits = e.crafting_categories or {}, false
+  for _, cat in ipairs(r.categories or {}) do
+    if cats[cat] then fits = true end
+  end
+  if not fits then return p.entity .. " cannot make " .. p.recipe end
+  if force and not (force.recipes[p.recipe] and force.recipes[p.recipe].enabled) then
+    return p.recipe .. " not unlocked yet", true
+  end
+  return nil
+end
+
+-- the prefix of a plan refused for a recipe not unlocked yet -- not "build plan:" (a
+-- refusal the controller blames on the build's site: factorio-ai layout_plan_ops)
+M.LOCKED_PREFIX = "build plan recipe locked:"
+
+-- The plan checked; nil or the reason it is refused, and whether it is only a locked
+-- recipe. `force`: her force (recipes checked unlocked; nil: not checked).
+local function check(plan, force)
   if type(plan.pieces) ~= "table" or #plan.pieces == 0 then return "a plan needs pieces" end
   for i, p in ipairs(plan.pieces) do
     if type(p) ~= "table" or type(p.x) ~= "number" or type(p.y) ~= "number" then
@@ -64,6 +94,11 @@ local function check(plan)
     end
     if p.mirror ~= nil and type(p.mirror) ~= "boolean" then
       return "piece " .. i .. ": mirror must be true or false"
+    end
+    if p.recipe ~= nil then
+      if type(p.recipe) ~= "string" then return "piece " .. i .. ": recipe must be a name" end
+      local why, locked = recipe_problem(p, force)
+      if why then return "piece " .. i .. ": " .. why, locked end
     end
   end
   for i, f in ipairs(plan.fills or {}) do
@@ -92,11 +127,13 @@ local function check(plan)
   return nil
 end
 
--- The task's steps of `plan` (this file's header), or nil plus the reason it is refused.
-function M.expand(plan)
+-- The task's steps of `plan` (this file's header), or nil plus the reason it is refused
+-- ("build plan: ...", or LOCKED_PREFIX for a recipe not unlocked yet). `force`: her
+-- force (a piece's recipe checked unlocked).
+function M.expand(plan, force)
   if type(plan) ~= "table" then return nil, "a plan must be an object" end
-  local err = check(plan)
-  if err then return nil, "build plan: " .. err end
+  local err, locked = check(plan, force)
+  if err then return nil, (locked and M.LOCKED_PREFIX or "build plan:") .. " " .. err end
   local order, counts = {}, {}
   for _, p in ipairs(plan.pieces) do
     if not counts[p.entity] then order[#order + 1] = p.entity end
@@ -148,6 +185,11 @@ function M.expand(plan)
   for _, p in ipairs(plan.pieces) do
     steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
                          dir = p.dir or 0, which = p.role, mirror = p.mirror or nil}
+    -- (an assembler's recipe right after it stands -- 0.16.174)
+    if p.recipe then
+      steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,
+                           recipe = p.recipe}
+    end
   end
   for _, f in ipairs(plan.fills or {}) do
     steps[#steps + 1] = {type = "insert", x = f.x, y = f.y, entity = f.entity,

@@ -130,6 +130,59 @@ function M.swap_at_target(c, step, target, pos, have)
   return nil
 end
 
+-- {type="set_recipe", x=, y=, entity=NAME, recipe=NAME} (0.16.174): the recipe of her
+-- force's machine of that name nearest (x, y) within INSERT_RADIUS -- a build plan's
+-- assembler, chemical plant or refinery (its piece's "recipe", set right after it is
+-- placed: build_plan.lua). An unknown or still-locked recipe, or no such machine, fails
+-- the step.
+-- @return boolean ok, string|nil err
+function M.run_set_recipe(c, t, step)
+  local pos = step_target_pos(t, step)
+  if not pos then return false, "set_recipe: no target position resolved" end
+  if type(step.recipe) ~= "string" then return false, "set_recipe: recipe missing" end
+  local recipe = c.entity.force.recipes[step.recipe]
+  if not recipe then return false, "set_recipe: unknown recipe " .. step.recipe end
+  if not recipe.enabled then
+    return false, "set_recipe: " .. step.recipe .. " not unlocked yet"
+  end
+  local filter = {position = pos, radius = INSERT_RADIUS, force = c.entity.force}
+  if step.entity then filter.name = step.entity end
+  local target, best = nil, math.huge
+  for _, e in pairs(c.entity.surface.find_entities_filtered(filter)) do
+    if e.valid and e.type == "assembling-machine" then
+      local d = u.distance(e.position, pos)
+      if d < best then target, best = e, d end
+    end
+  end
+  if not target then
+    return false, "set_recipe: no " .. tostring(step.entity or "machine")
+                  .. " (an assembling machine) at the target"
+  end
+  local ok, removed = pcall(target.set_recipe, step.recipe)
+  if not ok then
+    u.log_error("set_recipe: " .. target.name .. ".set_recipe failed: " .. tostring(removed),
+                "task_pool")
+    return false, "set_recipe: the " .. target.name .. " refused " .. step.recipe
+  end
+  -- what the machine held for its old recipe comes back to her (the engine hands it to
+  -- the script, not back -- review); what does not fit her inventory is spilled there
+  for _, it in pairs(removed or {}) do
+    local got = c.entity.insert(it)
+    if got < it.count then
+      -- (no force: spilled items marked for deconstruction would call robots -- review)
+      c.entity.surface.spill_item_stack{position = target.position,
+        stack = {name = it.name, count = it.count - got, quality = it.quality}}
+      u.log_error(string.format("set_recipe: %d %s from the %s spilled (her inventory full)",
+                                it.count - got, it.name, target.name), "task_pool")
+    end
+  end
+  local now = target.get_recipe()
+  if not now or now.name ~= step.recipe then
+    return false, "set_recipe: the " .. target.name .. " did not take " .. step.recipe
+  end
+  return true, nil
+end
+
 -- {type="take", x=, y=, entity=NAME, item=NAME, count=N, store=true|nil}: up to N of
 -- the item from her force's chest of that name nearest (x, y) within INSERT_RADIUS into
 -- her inventory -- the upkeep's getting material (commands/upkeep_fetch.lua: a coal

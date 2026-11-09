@@ -86,7 +86,7 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     local kind, name = nil, nil
     if type(steps) == "table" and type(steps.plan) == "table" then
       kind, name = steps.kind, steps.plan.name
-      local expanded, err = build_plan.expand(steps.plan)
+      local expanded, err = build_plan.expand(steps.plan, c.entity.force)
       if not expanded then
         u.error_response(err .. " (companion #" .. id .. ")", "task_submit")
         return

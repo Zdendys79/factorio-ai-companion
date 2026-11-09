@@ -77,7 +77,12 @@
 -- with what she holds free -- her own reservation and what no other task reserved --
 -- since 0.16.173); once a fuel / insert step is passed, the task's need of its item is
 -- recomputed for the steps ahead (task_pool_ledger.step_passed).
--- The hand steps (remove, fuel, insert, take, fill, take_out) act only within her reach.
+--   {type="set_recipe", x=, y=, entity=NAME, recipe=NAME}
+--                                                       -> the recipe of the machine of that
+--                                                          name (a plan's piece's "recipe";
+--                                                          task_pool_steps.run_set_recipe)
+-- The hand steps (remove, fuel, insert, set_recipe, take, fill, take_out) act only within
+-- her reach.
 --
 -- ensure_item (2026-07-17, Zdendys's own architecture correction: procurement was
 -- kept OUT of this module by the ORIGINAL v1 design above, back when neither
@@ -169,8 +174,8 @@ local fetch = require("commands.task_pool_fetch")
 -- an ensure_item craft waits at most this long for her crafting queue to empty
 local CRAFT_QUEUE_WAIT_TICKS = 1800
 -- the steps that act on their target by hand, only within her reach (the acting state)
-local REACH_STEPS = {remove = true, fuel = true, insert = true, take = true, fill = true,
-                     take_out = true}
+local REACH_STEPS = {remove = true, fuel = true, insert = true, set_recipe = true,
+                     take = true, fill = true, take_out = true}
 
 local M = {}
 
@@ -184,6 +189,7 @@ local run_find_patch = steps.run_find_patch
 local run_verify_tile = steps.run_verify_tile
 local run_pick_orientation = steps.run_pick_orientation
 local run_insert = steps.run_insert
+local run_set_recipe = steps.run_set_recipe
 local run_take = steps.run_take
 
 -- ensure_item step (2026-07-17, Zdendys's own architecture correction -- see
@@ -576,8 +582,8 @@ function M.tick()
 
     if active.state == "acting" then
       local ok, err, result = true, nil, nil
-      -- A step that acts on a target by hand (remove, fuel, insert, take, fill, take_out)
-      -- acts only
+      -- A step that acts on a target by hand (remove, fuel, insert, set_recipe, take,
+      -- fill, take_out) acts only
       -- within her reach: the walk also ends when the walker gives it up (its queue
       -- dropped -- an entity across water), and the step would then reach from any
       -- distance (independent review: a pick-up mined from tens of tiles away). Out
@@ -880,6 +886,8 @@ function M.tick()
         end
       elseif step.type == "insert" then
         ok, err = run_insert(c, t, step)
+      elseif step.type == "set_recipe" then
+        ok, err = run_set_recipe(c, t, step)
       elseif step.type == "fill" then
         ok, err, result = machine_steps.run_fill(c, t, step)
       elseif step.type == "take_out" then
