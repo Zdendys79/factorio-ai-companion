@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.172
+  Features:
+    - A build plan's piece may be mirrored ({"mirror": true}): its place step places it
+      mirrored (a coal-row unit's burner drill tapping its line from the far side). A
+      mirror that is not true / false refuses the plan.
+    - fac_task_status says the type of the step at the task's cursor (cursor_type): the
+      one running, failed on, or stopped in by a cancel -- the controller blames a
+      build's spot only when the task got to it (verify_tile, place), not when its
+      parts could not be gathered.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.171
   Features:
     - Build plans take removals ({"removals": [{entity, x, y}]}: an upgrade's old

@@ -23,7 +23,7 @@
 --
 -- Plan JSON: {"name": "...", "resource": "iron-ore" | nil,
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
---               "secondary" | nil}, ...],
+--               "secondary" | nil, "mirror": true | nil}, ...],
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
@@ -59,6 +59,9 @@ local function check(plan)
     end
     if p.role ~= nil and not ROLES[p.role] then
       return "piece " .. i .. ": role must be primary or secondary"
+    end
+    if p.mirror ~= nil and type(p.mirror) ~= "boolean" then
+      return "piece " .. i .. ": mirror must be true or false"
     end
   end
   for i, f in ipairs(plan.fills or {}) do
@@ -139,7 +142,7 @@ function M.expand(plan)
   end
   for _, p in ipairs(plan.pieces) do
     steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
-                         dir = p.dir or 0, which = p.role}
+                         dir = p.dir or 0, which = p.role, mirror = p.mirror or nil}
   end
   for _, f in ipairs(plan.fills or {}) do
     steps[#steps + 1] = {type = "insert", x = f.x, y = f.y, entity = f.entity,

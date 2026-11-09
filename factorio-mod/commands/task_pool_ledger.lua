@@ -206,6 +206,10 @@ function M.get_task_status(task_id)
     status = t.status,
     error = t.error,
     cursor = t.cursor,
+    -- the type of the step at the cursor: the one running, the one a failed task
+    -- failed on, the one a cancelled task stopped in (nil once every step is done) --
+    -- a controller tells a spot that does not work from parts it could not gather
+    cursor_type = (t.steps[t.cursor] or {}).type,
     total_steps = #t.steps,
     needs = t.needs,
     ctx = t.ctx,  -- px/py/sx/sy/dir: useful for diagnosing placement failures externally
