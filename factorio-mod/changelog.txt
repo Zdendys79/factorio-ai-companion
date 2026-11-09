@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.180
+  Changes:
+    - ensure_item step option no_mine: a raw material only from the stores (and the wait
+      for its drills while one mines into a chest); where it would have to mine (no
+      drill of it with a chest) the step fails "would mine <item> ...", and the
+      controller mines itself (its own patch choice).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.179
   Changes:
     - ensure_item step option more = N: she is to hold what she holds of the item when

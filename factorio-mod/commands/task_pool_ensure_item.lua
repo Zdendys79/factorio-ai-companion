@@ -43,6 +43,14 @@ local ENSURE_ITEM_GATHER_MAX_ATTEMPTS = 5
 -- when no store holds it but a drill of it stands (no hand mining -- Zdendys
 -- 2026-11-09); as the smelt wait below
 local RAW_WAIT_TICKS = 14400
+-- the start of a no_mine step's failure when it would have to mine (the controller's
+-- cue to mine itself -- CompanionAPI.ensure_raw)
+local NO_MINE_REASON = "would mine "
+M.NO_MINE_REASON = NO_MINE_REASON
+-- the start of a step's failure after the drills' wait ran out (a drill of it with a
+-- chest stands -- no hand mining: the controller does not mine either)
+local DRILL_WAIT_REASON = "no store of "
+M.DRILL_WAIT_REASON = DRILL_WAIT_REASON
 -- SMELT_WAIT_TICKS (2026-07-27, Zdendys's own direct correction: "Companion neumi
 -- tavit za pochodu -- od toho jsou pece! Z materialu umi companion vyrabet dily a
 -- jednodussi budovy (vrtacky, pece, pasy, podavace atd.)" -- "The companion isn't
@@ -249,9 +257,17 @@ function M.start_ensure_item_action(c, cid, t)
               .. "mining: waiting for its drills (more drills with chests are needed)")
         end
         if game.tick < deadline then return "wait" end
-        return nil, "no store of " .. need.item .. " within " .. RAW_WAIT_TICKS
+        return nil, DRILL_WAIT_REASON .. need.item .. " within " .. RAW_WAIT_TICKS
           .. " ticks while a drill of it stands (no hand mining -- more drills with "
           .. "chests are needed)"
+      end
+      -- (no_mine: the controller mines itself while no drill of it can be had -- its
+      -- own patch choice, e.g. away from its drills' ore; the step only fetches)
+      if need.no_mine then
+        -- (the controller's hand mining is a shortage too -- review: it was unseen)
+        Stores.report(cid, need.item, deficit, true)
+        return nil, NO_MINE_REASON .. need.item .. " (no store holds it, no drill of it "
+          .. "with a chest)"
       end
       Stores.report(cid, need.item, deficit, true)
     end

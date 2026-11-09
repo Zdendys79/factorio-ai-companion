@@ -72,7 +72,9 @@
 --     chest can be had -- task_pool_ensure_item.lua); options: no_pull=true (nothing
 --     taken from places -- mining only), raw=true (N counts all she holds of NAME,
 --     not what other tasks have not reserved) -- both the upkeep's getting material;
---     more=M (N is what she holds of NAME when the step starts plus M)
+--     more=M (N is what she holds of NAME when the step starts plus M); no_mine=true
+--     (a raw material only from the stores / the drills' wait -- where it would have
+--     to mine, the step fails "would mine NAME ...": the controller mines itself)
 -- Any step: optional=true -- when it fails, its error goes into the task's step_errors
 -- and the task goes on with the next step (task_pool_ledger.step_failed). An optional
 -- fuel / insert step does not hold its task back for its items (task_ready: it runs
@@ -738,7 +740,7 @@ function M.tick()
             count = c.entity.get_main_inventory().get_item_count(step.item) + step.more
           end
           t.ctx.ensure_stack = {{item = step.item, count = count, no_pull = step.no_pull,
-                                 raw = step.raw}}
+                                 raw = step.raw, no_mine = step.no_mine}}
         end
         local kind, err2 = ensure_item.start_ensure_item_action(c, cid, t)
         if kind == "satisfied" then
