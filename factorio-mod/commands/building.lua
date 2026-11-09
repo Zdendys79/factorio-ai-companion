@@ -534,7 +534,10 @@ end)
 -- fluid pipeline of pipes and pipe-to-ground pairs instead (pathfind.lua pipe mode); the
 -- same _status command reports it. "plan" (2026-11-06) only plans: the reply is
 -- {planned, tiles, need_belt, need_underground, expansions, extent} or {error = "no path",
--- reason, expansions}, and nothing is started.
+-- reason, expansions}, and nothing is started. "partial" (factorio-ai 2026-11-09, Zdendys:
+-- a long belt's material comes in step by step -- build what can be built, go on later):
+-- short of items, the route's first part the items cover is laid (queues_belt.lua
+-- partial_prefix); its status then answers partial = true and route_tiles.
 commands.add_command("fac_belt_connect_start", nil, function(cmd)
   u.safe_command(function()
     local five = "^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)"
@@ -546,11 +549,14 @@ commands.add_command("fac_belt_connect_start", nil, function(cmd)
     if not (fx and fy and tx and ty) then u.error_response("Invalid coordinates"); return end
     -- option words (0.16.142): "pure" and/or "underground" (pathfind.lua find_path);
     -- "pipe" (0.16.144) without the belt options -- they mean nothing for a pipeline;
-    -- "plan" (0.16.145) with any of them: only the route's need, nothing started
+    -- "plan" (0.16.145) with any of them: only the route's need, nothing started;
+    -- "partial": the part the items cover when they do not cover the whole route
     local opts = {}
+    local known = {pure = true, underground = true, pipe = true, plan = true, partial = true}
     for word in string.gmatch(args[6] or "", "%S+") do
-      if word ~= "pure" and word ~= "underground" and word ~= "pipe" and word ~= "plan" then
-        u.error_response("Unknown option '" .. word .. "' (only 'pure', 'underground', 'pipe', 'plan')"); return
+      if not known[word] then
+        u.error_response("Unknown option '" .. word
+          .. "' (only 'pure', 'underground', 'pipe', 'plan', 'partial')"); return
       end
       opts[word] = true
     end

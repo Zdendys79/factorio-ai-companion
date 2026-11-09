@@ -58,6 +58,40 @@ local STEP_OFF_DISTANCE = 3
 -- fails (each one with a new path request, a new deadline and a stand spot reach - 2
 -- short of the tile, on her side)
 local APPROACH_RETRIES = 2
+-- the fewest tiles a partial route lays (fewer: the old "Insufficient" answer -- a
+-- handful of belts is no step worth a walk)
+M.PARTIAL_MIN_TILES = 5
+
+-- The route's first part the items cover (opts.partial -- factorio-ai 2026-11-09,
+-- Zdendys: a long belt's material comes in step by step; build what can be built, go
+-- on later): nodes in order while a plain one has an item and an underground entrance
+-- has two (itself and its exit, which directly follows it); never ending on an entrance
+-- (its exit would be missing). The kept nodes keep their directions: the last one faces
+-- the rest of the route, whose next part starts in front of it. Returns the prefix and
+-- its plain / underground counts.
+function M.partial_prefix(path, have_plain, have_underground)
+  local out, plain, under = {}, 0, 0
+  local i = 1
+  while i <= #path do
+    local node = path[i]
+    if node.underground == "entrance" then
+      local exit = path[i + 1]
+      if not exit or under + 2 > have_underground then break end
+      out[#out + 1] = node
+      out[#out + 1] = exit
+      under = under + 2
+      i = i + 2
+    elseif node.underground then
+      break                -- an exit without its entrance: never at a prefix's start
+    else
+      if plain + 1 > have_plain then break end
+      out[#out + 1] = node
+      plain = plain + 1
+      i = i + 1
+    end
+  end
+  return out, plain, under
+end
 
 -- opts (optional, 2026-11-06): {pure = true} -- the route avoids every tile something
 -- from outside would put items onto or take them from (pathfind.lua, fed_tiles): a plate
@@ -158,6 +192,13 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   local inv = c.entity.get_main_inventory()
   local have_belt = inv.get_item_count(items.plain)
   local have_underground = inv.get_item_count(items.underground)
+  local route_tiles, partial = #path, false
+  if opts and opts.partial and (have_belt < need_belt or have_underground < need_underground) then
+    local prefix, p_plain, p_under = M.partial_prefix(path, have_belt, have_underground)
+    if #prefix >= M.PARTIAL_MIN_TILES then
+      path, need_belt, need_underground, partial = prefix, p_plain, p_under, true
+    end
+  end
   if have_belt < need_belt or have_underground < need_underground then
     -- the field names stay "belt" for both kinds (one status shape for the callers)
     return {
@@ -169,13 +210,16 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
 
   storage.belt_queues[cid] = {path = path, idx = 1, tiles_placed = 0, state = "placing",
     pipe = pipe,
+    -- a partial route (opts.partial): the whole route's length, for its status
+    partial = partial, route_tiles = route_tiles,
     -- run_start_tick/run_end_tick (2026-07-28, action-timing instrumentation,
     -- batch 2): this domain already has a "done"/"failed" freeze grace period
     -- (get_belt_connect_status consumes it exactly once before deleting), so
     -- run_end_tick (set at each terminal transition in tick_belt_queues) is
     -- reliably readable by the next poll.
     run_start_tick = game.tick}
-  return {started = true, tiles = #path, need_belt = need_belt, need_underground = need_underground}
+  return {started = true, tiles = #path, need_belt = need_belt, need_underground = need_underground,
+          partial = partial or nil, route_tiles = partial and route_tiles or nil}
 end
 
 function M.tick_belt_queues()
@@ -352,7 +396,9 @@ function M.get_belt_connect_status(cid)
   if not q then return {active = false} end
   if q.state == "done" then
     storage.belt_queues[cid] = nil
+    -- (partial: only the route's first part was laid -- nil-safe for an older entry)
     return {active = false, connected = true, tiles = q.tiles_placed,
+      partial = q.partial or nil, route_tiles = q.partial and q.route_tiles or nil,
       run_start_tick = q.run_start_tick, run_end_tick = q.run_end_tick}
   end
   if q.state == "failed" then

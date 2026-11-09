@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.181
+  Changes:
+    - fac_belt_connect_start option "partial": short of belt items, the route's first part
+      the items cover is laid (at least 5 tiles, an underground pair only whole) instead
+      of the "Insufficient belt items" answer; the status says partial = true and
+      route_tiles (the whole route). The last laid belt faces the rest of the route, so
+      a later route from the tile in front of it goes on.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.180
   Changes:
     - ensure_item step option no_mine: a raw material only from the stores (and the wait
