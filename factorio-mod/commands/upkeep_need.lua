@@ -15,10 +15,9 @@ M.SCAN_RADIUS = 150
 -- drops below it, and a scan plus a walk fit in it while she is free)
 M.LINE_DRY_S = 60
 -- below this share of a stack her stock of an item is short (the stock upkeep's
--- trigger; the feed upkeep leaves her that much of a smelted input)
+-- trigger)
 M.STOCK_LOW_SHARE = 0.5
--- what her stock of an item is filled up to (Zdendys: 70 % of a stack); a hand-fed
--- furnace whose product she holds this much of is not fed (the feed upkeep)
+-- what her stock of an item is filled up to (Zdendys: 70 % of a stack)
 M.STOCK_TARGET_SHARE = 0.7
 -- an underfed machine (its line delivering nothing) is logged at most once this long
 M.UNDERFED_LOG_TICKS = 18000

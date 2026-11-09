@@ -48,13 +48,6 @@ function M.get(e)
   return reg.recipe
 end
 
--- Whether the controller registered a recipe (or OWN) for the furnace `e` -- its word
--- for good, not a loop's "loading" alone.
-function M.registered(e)
-  local reg = reg_entry(e)
-  return reg ~= nil and reg.recipe ~= nil
-end
-
 -- Whether the controller marked the furnace `e` its own (for good, or loading).
 function M.own(e)
   return M.get(e) == M.OWN

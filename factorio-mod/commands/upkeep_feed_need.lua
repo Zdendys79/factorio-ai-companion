@@ -4,16 +4,20 @@
 -- the line that feeds it, a wrong item jamming its output.
 local u = require("commands.init")
 local lines = require("commands.upkeep_lines")
-local F = require("commands.upkeep_feeds")
 local N = require("commands.upkeep_need")
 local Regs = require("commands.upkeep_feed_regs")
 
 local M = {}
 
 M.TARGET_S = 300
-M.MIN_BATCH = 5
 M.LINE_RECHECK_TICKS = 600        -- a furnace seen fed by a line: judged again after this
 M.OUTPUT_STOP_SHARE = 0.5         -- an output this full (of a stack): no feed
+-- Zdendys 2026-11-09: a device whose input holds more than this share of a stack is not
+-- fed; below it, it is fed to full
+M.FEED_SKIP_SHARE = 0.5
+-- the least priority of a feed below FEED_SKIP_SHARE (its input may still last longer
+-- than TARGET_S -- a slow recipe: it is a task, the lowest)
+M.MIN_P = 1.01
 
 function M.pos_key(e)
   return string.format("%.1f,%.1f", e.position.x, e.position.y)
@@ -101,14 +105,6 @@ local function timing(e, recipe, item, amount)
   return secs, math.min(M.TARGET_S, stack / amount * secs), stack
 end
 
--- The furnace recipe's main item product, or nil.
-local function product_of(recipe)
-  for _, p in pairs(recipe.products) do
-    if p.type == "item" then return p.name end
-  end
-  return nil
-end
-
 -- Whether the furnace `e` stands out of the feed now: a full output, no power, an
 -- output nobody takes from (OUTPUT_STOP_SHARE), or without fuel beyond the fuel upkeep's
 -- reach of her.
@@ -124,24 +120,10 @@ local function idle_by_choice(e, c)
   return N.output_fill(e) >= M.OUTPUT_STOP_SHARE
 end
 
--- Whether nobody wants more of the furnace's product: she holds STOCK_TARGET_SHARE of a
--- stack of it unreserved (review: plates a waiting task had reserved counted, and the
--- build that needed more waited for a furnace never fed) and no inserter takes it from
--- the output to a line (review of the smoke: hand feeding one stone furnace by mining
--- its ore takes most of her time -- the controller fed it only while its plates were
--- short of its target; Zdendys: her stock is 0.5-1 stack). Judged only for a furnace
--- running low (the inserter check is an area search).
-local function unwanted(e, c, recipe)
-  local product = product_of(recipe)
-  local proto = product and prototypes.item[product]
-  return proto ~= nil
-         and M.free_of(c, product) >= N.STOCK_TARGET_SHARE * proto.stack_size
-         and not F.picked_from(e)
-end
-
--- A furnace's feed need {key, e, item, p, t, want, raw, line, why} or nil. `b`: the
--- companion's books {down, lines, mine, picks}; `seen`: the keys judged this scan;
--- `c`: the companion (her position, her free stock of a smelted input).
+-- A furnace's feed need {key, e, item, p, t, want, gap (what it lacks to full), raw,
+-- line, why} or nil. `b`: the companion's books {down, lines, mine, picks, filling};
+-- `seen`: the keys judged this scan; `c`: the companion (her position, her free stock
+-- of a smelted input).
 local function feed_need(e, recipe, b, seen, c)
   local item, amount = input_of(recipe)
   if not item then return nil end
@@ -156,21 +138,25 @@ local function feed_need(e, recipe, b, seen, c)
   local inv = e.get_inventory(defines.inventory.crafter_input)
   if not inv then return nil end
   local held = inv.get_item_count(item)
-  local t = held / amount * secs
-  local p = math.log(target / math.max(1, t), 2)
-  p = 1 + (p - 1) * (1 - 0.9 * N.output_fill(e))
-  if p <= 1 or unwanted(e, c, recipe) then
-    -- (well stocked, or nobody wants more: an earlier dry mark is stale -- review: a
-    -- much later single dry scan counted as two in a row)
+  -- (a fill in chunks -- her ore mined MINE_CHUNK at a time -- goes on to full past half
+  -- a stack: b.filling, set by the feed when a task brought less than full -- review)
+  if held >= stack then b.filling[key] = nil end
+  if held > M.FEED_SKIP_SHARE * stack and not b.filling[key] then
+    -- (above half a stack: not fed -- an earlier dry mark is stale -- review: a much
+    -- later single dry scan counted as two in a row)
     b.down[key] = nil
     return nil
   end
+  local t = held / amount * secs
+  local p = math.log(target / math.max(1, t), 2)
+  p = math.max(M.MIN_P, 1 + (p - 1) * (1 - 0.9 * N.output_fill(e)))
   local seen_line = b.lines[key]
   if seen_line and game.tick - seen_line < M.LINE_RECHECK_TICKS then return nil end
   b.lines[key] = nil
   local line, why = lines.input_line(e, item, b.picks)
   if line == "line" then
-    b.down[key] = nil
+    -- (a line feeds it now: no fill of hers goes on -- review)
+    b.down[key], b.filling[key] = nil, nil
     b.lines[key] = game.tick
     return nil
   elseif line == "dry" then
@@ -181,16 +167,16 @@ local function feed_need(e, recipe, b, seen, c)
     b.down[key] = nil
   end
   local raw = is_raw(item)
-  local want = math.min(stack - held,
-                        math.max(M.MIN_BATCH, math.ceil(target / secs * amount) - held))
+  -- to full (Zdendys 2026-11-09: "always to full" -- no batch floor, none of her stock
+  -- kept back); a smelted input (a steel furnace's plates) from her free stock (an open
+  -- task keeps what it reserved)
+  local want = stack - held
   if not raw and not b.mine[key] then
-    local keep = math.floor(N.STOCK_LOW_SHARE * stack)
-    want = math.min(want, M.free_of(c, item) - keep)
-    if want < M.MIN_BATCH then return nil end
+    want = math.min(want, M.free_of(c, item))
   end
   if want < 1 then return nil end
-  return {key = key, e = e, item = item, p = p, t = t, want = want, raw = raw,
-          line = line, why = why and table.concat(why, " ") or ""}
+  return {key = key, e = e, item = item, p = p, t = t, want = want, gap = stack - held,
+          raw = raw, line = line, why = why and table.concat(why, " ") or ""}
 end
 
 -- The furnace `e`'s need: a clear of a wrong output item, a feed, or nil. Registers the

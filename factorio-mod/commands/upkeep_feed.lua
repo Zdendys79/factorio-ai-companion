@@ -10,36 +10,35 @@
 -- - what it smelts: get_recipe(), else previous_recipe (live 2.1: a furnace that ran
 --   keeps it -- {name, quality}), else the controller's registration (a fresh hand-fed
 --   furnace); unknown: not served, listed;
--- - t = held / amount per craft x energy per craft / crafting speed (its seconds of
---   input); target = min(TARGET_S, what a full input stack lasts); p = log2(target /
---   max(1, t)), lowered by its output's fill as the fuel need is (1 + (p-1)(1-0.9 fill));
---   no need with an output OUTPUT_STOP_SHARE full (nobody takes its product -- review:
---   furnaces left behind were fed by hand for good), while she holds STOCK_TARGET_SHARE
---   of a stack of its product unreserved and no inserter takes it to a line (nobody
---   wants more -- hand feeding is most of her time; judged for p > 1 only), or (an
---   electric one) no power. A
---   burner one without fuel is fed only within the fuel upkeep's SCAN_RADIUS of her
---   (it fuels it then; live: a fresh one is no_fuel) -- beyond it nothing would;
--- - then (only for p > 1 -- the line check is the expensive part) a line that delivers
---   the item (upkeep_lines.input_line) makes it not hers -- that verdict kept
---   LINE_RECHECK_TICKS (review: a line check per inserter-fed furnace every scan); one
---   delivering nothing at two scans in a row makes it hers once its input lasts under
---   LINE_DRY_S, logged as underfed;
--- - hand feeding is an emergency (rule 6): she feeds at most MAX_HAND_PER_ITEM furnaces
---   of one input item by hand -- the ones registered by the controller and those she
---   fed lately first; the rest is listed unfed and logged (a line for them is the
---   controller's; review: a plate row on a mined-out patch would have been fed ore
---   mined by hand, furnace by furnace);
--- - a feed task (kind "upkeep", priority p): an "insert" of the item to the target (at
---   least MIN_BATCH, capped by the room) -- a need of the task, so it reserves what it
---   carries. A raw input (a resource's product: ore) she does not stock is mined first
---   by an ensure_item step (no_pull: no chest near her is emptied -- an ore chest feeds
---   a line), at most MINE_CHUNK at a time (a whole slot took longer than the task
---   pool's give-up); a smelted input (a steel furnace's plates) comes from her free
---   stock only, leaving her STOCK_LOW_SHARE of a stack (review: else the stock upkeep
---   and the feed passed her plates to and fro), no new task under MIN_BATCH (an open
---   one keeps what it reserved: review -- its own reservation made it "no longer
---   needed" every other scan);
+-- - Zdendys 2026-11-09 (factorio-ai docs/architecture_roles.md Decided 5): a furnace
+--   whose input holds more than FEED_SKIP_SHARE (half) of a stack is not fed; below it,
+--   it is fed to full. t = held / amount per craft x energy per craft / crafting speed
+--   (its seconds of input); target = min(TARGET_S, what a full input stack lasts);
+--   p = log2(target / max(1, t)), lowered by its output's fill as the fuel need is
+--   (1 + (p-1)(1-0.9 fill)), at least MIN_P (a slow recipe's half stack may last longer
+--   than the target: a task still, the lowest); no need with an output
+--   OUTPUT_STOP_SHARE full (nobody takes its product -- review: furnaces left behind
+--   were fed by hand for good), or (an electric one) no power. A burner one without fuel
+--   is fed only within the fuel upkeep's SCAN_RADIUS of her (it fuels it then; live: a
+--   fresh one is no_fuel) -- beyond it nothing would;
+-- - then a line that delivers the item (upkeep_lines.input_line) makes it not hers --
+--   that verdict kept LINE_RECHECK_TICKS (review: a line check per inserter-fed furnace
+--   every scan); one delivering nothing at two scans in a row makes it hers once its
+--   input lasts under LINE_DRY_S, logged as underfed;
+-- - no bound on how many furnaces she feeds by hand (Zdendys: "always to full" -- the
+--   earlier cap of 4 per input item, the stop while she held 70 % of the product and
+--   the half stack a smelted input kept back for her are gone): the list of the
+--   furnaces she feeds by hand goes to the controller, which plans their lines;
+-- - a feed task (kind "upkeep", priority p): an "insert" of the item to full (capped by
+--   the room) -- a need of the task, so it reserves what it carries. A raw input (a
+--   resource's product: ore) she does not stock is mined first by an ensure_item step
+--   (no_pull: no chest near her is emptied -- an ore chest feeds a line), at most
+--   MINE_CHUNK at a time (a whole slot took longer than the task pool's give-up); a
+--   smelted input (a steel furnace's plates) comes from her free stock (an open one
+--   keeps what it reserved: review -- its own reservation made it "no longer needed"
+--   every other scan). A task that brings less than full (a chunk of ore, the plates
+--   she has) marks the furnace filling: its next feeds go on past half a stack until
+--   it is full (review: chunks of 20 left an ore furnace at ~40 of 50 for good);
 -- - a wrong item in its output (one its recipe does not make: the furnace is stuck): a
 --   clear task -- a take_out of it when her inventory has room, priority log2(target)
 --   (a stuck furnace makes nothing: as one with no input left).
@@ -49,7 +48,8 @@
 -- x16), every failure logged. Every furnace fed by hand is listed once its feed is done
 -- (rule 6: an emergency until a belt feeds it -- the controller plans one).
 -- (what a furnace needs -- its recipe, seconds left, line, wrong item: the constants
--- TARGET_S, MIN_BATCH, LINE_RECHECK_TICKS, OUTPUT_STOP_SHARE -- is upkeep_feed_need.lua)
+-- TARGET_S, FEED_SKIP_SHARE, MIN_P, LINE_RECHECK_TICKS, OUTPUT_STOP_SHARE -- is
+-- upkeep_feed_need.lua)
 local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
 local task_pool = require("commands.task_pool")
@@ -62,32 +62,36 @@ local M = {}
 
 M.MAX_TASKS = 2
 M.MINE_CHUNK = 20
-M.MAX_HAND_PER_ITEM = 4           -- furnaces of one input item she feeds by hand
 local FAIL_BACKOFF_TICKS = 3600
 local HAND_KEEP_TICKS = 18000     -- a furnace fed by hand stays listed this long
 -- its log books (pruned by the upkeep with its own: commands/upkeep.lua LOG_BOOKS;
 -- "underfed" is the fuel upkeep's book, shared)
-M.LOG_BOOKS = {noline = HAND_KEEP_TICKS, handcap = HAND_KEEP_TICKS}
+M.LOG_BOOKS = {noline = HAND_KEEP_TICKS}
 
--- her books kept per surface (review: a visit to another surface wiped them -- the hand
--- cap's order and the back-off doubling were lost)
-local SURFACE_BOOKS = {"down", "lines", "backoff", "hand"}
+-- her books kept per surface (review: a visit to another surface wiped them -- the
+-- hand-fed list and the back-off doubling were lost)
+local SURFACE_BOOKS = {"down", "lines", "backoff", "hand", "filling"}
 
 function M.init()
   -- storage.upkeep.feed = {tasks = {[cid] = {[key] = task_id}}; per surface index s:
   --   down = {[cid] = {[s] = {[key] = first tick its line delivered nothing}}}, lines =
   --   {[cid] = {[s] = {[key] = tick a line was seen}}}, backoff = {[cid] = {[s] = {[key] =
-  --   {until_tick, n}}}}, hand = {[cid] = {[s] = {[pos] = {item, tick}}}}; unknown /
-  --   unfed = {[cid] = {[pos] = tick / item}} (rebuilt each scan; scanned = {[cid] = the
-  --   surface index of her last scan}), picks = {[unit number]
+  --   {until_tick, n}}}}, hand = {[cid] = {[s] = {[pos] = {item, tick}}}}, filling =
+  --   {[cid] = {[s] = {[key] = true: a fill in chunks goes on to full}}}; unknown =
+  --   {[cid] = {[pos] = tick}} (rebuilt each scan; scanned = {[cid] = the surface index
+  --   of her last scan}), picks = {[unit number]
   --   = {tick, items}: what an inserter's pickup last held -- upkeep_lines},
   --   books_version}; the registrations: upkeep_feed_regs.lua
   storage.upkeep = storage.upkeep or {}
   local f = storage.upkeep.feed or {}
-  for _, k in ipairs({"tasks", "down", "lines", "backoff", "hand", "unknown", "unfed",
+  for _, k in ipairs({"tasks", "down", "lines", "backoff", "hand", "filling", "unknown",
                       "scanned", "picks"}) do
     f[k] = f[k] or {}
   end
+  -- (the hand cap's list of furnaces left unfed and its log book -- before 0.16.176:
+  -- gone with the cap)
+  f.unfed = nil
+  if storage.upkeep.logs then storage.upkeep.logs.handcap = nil end
   -- (the first drafts kept these books without the surface level -- only in test saves;
   -- they are transient, started afresh)
   if f.books_version ~= 2 then
@@ -150,7 +154,7 @@ end
 
 -- Why the feed need `n` is hers, logged (once per its book's interval): no line into
 -- the machine, or one that delivers nothing -- only when its feed task goes out
--- (review: a capped or held-off one logged "fed by hand" while nothing fed it).
+-- (review: a held-off one logged "fed by hand" while nothing fed it).
 local function log_why(cid, n, log_once)
   if n.clear then return end
   local at = pos_key(n.e)
@@ -166,11 +170,11 @@ local function log_why(cid, n, log_once)
   end
 end
 
--- The steps of a feed or clear task for the need `n`.
+-- The steps of a feed or clear task for the need `n`, and the count it puts in.
 local function steps_of(c, n)
   local x, y = n.e.position.x, n.e.position.y
   if n.clear then
-    return {{type = "take_out", x = x, y = y, item = n.item, count = n.want}}
+    return {{type = "take_out", x = x, y = y, item = n.item, count = n.want}}, n.want
   end
   local steps, count = {}, n.want
   local free = Need.free_of(c, n.item)
@@ -181,40 +185,7 @@ local function steps_of(c, n)
   end
   steps[#steps + 1] = {type = "insert", x = x, y = y, entity = n.e.name, item = n.item,
                        count = count}
-  return steps
-end
-
--- The furnaces she feeds by hand now, per input item: {[item] = {[pos] = true}} -- fed
--- lately (`hand`) or with an open feed task (`mine`).
-local function hand_fed(hand, mine)
-  local by_item = {}
-  local function add(pos, item)
-    by_item[item] = by_item[item] or {}
-    by_item[item][pos] = true
-  end
-  for pos, v in pairs(hand) do add(pos, v.item) end
-  for key in pairs(mine) do
-    local pos, item = key:match("^(.-)|(.+)$")
-    if pos and item ~= "clear" then add(pos, item) end
-  end
-  return by_item
-end
-
--- Whether the need `n` may be fed by hand (MAX_HAND_PER_ITEM -- module header; a
--- registration ranks first but is no exception -- review: the furnaces a loop of the
--- controller's had registered were hand-fed without a bound once their drills mined
--- out); a new furnace taken in is counted in `fed`.
-local function within_cap(n, fed)
-  if n.clear then return true end
-  local pos = pos_key(n.e)
-  local set = fed[n.item] or {}
-  fed[n.item] = set
-  if set[pos] then return true end
-  local count = 0
-  for _ in pairs(set) do count = count + 1 end
-  if count >= M.MAX_HAND_PER_ITEM then return false end
-  set[pos] = true
-  return true
+  return steps, count
 end
 
 -- The feed scan of one companion (module header). `acting(task_id)`: whether that task
@@ -225,13 +196,13 @@ function M.scan(cid, c, acting, log_once)
   local s = surface.index
   local mine = per(f.tasks, cid)
   local b = {down = per_surface(f.down, cid, s), lines = per_surface(f.lines, cid, s),
-             mine = mine, picks = f.picks}
+             mine = mine, picks = f.picks, filling = per_surface(f.filling, cid, s)}
   local off, hand = per_surface(f.backoff, cid, s), per_surface(f.hand, cid, s)
   -- (rebuilt every scan: a furnace gone leaves no entry behind; the status shows them
   -- only for the surface they were made on -- review)
-  f.unknown[cid], f.unfed[cid] = {}, {}
+  f.unknown[cid] = {}
   f.scanned[cid] = s
-  local unknown, unfed = f.unknown[cid], f.unfed[cid]
+  local unknown = f.unknown[cid]
   prune(mine, off, hand)
   local needs, by_key, seen, present, seen_pos, owned = {}, {}, {}, {}, {}, {}
   local inv = c.entity.get_main_inventory()
@@ -250,39 +221,15 @@ function M.scan(cid, c, acting, log_once)
   -- (book entries of furnaces gone are dropped -- a line fed again was dropped by
   -- feed_need; a registration only by its own surface's scan: review -- a visit to
   -- another surface wiped every registration)
-  for _, book in pairs({b.down, b.lines, off}) do
+  for _, book in pairs({b.down, b.lines, off, b.filling}) do
     for key in pairs(book) do
       if not seen[key] then book[key] = nil end
     end
   end
   Regs.prune(surface.index, present)
-  -- the hand cap, in its own order: the registered and the lately fed first, then by
-  -- priority
-  local function rank(n)
-    return (Regs.registered(n.e) or hand[pos_key(n.e)]) and 1 or 0
-  end
-  local by_rank = {}
-  for i, n in ipairs(needs) do by_rank[i] = n end
-  table.sort(by_rank, function(a, b2)
-    local ra, rb = rank(a), rank(b2)
-    if ra ~= rb then return ra > rb end
-    return a.p > b2.p
-  end)
-  -- (a furnace gone holds no cap slot -- review)
+  -- (a furnace gone leaves the hand-fed list -- review)
   for pos in pairs(hand) do
     if not seen_pos[pos] then hand[pos] = nil end
-  end
-  local fed = hand_fed(hand, mine)
-  for _, n in ipairs(by_rank) do
-    if not within_cap(n, fed) then
-      n.capped = true
-      by_key[n.key] = nil
-      unfed[pos_key(n.e)] = n.item
-      log_once("handcap", cid, n.key, HAND_KEEP_TICKS, string.format(
-        "upkeep feed: the %s at %s needs %s by hand, but she feeds %d such furnaces by "
-        .. "hand already -- not fed (a line for it is the controller's)", n.e.name,
-        pos_key(n.e), n.item, M.MAX_HAND_PER_ITEM))
-    end
   end
   -- the task slots by priority
   table.sort(needs, function(a, b2) return a.p > b2.p end)
@@ -290,9 +237,13 @@ function M.scan(cid, c, acting, log_once)
   for _ in pairs(mine) do open = open + 1 end
   for _, n in ipairs(needs) do
     local held_off = off[n.key] and game.tick < off[n.key][1]
-    if not n.capped and not mine[n.key] and not held_off and open < M.MAX_TASKS then
-      local r = ledger.submit_task(cid, steps_of(c, n), "upkeep", n.p)
+    if not mine[n.key] and not held_off and open < M.MAX_TASKS then
+      local steps, count = steps_of(c, n)
+      local r = ledger.submit_task(cid, steps, "upkeep", n.p)
       if r.task_id then
+        -- (less than full this time -- ore mined in a chunk, plates she has: the fill
+        -- goes on past half a stack until it is full)
+        if not n.clear then b.filling[n.key] = count < n.gap or nil end
         -- (why it is hers -- logged only for a feed that goes out: review)
         log_why(cid, n, log_once)
         mine[n.key] = r.task_id
@@ -347,14 +298,14 @@ local function on_her_surface(f, cid)
 end
 
 -- The feed upkeep's part of the status -- her current surface's: its open tasks, the
--- furnaces fed by hand lately (rule 6), the furnaces whose input it cannot tell, the
--- furnaces over the hand cap (unfed: [{at, item}]), the feeds held off after failures
--- (held_off: [{at, item, until_tick}] -- the controller's own feeding steps in for its
--- furnaces meanwhile; review: another surface's entries matched furnaces here by their
--- position).
+-- furnaces fed by hand lately (rule 6; hand_fed: [{at, item, tick}] -- the tick of the
+-- last feed), the furnaces whose input it cannot tell, the feeds held off after
+-- failures (held_off: [{at, item, until_tick}] -- the controller's own feeding steps in
+-- for its furnaces meanwhile; review: another surface's entries matched furnaces here
+-- by their position).
 function M.status(cid)
   local f = (storage.upkeep and storage.upkeep.feed) or {}
-  local out = {tasks = {}, hand_fed = {}, unknown = {}, unfed = {}, held_off = {}}
+  local out = {tasks = {}, hand_fed = {}, unknown = {}, held_off = {}}
   for key, v in pairs(on_her_surface(f.backoff, cid)) do
     local pos, item
     if type(key) == "string" then pos, item = key:match("^(.-)|(.+)$") end
@@ -378,9 +329,6 @@ function M.status(cid)
   for pos in pairs((here and f.unknown and f.unknown[cid]) or {}) do
     out.unknown[#out.unknown + 1] = pos
   end
-  for pos, item in pairs((here and f.unfed and f.unfed[cid]) or {}) do
-    out.unfed[#out.unfed + 1] = {at = pos, item = item}
-  end
   return out
 end
 
@@ -401,7 +349,7 @@ function M.stop(cid, acting)
       f.tasks[cid][key] = nil
     end
   end
-  for _, k in ipairs({"down", "lines", "backoff", "hand", "unknown", "unfed", "scanned"}) do
+  for _, k in ipairs({"down", "lines", "backoff", "hand", "filling", "unknown", "scanned"}) do
     f[k][cid] = nil
   end
 end

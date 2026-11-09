@@ -34,9 +34,9 @@ function M.status(cid)
   out.blocked_by_coal_wait = blocked ~= nil and game.tick - blocked < recent
   -- getting the coal she lacks: {task_id, priority, how = "take" / "ensure_item"}
   out.fetch = Fetch.status(cid)
-  -- feeding: {tasks, hand_fed (rule 6: what she feeds by hand), unknown (furnaces whose
-  -- input it cannot tell), unfed (over the hand cap), held_off (after failures)} --
-  -- commands/upkeep_feed.lua
+  -- feeding: {tasks, hand_fed (rule 6: what she feeds by hand, each with the tick of its
+  -- last feed), unknown (furnaces whose input it cannot tell), held_off (after
+  -- failures)} -- commands/upkeep_feed.lua
   out.feed = Feed.status(cid)
   -- keeping her stock: [{item, task_id, priority, at}] -- commands/upkeep_stock.lua
   out.stock = Stock.status(cid)

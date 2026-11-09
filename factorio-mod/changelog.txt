@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.176
+  Changes:
+    - The feed upkeep (a furnace no line feeds) follows the project owner's rules: a
+      furnace whose input holds more than half a stack is not fed; below that it is fed
+      to full (its whole input stack; a smelted input from her free stock, none of it
+      kept back; ore she mines in chunks of 20 -- a fill that brought less than full
+      goes on past half a stack until the furnace is full). Gone: the bound of 4
+      hand-fed furnaces per input item (and its "unfed" list in /fac_upkeep's status),
+      the stop while she held 70 % of a stack of the product, the half stack a smelted
+      input kept back for her and the 5-item batch floor. A feed below half a stack is a task whatever its time left (its
+      priority at least 1.01, still ranked by the time its input lasts and the
+      distance). The status's hand-fed list carries each furnace's last-fed tick.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.175
   Bugfixes:
     - A build next to moving belts no longer fails "cannot stay within reach of the build
