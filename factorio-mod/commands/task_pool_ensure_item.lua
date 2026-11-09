@@ -1,6 +1,6 @@
 -- AI Companion -- task pool ensure_item procurement engine (2026-07-19 size-refactor
 -- split out of task_pool.lua). This is the fully self-contained piece of that file:
--- recipe resolution, nearby-container extraction, and the recursive gather/craft/chop
+-- recipe resolution, fetching from the stores, and the recursive gather/craft/chop
 -- resolution loop for a single "ensure_item" step's ctx.ensure_stack. Zero calls to/from
 -- the step-handler cluster or the scheduler tick, which both stay in task_pool.lua,
 -- which requires this module and calls into it for start_ensure_item_action below.
@@ -8,7 +8,7 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local fetch = require("commands.task_pool_fetch")
-local F = require("commands.upkeep_feeds")
+local Stores = require("commands.supply_stores")
 
 local M = {}
 
@@ -39,13 +39,10 @@ local WOOD_CHOP_MAX_TREES = 10      -- mirrors _chop_wood's own max_trees bound 
 -- shape, applied to the gather path too instead of leaving it as the one
 -- ensure_item sub-path with no give-up condition.
 local ENSURE_ITEM_GATHER_MAX_ATTEMPTS = 5
--- ENSURE_ITEM_CONTAINER_SEARCH_RADIUS (2026-07-18, Zdendys live-caught:
--- ensure_item_bypasses_nearby_chest bug -- watched the companion hand-mine
--- stone right next to a FULL 800-stone chest): mirrors fac_building_empty's
--- own radius=5 chest-extraction convention (building.lua) -- a proven,
--- already-tuned distance for "container sitting right next to whatever the
--- companion is currently doing", not a new guess.
-local ENSURE_ITEM_CONTAINER_SEARCH_RADIUS = 5
+-- RAW_WAIT_TICKS: how long a step short of a raw material waits for its drills' chests
+-- when no store holds it but a drill of it stands (no hand mining -- Zdendys
+-- 2026-11-09); as the smelt wait below
+local RAW_WAIT_TICKS = 14400
 -- SMELT_WAIT_TICKS (2026-07-27, Zdendys's own direct correction: "Companion neumi
 -- tavit za pochodu -- od toho jsou pece! Z materialu umi companion vyrabet dily a
 -- jednodussi budovy (vrtacky, pece, pasy, podavace atd.)" -- "The companion isn't
@@ -91,54 +88,6 @@ local function resolve_recipe(item)
   return {ingredients = ingredients, yield = yield, hand_craftable = hand_craftable}
 end
 
--- Extracts up to `deficit` of `item` from the NEAREST container (chest) holding it
--- within ENSURE_ITEM_CONTAINER_SEARCH_RADIUS that no inserter picks from, inserting
--- straight into the companion's
--- own inventory. Returns the amount actually pulled (0 if nothing nearby has
--- any). Mirrors fac_building_empty's own chest-extraction idiom exactly
--- (building.lua's defines.inventory.chest lookup + nearest-not-first tie-
--- break -- a resource tile can sit exactly as close as a real container in a
--- tight layout, same class of bug that fix already closed once elsewhere).
---
--- Fix for ensure_item_bypasses_nearby_chest_2026_07_18 (Zdendys live-caught:
--- watched the companion hand-mine stone right next to a FULL 800-stone
--- chest) -- called from start_ensure_item_action's raw-resource branch below,
--- BEFORE falling back to queues.start_gather's hand-mining path.
-local function pull_from_nearby_container(c, item, deficit)
-  if deficit <= 0 then return 0 end
-  local candidates = c.entity.surface.find_entities_filtered{
-    position = c.entity.position, radius = ENSURE_ITEM_CONTAINER_SEARCH_RADIUS,
-    type = {"container", "logistic-container"}, force = c.entity.force}
-  -- the nearest one HOLDING it that no inserter picks from (docs/mod_upkeep_supply.md
-  -- D: a fuel chest or a line's chest feeds something; the nearest chest without the
-  -- item made a second one beside it never tried)
-  local target, bd, inv, av = nil, math.huge, nil, 0
-  for _, e in ipairs(candidates) do
-    local ei = e.valid and e.get_inventory(defines.inventory.chest)
-    local n = ei and ei.get_item_count(item) or 0
-    if n > 0 then
-      local dx, dy = e.position.x - c.entity.position.x, e.position.y - c.entity.position.y
-      local d = dx * dx + dy * dy
-      if d < bd and not F.picked_from(e) then bd, target, inv, av = d, e, ei, n end
-    end
-  end
-  if not target then return 0 end
-  local rm = inv.remove{name = item, count = math.min(deficit, av)}
-  if rm <= 0 then return 0 end
-  -- insert()'s own return value MUST be used, not assumed to equal `rm`
-  -- (independent-review finding, 2026-07-18): if the companion's own
-  -- inventory can't hold the full amount (e.g. genuinely full), insert()
-  -- silently places less -- returning `rm` unchecked would both lose the
-  -- un-placed remainder (already removed from the chest, never actually
-  -- held) AND let the caller's deficit arithmetic report "satisfied" when
-  -- the companion doesn't actually have enough on hand yet. Put back
-  -- whatever didn't fit instead of losing it.
-  local ins = c.entity.insert{name = item, count = rm}
-  if ins < rm then
-    inv.insert{name = item, count = rm - ins}
-  end
-  return ins
-end
 
 -- Starts exactly ONE concrete action toward satisfying the need at the TOP of
 -- t.ctx.ensure_stack (item=, count=) for companion c/cid. Returns a `kind`
@@ -149,7 +98,8 @@ end
 -- "satisfied" means the top-of-stack need is ALREADY met (checked fresh here,
 -- not assumed) -- pop it and reassess without starting anything. "fetch": a walk to
 -- a place holding a smelted ingredient was set up (task_pool_fetch.begin_walk);
--- "wait": a furnace may still make it (the smelt wait) -- reassess next pass.
+-- "wait": a furnace may still make it (the smelt wait), or a drill of a raw material
+-- (no store holds it, no hand mining: the raw wait) -- reassess next pass.
 function M.start_ensure_item_action(c, cid, t)
   local stack = t.ctx.ensure_stack
   local need = stack[#stack]
@@ -180,11 +130,25 @@ function M.start_ensure_item_action(c, cid, t)
     return inv.get_item_count(item) - math.max(0, others)
   end
   if held(need.item) >= need.count then
+    -- (a build shortage it reported is over -- review: it stayed listed KEEP_TICKS; its
+    -- own wait first, so that it does not count as one still waiting)
+    if t.ctx.raw_wait_deadline then t.ctx.raw_wait_deadline[need.item] = nil end
+    Stores.clear(cid, need.item)
     return "satisfied"
   end
   if #stack > ENSURE_ITEM_MAX_DEPTH then
     return nil, "ensure_item recursion depth exceeded for " .. need.item ..
       " (likely a recipe-chain or naming problem, not a normal case)"
+  end
+  if need.item == "wood" and not need.no_pull then
+    -- (Zdendys 2026-11-09: wood first from the stores -- the supply chests --, only then
+    -- chopping)
+    local fetched, got = fetch.start(c, t, need.item, need.count - held(need.item))
+    if fetched == "fetch" then return "fetch" end
+    if fetched == "taken" and got > 0 then
+      if held(need.item) >= need.count then return "satisfied" end
+      return "push"
+    end
   end
   if need.item == "wood" then
     -- Wood has NO gather()-compatible resource-tile path (trees are type="tree",
@@ -249,17 +213,47 @@ function M.start_ensure_item_action(c, cid, t)
     -- forever with no failure signal. Counts per-item so a task needing several
     -- DIFFERENT raw resources tracks each independently.
     local deficit = need.count - held(need.item)
-    -- Check a nearby container FIRST (2026-07-18 fix, see pull_from_nearby_
-    -- container's own docstring above) -- only fall back to hand-mining for
-    -- whatever a chest didn't already cover. no_pull (the step's option -- the
-    -- upkeep's getting material, which chose mining because no chest near is hers to
-    -- take from: review -- the pull emptied the fuel chest she had just filled) skips it.
-    local pulled = need.no_pull and 0 or pull_from_nearby_container(c, need.item, deficit)
-    if pulled > 0 then
-      deficit = deficit - pulled
-    end
-    if deficit <= 0 then
-      return "satisfied"
+    -- Zdendys 2026-11-09 (factorio-ai docs/no_hand_mining.md): from the stores first --
+    -- the nearest place holding it she may take from, a drill's chest too
+    -- (task_pool_fetch: within her reach at once, farther by a walk; the old 5-tile pull
+    -- watched her hand-mine stone beside a full 800-stone chest farther off); with none
+    -- and a drill of it to be had (commands/supply_stores.lua) she mines nothing: the
+    -- shortage is reported for the controller and she waits RAW_WAIT_TICKS for its
+    -- drills, then the step fails. Only while no drill of it can be had she mines it by
+    -- hand (that shortage is reported too). no_pull (the step's option -- the upkeep's
+    -- getting material, which chose mining after its own store search) skips both.
+    if not need.no_pull then
+      -- (no room for it: no store search -- review: a full inventory was reported as a
+      -- supply shortage and a coal pair built for it)
+      if inv.get_insertable_count(need.item) <= 0 then
+        return nil, "no room in her inventory for " .. need.item
+      end
+      t.ctx.raw_wait_deadline = t.ctx.raw_wait_deadline or {}
+      local fetched, got = fetch.start(c, t, need.item, deficit)
+      -- (only a take starts the wait anew -- here, or a fetch walk's, task_pool_fetch.poll:
+      -- review, a walk to an unreachable chest that reset it kept the wait for ever)
+      if fetched == "fetch" then return "fetch" end
+      if fetched == "taken" and got > 0 then
+        t.ctx.raw_wait_deadline[need.item] = nil
+        if held(need.item) >= need.count then return "satisfied" end
+        return "push"      -- (the rest from the next place: judged again next tick)
+      end
+      if Stores.can_be_had(cid, c, need.item) then
+        Stores.report(cid, need.item, deficit)
+        local deadline = t.ctx.raw_wait_deadline[need.item]
+        if not deadline then
+          deadline = game.tick + RAW_WAIT_TICKS
+          t.ctx.raw_wait_deadline[need.item] = deadline
+          log("[ai-companion] [SUPPLY_SHORT] ensure_item: short of " .. deficit .. " "
+              .. need.item .. ", no store holds it and a drill of it stands -- no hand "
+              .. "mining: waiting for its drills (more drills with chests are needed)")
+        end
+        if game.tick < deadline then return "wait" end
+        return nil, "no store of " .. need.item .. " within " .. RAW_WAIT_TICKS
+          .. " ticks while a drill of it stands (no hand mining -- more drills with "
+          .. "chests are needed)"
+      end
+      Stores.report(cid, need.item, deficit, true)
     end
     t.ctx.gather_attempts = t.ctx.gather_attempts or {}
     t.ctx.gather_attempts[need.item] = (t.ctx.gather_attempts[need.item] or 0) + 1

@@ -3,6 +3,7 @@
 -- coal fetch, the feed upkeep and the stock upkeep.
 local upkeep = require("commands.upkeep")
 local Fetch = require("commands.upkeep_fetch")
+local Stores = require("commands.supply_stores")
 local Feed = require("commands.upkeep_feed")
 local Stock = require("commands.upkeep_stock")
 
@@ -39,6 +40,9 @@ function M.status(cid)
   -- tick, mining = true} -- mined by hand lately, no such drill; or nil. Python plans
   -- more drills with chests
   out.supply_short = Fetch.supply_short(cid)
+  -- a build's raw material short (commands/supply_stores.lua): {[item] = {short, tick,
+  -- mining = true when she mined it by hand for want of a drill with a chest}}
+  out.build_short = Stores.shorts(cid)
   -- feeding: {tasks, hand_fed (rule 6: what she feeds by hand, each with the tick of its
   -- last feed), unknown (furnaces whose input it cannot tell), held_off (after
   -- failures)} -- commands/upkeep_feed.lua

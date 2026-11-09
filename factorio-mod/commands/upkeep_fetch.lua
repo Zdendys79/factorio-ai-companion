@@ -19,7 +19,8 @@
 --   CALM_TAKE) else -- taken by a "take" step. Zdendys 2026-11-09: no material is
 --   mined by hand once a drill of it can be had -- with a coal drill of her force
 --   within SOURCE_RADIUS mining now (working, at low power, its output full) into a
---   plain chest, and no store, she mines nothing: the shortage is logged
+--   plain chest that is a store of it (commands/supply_stores.lua can_be_had), and no
+--   store, she mines nothing: the shortage is logged
 --   ([SUPPLY_SHORT], once per SUPPLY_LOG_TICKS) and kept for the status (supply_short,
 --   the next search SHORT_HOLD_TICKS later -- Python plans more coal drills with
 --   chests). Only while no such drill can be had (before the first, every one dry or
@@ -43,6 +44,7 @@ local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
 local priority = require("commands.priority")
 local F = require("commands.upkeep_feeds")
+local Stores = require("commands.supply_stores")
 
 local M = {}
 
@@ -57,12 +59,8 @@ M.MINE_CHUNK = 25
 M.MIN_TAKE = 5
 M.CALM_TAKE = 25
 -- (the drills' chests are her only source once a drill stands: a far one too -- a walk
--- of 300 tiles ~40 s)
-M.SOURCE_RADIUS = 300
--- whether a drill of the item can be had is read again after this many ticks (a search
--- within SOURCE_RADIUS), or once she moved this many tiles
-M.DRILL_RECHECK_TICKS = 3600
-M.DRILL_RECHECK_MOVE = 50
+-- of 300 tiles ~40 s; whether a drill can be had: commands/supply_stores.lua)
+M.SOURCE_RADIUS = Stores.RADIUS
 -- the [SUPPLY_SHORT] log at most this often (its book pruned by commands/upkeep.lua)
 local SUPPLY_LOG_TICKS = 18000
 M.LOG_BOOKS = {supply = SUPPLY_LOG_TICKS}
@@ -77,51 +75,17 @@ local function key_of(e)
 end
 
 -- storage.upkeep.fetch = {[cid] = {task_id = id or nil, off_until = tick or nil,
---   bad = {[store key] = tick until it is left out}, drill = {[item] = {tick, yes, x,
---   y}}: whether a drill of the item could be had at tick, from where she stood,
---   supply_short = {item, short, tick} or nil: the last search found no store and mined nothing, short_until = the tick of
---   the next search after it, mined = {item, short, tick}: her last mining fetch}}
+--   bad = {[store key] = tick until it is left out}, supply_short = {item, short,
+--   tick} or nil: the last search found no store and mined nothing, short_until = the
+--   tick of the next search after it, mined = {item, short, tick}: her last mining
+--   fetch} (a `drill` book of 0.16.177's first form is left unread)
 local function book(cid)
   storage.upkeep.fetch = storage.upkeep.fetch or {}
   storage.upkeep.fetch[cid] = storage.upkeep.fetch[cid] or {}
   local b = storage.upkeep.fetch[cid]
   b.bad = b.bad or {}
-  b.drill = b.drill or {}
+  b.drill = nil
   return b
-end
-
--- the drill statuses in which a drill makes its material (a full chest is a store too)
-local MINING = {[defines.entity_status.working] = true,
-                [defines.entity_status.low_power] = true,
-                [defines.entity_status.waiting_for_space_in_destination] = true}
-
--- Whether a drill of `item` can be had: one of her force within SOURCE_RADIUS of her
--- mining it now (working, at low power, or its output full -- reviews: with every coal
--- pair dry, or electric drills without power, she mined nothing and nothing revived
--- them) into a plain chest (a store -- review: a chestless pair or a drill onto a belt
--- is no source for her, so the shortage it left could never end); read again after
--- DRILL_RECHECK_TICKS, or once she moved DRILL_RECHECK_MOVE tiles from where it was
--- read -- review).
-local function drill_stands(b, c, item)
-  local pos = c.entity.position
-  local seen = b.drill[item]
-  if seen and game.tick - seen.tick < M.DRILL_RECHECK_TICKS and seen.x
-     and u.distance(pos, {x = seen.x, y = seen.y}) < M.DRILL_RECHECK_MOVE then
-    return seen.yes
-  end
-  local yes = false
-  local surface, force = c.entity.surface, c.entity.force
-  for _, d in pairs(surface.find_entities_filtered{type = "mining-drill",
-      position = pos, radius = M.SOURCE_RADIUS, force = force}) do
-    if d.valid and MINING[d.status] and F.mines_item(d, item)
-       and #surface.find_entities_filtered{position = d.drop_position, type = STORE_TYPES,
-                                           force = force, limit = 1} > 0 then
-      yes = true
-      break
-    end
-  end
-  b.drill[item] = {tick = game.tick, yes = yes, x = pos.x, y = pos.y}
-  return yes
 end
 
 -- The coal store within SOURCE_RADIUS of her to fetch from (`fills`: the keys of the
@@ -295,7 +259,7 @@ function M.update(cid, c, item, short, free, fills, acting, log_once, target_s)
                 or math.min(amount, M.CALM_TAKE)
   local steps, how, got = fetch_steps(c, item, amount, least_mined, least,
                                       math.max(S, least), have, fills, b.bad,
-                                      not drill_stands(b, c, item))
+                                      not Stores.can_be_had(cid, c, item))
   if not steps then
     b.short_until = game.tick + M.SHORT_HOLD_TICKS
     -- (a store holding enough is only left out after a failed take: no shortage --

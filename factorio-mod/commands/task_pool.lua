@@ -65,12 +65,13 @@
 --                                                          item} in step_results
 --   {type="read_drop_position", which=/x,y/ref=, entity=NAME, save_as=NAME}
 --                                                       -> ctx.saved[save_as]
---   {type="ensure_item", item=NAME, count=N}            -> gathers/crafts NAME
+--   {type="ensure_item", item=NAME, count=N}            -> gets / crafts NAME
 --                                                          up to N in inventory
 --                                                          BEFORE the next step
---     options: no_pull=true (no chest within 5 tiles is emptied first -- mining
---     only), raw=true (N counts all she holds of NAME, not what other tasks
---     have not reserved) -- both the upkeep's getting material
+--     (a raw material from the stores first, mined only while no drill of it with a
+--     chest can be had -- task_pool_ensure_item.lua); options: no_pull=true (nothing
+--     taken from places -- mining only), raw=true (N counts all she holds of NAME,
+--     not what other tasks have not reserved) -- both the upkeep's getting material
 -- Any step: optional=true -- when it fails, its error goes into the task's step_errors
 -- and the task goes on with the next step (task_pool_ledger.step_failed). An optional
 -- fuel / insert step does not hold its task back for its items (task_ready: it runs
@@ -286,12 +287,29 @@ end
 
 -- (task_id or M.CONTROLLER, its effective priority, its position) of the best step, or nil.
 -- `record`: the idle dispatch's pick -- written to the pick log when that is on
--- (task_pool_pick_log.lua; not the walk takeover's checks every PREEMPT_CHECK_TICKS)
-local function pick_next(cid, c, record)
+-- (task_pool_pick_log.lua; not the walk takeover's checks every PREEMPT_CHECK_TICKS);
+-- `exclude`: a task id left out (the waiting step's own task -- wait_preempted); a task
+-- whose waiting step gave way is left out until its wait_held_until -- unless no other
+-- task is ready (review: she stood idle the rest of the hold).
+local function pick_next(cid, c, record, exclude)
   local best_task_id, best_eff, best_pos = nil, -math.huge, nil
+  local held_id, held_eff, held_pos = nil, -math.huge, nil
   local cands = record and picklog.enabled() and {} or nil
   for task_id, t in pairs(storage.tasks) do
-    if t.cid == cid and t.status == "active" and task_ready(t) and t.cursor <= #t.steps then
+    local ready = t.cid == cid and t.status == "active" and task_ready(t)
+                  and t.cursor <= #t.steps and task_id ~= exclude
+    if ready and t.wait_held_until and game.tick < t.wait_held_until then
+      local eff = task_eff(t, c)
+      if cands then
+        cands[#cands + 1] = {id = task_id, kind = t.kind, p = t.priority or 0,
+                             age = game.tick - (t.created_tick or game.tick), d = 0,
+                             eff = eff, held = true}
+      end
+      if eff > held_eff or (eff == held_eff and (not held_id or task_id < held_id)) then
+        held_id, held_eff = task_id, eff
+        held_pos = step_target_pos(t, t.steps[t.cursor])
+      end
+    elseif ready then
       local eff = task_eff(t, c)
       if cands then
         local pos = targeting.rank_pos(t)
@@ -306,6 +324,12 @@ local function pick_next(cid, c, record)
     end
   end
   local req_eff, req_pos = requests.effective(cid, c)
+  -- (a held task only when neither another task nor the controller's command is there --
+  -- live: chosen before the command was weighed, the yielded wait came back at once and
+  -- the queued fuel round never started)
+  if not best_task_id and held_id and not req_eff then
+    best_task_id, best_eff, best_pos = held_id, held_eff, held_pos
+  end
   local chosen = best_task_id
   if req_eff and req_eff >= best_eff then       -- (a tie: the controller's command)
     chosen, best_eff, best_pos = M.CONTROLLER, req_eff, req_pos
@@ -331,6 +355,8 @@ end
 -- acted on is never preempted. (the margin: no flapping between two near equals)
 local PREEMPT_CHECK_TICKS = 60
 local PREEMPT_MARGIN = 1.05
+-- a waiting step that gave way is left out of the picks this long (t.wait_held_until)
+local WAIT_YIELD_TICKS = 600
 
 -- Whether the walk of `active` (task t, its step) gives way to a better step now -- only
 -- a step with a position of its own (review: a position-less step counts as distance 0,
@@ -340,6 +366,18 @@ local function walk_preempted(cid, c, active, t)
   local best_id, best_eff, best_pos = pick_next(cid, c)
   if not best_id or best_id == active.task_id or not best_pos then return false end
   return best_eff > task_eff(t, c) * PREEMPT_MARGIN
+end
+
+-- Whether a step waiting (an ensure_item's smelt or raw wait -- it does nothing until a
+-- furnace or the drills deliver) gives way: any other ready step with a position of its
+-- own (one doing real work -- live: a dismantle never beat the position-less wait's full
+-- priority under walk_preempted, the wait held her 60 s; position-less steps would only
+-- pass a wait between two waiting tasks).
+local function wait_preempted(cid, c, active)
+  local best_id, _, best_pos = pick_next(cid, c, nil, active.task_id)
+  -- (the controller's direct command too -- a fuel / gather command has no position:
+  -- review, else it waited behind the whole wait and hid the steps that would take over)
+  return best_id == M.CONTROLLER or (best_id ~= nil and best_pos ~= nil)
 end
 
 -- Re-check every active task's outstanding `needs` against CURRENT inventory
@@ -728,9 +766,21 @@ function M.tick()
         elseif kind == "wait" then
           -- Waiting on an already-running furnace to top up a smelted ingredient
           -- (2026-07-27, see task_pool_ensure_item.lua's own SMELT_WAIT_TICKS
-          -- docstring) -- no state change, same as "push": reassess next tick
-          -- until either the stock arrives (kind flips to "satisfied") or the
-          -- bounded wait deadline passes (kind flips to a genuine failure).
+          -- docstring), or on the drills' chests for a raw one (RAW_WAIT_TICKS) -- no
+          -- state change, same as "push": reassess next tick until either the stock
+          -- arrives (kind flips to "satisfied") or the bounded wait deadline passes
+          -- (kind flips to a genuine failure). Any other ready step with a position takes
+          -- the wait over (wait_preempted -- review: a 14400-tick wait held her while a
+          -- hand-fed boiler ran dry); the task keeps its cursor and its ctx (the
+          -- wait's deadline), the next pick starts the other one.
+          if game.tick % PREEMPT_CHECK_TICKS == 0 and wait_preempted(cid, c, active) then
+            storage.active_step[cid] = nil
+            -- (held out of the picks WAIT_YIELD_TICKS: else its full priority picked it
+            -- again at once and the other step never started)
+            t.wait_held_until = game.tick + WAIT_YIELD_TICKS
+            storage.wait_yields = storage.wait_yields or {}
+            storage.wait_yields[cid] = (storage.wait_yields[cid] or 0) + 1
+          end
         elseif kind == "gather" or kind == "craft" then
           active.state = "ensuring"
           active.ensuring_kind = kind

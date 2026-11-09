@@ -31,9 +31,11 @@
 --   furnaces she feeds by hand goes to the controller, which plans their lines;
 -- - a feed task (kind "upkeep", priority p): an "insert" of the item to full (capped by
 --   the room) -- a need of the task, so it reserves what it carries. A raw input (a
---   resource's product: ore) she does not stock is mined first by an ensure_item step
---   (no_pull: no chest near her is emptied -- an ore chest feeds a line), at most
---   MINE_CHUNK at a time (a whole slot took longer than the task pool's give-up); a
+--   resource's product: ore) she does not stock is got first by an ensure_item step --
+--   from the stores (Zdendys 2026-11-09: no hand mining once a drill of it with a
+--   chest can be had; an ore chest an inserter picks from feeds a line -- never one:
+--   upkeep_feeds.store_share), else mined --, at most MINE_CHUNK at a time (a whole slot
+--   took longer than the task pool's give-up); a
 --   smelted input (a steel furnace's plates) comes from her free stock (an open one
 --   keeps what it reserved: review -- its own reservation made it "no longer needed"
 --   every other scan). A task that brings less than full (a chunk of ore, the plates
@@ -179,9 +181,10 @@ local function steps_of(c, n)
   local steps, count = {}, n.want
   local free = Need.free_of(c, n.item)
   if n.raw and free < count then
-    -- (mined in a chunk: at most MINE_CHUNK more than she has free)
+    -- (got in a chunk -- from a store, else mined: at most MINE_CHUNK more than she has
+    -- free)
     count = math.min(count, math.max(0, free) + M.MINE_CHUNK)
-    steps[1] = {type = "ensure_item", item = n.item, count = count, no_pull = true}
+    steps[1] = {type = "ensure_item", item = n.item, count = count}
   end
   steps[#steps + 1] = {type = "insert", x = x, y = y, entity = n.e.name, item = n.item,
                        count = count}

@@ -4,7 +4,8 @@
 -- While on, every pick of the task pool's idle dispatch writes one line to the log:
 --   [pick] tick=<t> cid=<c> chosen=<id|controller> | <candidate>; <candidate>; ...
 -- a candidate: <id>:<kind> p=<base priority> age=<ticks> d=<tiles> eff=<effective>
--- (the controller's pending command: controller:<kind>). Read-only otherwise.
+-- [held] (held: a waiting step that gave way, picked only when nothing else is there;
+-- the controller's pending command: controller:<kind>). Read-only otherwise.
 local u = require("commands.init")
 
 local M = {}
@@ -17,12 +18,12 @@ end
 -- One pick's line.
 -- @param cid number the companion
 -- @param chosen any the picked task id or the controller's mark
--- @param candidates table [{id, kind, p, age, d, eff}]
+-- @param candidates table [{id, kind, p, age, d, eff, held}]
 function M.write(cid, chosen, candidates)
   local parts = {}
   for _, k in ipairs(candidates) do
-    parts[#parts + 1] = string.format("%s:%s p=%.3f age=%d d=%.1f eff=%.4f", tostring(k.id),
-      tostring(k.kind), k.p, k.age, k.d, k.eff)
+    parts[#parts + 1] = string.format("%s:%s p=%.3f age=%d d=%.1f eff=%.4f%s", tostring(k.id),
+      tostring(k.kind), k.p, k.age, k.d, k.eff, k.held and " held" or "")
   end
   log(string.format("[pick] tick=%d cid=%d chosen=%s | %s", game.tick, cid, tostring(chosen),
                     table.concat(parts, "; ")))

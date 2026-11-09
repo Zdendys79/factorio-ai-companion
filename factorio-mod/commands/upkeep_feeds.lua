@@ -408,18 +408,26 @@ end
 M.DRILL_CHEST_KEEP = 10
 
 -- How many of `item` she may take from the chest as a store (Zdendys 2026-11-09: her
--- material comes from the drills' supply chests, not from hand mining): a drill's
--- output chest -- all of it, less DRILL_CHEST_KEEP when an inserter also picks from it;
--- any other chest -- all of it unless an inserter picks from it (it feeds a machine or
--- a line: none).
+-- material comes from the drills' supply chests, not from hand mining): a chest no
+-- inserter picks from -- all of it; a fuel drill's output chest an inserter also picks
+-- from (a coal pair's, a coal-row unit's: it fuels the partner) -- all of it less
+-- DRILL_CHEST_KEEP; any other chest an inserter picks from (it feeds a machine or a
+-- line -- an ore chest feeding a furnace: review) -- none.
 function M.store_share(chest, item)
   local n = chest.get_item_count(item)
   if n <= 0 then return 0 end
-  local picked = M.picked_from(chest)
-  if drill_fills(chest, item) then
-    return picked and math.max(0, n - M.DRILL_CHEST_KEEP) or n
+  if not M.picked_from(chest) then return n end
+  if is_fuel(item) and drill_fills(chest, item) then
+    return math.max(0, n - M.DRILL_CHEST_KEEP)
   end
-  return picked and 0 or n
+  return 0
+end
+
+-- Whether the chest is a store of `item` at all (store_share's rule, whatever it holds
+-- now): no inserter picks from it, or it is a fuel drill's output chest.
+function M.is_store(chest, item)
+  if not M.picked_from(chest) then return true end
+  return is_fuel(item) and drill_fills(chest, item)
 end
 
 -- The fuel energy (joules) an inventory holds.

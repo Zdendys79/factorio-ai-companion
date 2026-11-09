@@ -1,4 +1,27 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.178
+  Changes:
+    - A build's raw material (an ensure_item step: stone, coal, ore) comes from the stores
+      first -- the nearest place holding it she may take from, a coal drill's chest too,
+      within reach at once, farther by a walk (the old 5-tile chest pull is gone). With no
+      store holding it while a drill of it mines into a chest within 300 tiles she mines
+      nothing: the shortage is logged ([SUPPLY_SHORT]) and /fac_upkeep's status names it
+      (build_short -- dropped once a step got it and no other task of hers waits for it;
+      a hand mining's stays its full time), and the step waits up to 14400 ticks for the
+      drills (anew after every take; any other ready step with a position, or the
+      controller's direct command, takes a waiting step over -- the smelt wait's too --,
+      the waiting task left out of the picks 600 ticks unless nothing else is ready,
+      counted in storage.wait_yields), then fails;
+      with no room in her inventory it fails at once (no shortage). A place a fetch
+      gave up on is tried again after 3600 ticks.
+      Only while no such drill can be had she mines it by hand (named in build_short too,
+      mining = true). Wood comes from the stores before any tree is chopped.
+    - The feed upkeep's ore comes from the stores too before any mining.
+    - A chest an inserter picks from is a store only when it is a fuel drill's output
+      chest (a coal pair's; less its partner's keep) -- an ore chest feeding a furnace is
+      never emptied. One shared module, commands/supply_stores.lua, tells whether a drill
+      of an item can be had.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.177
   Changes:
     - The fuel upkeep follows the same rule for every burner (furnaces, drills, boilers,

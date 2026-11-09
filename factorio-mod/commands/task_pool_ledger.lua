@@ -262,7 +262,7 @@ end
 -- task, across its ensure steps (task_pool_ensure_item).
 local function clear_ensure_ctx(t)
   t.ctx.ensure_stack = nil
-  t.ctx.smelt_wait_deadline = nil
+  t.ctx.smelt_wait_deadline, t.ctx.raw_wait_deadline = nil, nil
   t.ctx.fetch, t.ctx.fetch_tried, t.ctx.fetch_next_scan = nil, nil, nil
   t.ctx.fetch_noroom_logged = nil
 end
