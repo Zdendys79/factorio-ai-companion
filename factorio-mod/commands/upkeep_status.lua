@@ -34,6 +34,11 @@ function M.status(cid)
   out.blocked_by_coal_wait = blocked ~= nil and game.tick - blocked < recent
   -- getting the coal she lacks: {task_id, priority, how = "take" / "ensure_item"}
   out.fetch = Fetch.status(cid)
+  -- a material she is short of (Zdendys 2026-11-09): {item, short, tick} -- no store of
+  -- it while a drill of it with a chest works, so no hand mining -- or {item, short,
+  -- tick, mining = true} -- mined by hand lately, no such drill; or nil. Python plans
+  -- more drills with chests
+  out.supply_short = Fetch.supply_short(cid)
   -- feeding: {tasks, hand_fed (rule 6: what she feeds by hand, each with the tick of its
   -- last feed), unknown (furnaces whose input it cannot tell), held_off (after
   -- failures)} -- commands/upkeep_feed.lua

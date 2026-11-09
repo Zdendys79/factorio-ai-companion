@@ -188,8 +188,9 @@ end
 -- her inventory -- the upkeep's getting material (commands/upkeep_fetch.lua: a coal
 -- store). Takes what the chest has (at least 1, else the step fails); what does not fit
 -- into her inventory goes back into the chest. store: the chest must still be a store
--- on her arrival -- no inserter picks from it (review: one built since the plan would
--- have been robbed).
+-- on her arrival, she takes only its store share (upkeep_feeds.store_share: a drill's
+-- output chest less what its partner's inserter keeps; none from a chest an inserter
+-- picks from otherwise -- review: one built since the plan would have been robbed).
 -- @return boolean ok, string|nil err
 function M.run_take(c, t, step)
   local pos = step_target_pos(t, step)
@@ -213,11 +214,15 @@ function M.run_take(c, t, step)
   if not chest then
     return false, "take: no " .. tostring(step.entity or "chest") .. " at the target"
   end
-  if step.store and feeds.picked_from(chest) then
-    return false, "take: an inserter picks from the " .. chest.name .. " now -- no store"
-  end
   local inv = chest.get_inventory(defines.inventory.chest)
   local avail = inv.get_item_count(step.item)
+  if step.store then
+    avail = feeds.store_share(chest, step.item)
+    if avail <= 0 then
+      return false, "take: the " .. chest.name .. " is no store of " .. step.item
+                    .. " now (an inserter picks from it, or only its keep is left)"
+    end
+  end
   if avail <= 0 then return false, "take: the " .. chest.name .. " holds no " .. step.item end
   local n = inv.remove{name = step.item, count = math.min(count, avail)}
   if n <= 0 then return false, "take: the " .. chest.name .. " gave no " .. step.item end

@@ -1,4 +1,43 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.177
+  Changes:
+    - The fuel upkeep follows the same rule for every burner (furnaces, drills, boilers,
+      burner inserters): a burner is fuelled by hand once its fuel is low -- its slot at
+      half a stack or less, or its fuel lasting under 5 minutes, whichever comes first --
+      and then its slot is filled to full (all its room, a swap's too). Its priority
+      still comes from the seconds its fuel lasts and the distance, at least 1.01 (a
+      half slot may last far longer than the target). A burner with a supply line of
+      its own (an inserter from a belt or a filled chest, a fuel-mining drill) and the
+      self-fed burner inserters keep their rules. A fuel chest she supplies is kept at
+      4 stacks of coal at least: judged at every scan, it is filled up to 4 stacks once
+      it holds 2 stacks' worth or less or its burners' fuel lasts under 5 minutes. A
+      burner given less than its room (her coal or wood short) is marked filling and
+      fuelled on past the low mark until full; her wood surplus goes in also in part.
+      Only a burner whose fuel lasts under 300 s sends her to get coal (a half slot of
+      a slow burner no longer makes a fetch that outranks every build), and each need
+      counts only the coal that keeps it 300 s into the fetch's shortage. What feeds a
+      burner whose fuel is not urgent is read again only every 600 ticks; a fuel chest's
+      burners likewise.
+    - Getting coal: a coal drill's output chest (a coal pair's, a coal-row unit's) is a
+      store she takes from, less the 10 its partner's inserter keeps, searched within
+      300 tiles -- the nearest that covers the shortage (her coal under her floor
+      counted), else the one with the most; a take under 25 coal only while a need has
+      under half its target left. Each need is ranked against its own target (300 s,
+      or what its full slot / chest lasts if less -- a boiler's ~111 s). While a coal
+      drill of her force within 300 tiles mines into a plain chest (working, at low
+      power or its output full) she never mines coal by hand: with no store holding
+      enough she logs [SUPPLY_SHORT] and /fac_upkeep's status names it (supply_short;
+      the next search 600 ticks later) -- more drills with chests are the
+      controller's to plan. Hand mining stays only while no such drill can be had; the
+      status names that shortage too (mining = true).
+    - A fuel chest's low mark and target count what a full chest lasts its burners
+      (4 stacks last two boilers ~222 s, under 5 minutes); no chest task for fewer
+      than 5 coal.
+    - A supplying fuel line's burner is kept in the 600-tick feeds cache while it has
+      60 s of fuel (line-fed drills and boilers were searched at every scan).
+    - A burner whose slot takes fewer than 5 items is not fuelled (a hand-fed boiler
+      no longer gets a task for 1 coal after every coal it burns).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.176
   Changes:
     - The feed upkeep (a furnace no line feeds) follows the project owner's rules: a

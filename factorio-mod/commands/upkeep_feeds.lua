@@ -49,10 +49,20 @@ function M.mines_fuel(drill)
 end
 
 -- Whether a crafting machine's recipe makes a fuel (a furnace / assembler an inserter
--- takes from feeds fuel only then -- review: plates from a furnace are no fuel).
+-- takes from feeds fuel only then -- review: plates from a furnace are no fuel). A
+-- failed recipe read is logged once per machine name (review: it was silent).
+local recipe_read_failed = {}
 local function makes_fuel(machine)
   local ok, recipe = pcall(machine.get_recipe)
-  if not ok or not recipe then return false end
+  if not ok then
+    if not recipe_read_failed[machine.name] then
+      recipe_read_failed[machine.name] = true
+      log("[ai-companion] upkeep: reading the recipe of a " .. machine.name
+          .. " failed (" .. tostring(recipe) .. ") -- counted as making no fuel")
+    end
+    return false
+  end
+  if not recipe then return false end
   for _, product in pairs(recipe.products or {}) do
     if product.type == "item" and is_fuel(product.name) then return true end
   end
@@ -370,6 +380,46 @@ function M.picked_from(chest)
     if ins.type == "inserter" and pickup_source(ins) == chest then return true end
   end
   return false
+end
+
+-- Whether a mining drill mines `item` (its resource's products hold it).
+function M.mines_item(drill, item)
+  local res = drill.mining_target
+  local mineable = res and res.valid and res.prototype.mineable_properties
+  for _, product in pairs((mineable and mineable.products) or {}) do
+    if product.type == "item" and product.name == item then return true end
+  end
+  return false
+end
+
+-- Whether a drill mining `item` drops into the chest (its output chest).
+local function drill_fills(chest, item)
+  local sources, box = sources_around(chest)
+  for _, src in pairs(sources) do
+    if src.type == "mining-drill" and drops_into(src, box) and M.mines_item(src, item) then
+      return true
+    end
+  end
+  return false
+end
+
+-- a drill's output chest an inserter also picks from (a coal pair v2's, a coal-row
+-- unit's -- it feeds the partner drill) keeps this many of the item for it
+M.DRILL_CHEST_KEEP = 10
+
+-- How many of `item` she may take from the chest as a store (Zdendys 2026-11-09: her
+-- material comes from the drills' supply chests, not from hand mining): a drill's
+-- output chest -- all of it, less DRILL_CHEST_KEEP when an inserter also picks from it;
+-- any other chest -- all of it unless an inserter picks from it (it feeds a machine or
+-- a line: none).
+function M.store_share(chest, item)
+  local n = chest.get_item_count(item)
+  if n <= 0 then return 0 end
+  local picked = M.picked_from(chest)
+  if drill_fills(chest, item) then
+    return picked and math.max(0, n - M.DRILL_CHEST_KEEP) or n
+  end
+  return picked and 0 or n
 end
 
 -- The fuel energy (joules) an inventory holds.

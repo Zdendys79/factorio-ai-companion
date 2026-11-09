@@ -1,6 +1,8 @@
--- The fuel upkeep's batches (commands/upkeep.lua): how much of a fuel an upkeep task for a
--- need takes. `cfg` is the upkeep's constants (FUEL = coal, MIN_BATCH, TARGET_S); a need n is
--- {e = the burner, into = its fuel chest or nil, t, target, usage} (upkeep_need).
+-- The fuel upkeep's batches (commands/upkeep.lua): which fuel and how much of it an
+-- upkeep task for a need takes. `cfg` is the upkeep's constants (FUEL = coal, MIN_BATCH,
+-- WOOD, WOOD_KEEP); a need n is
+-- {e = the burner, into = its fuel chest or nil, t, target, usage, full = true for a
+-- burner filled to full, missing_j = the joules a fuel chest lacks} (upkeep_need).
 local M = {}
 
 -- The inventory an upkeep task fills: the fuel chest (need.into) or the burner's slot.
@@ -9,14 +11,16 @@ function M.target_inventory(e, need)
   return e.burner.inventory
 end
 
--- The fuel `item` to the need's target, capped by the room of what is filled for it:
--- (amount, room).
+-- The fuel `item` a need takes, capped by the room of what is filled for it: a burner
+-- (need.full) to full -- all the room (Zdendys 2026-11-09); a fuel chest up to its
+-- CHEST_STACKS (need.missing_j, upkeep_need.chest_need). (amount, room)
 function M.wanted(e, need, item)
   local proto = prototypes.item[item]
   if not proto or not proto.fuel_value or proto.fuel_value <= 0 then return 0, 0 end
-  local missing_j = math.max(0, (need.target - need.t) * need.usage * 60)
   local inv = M.target_inventory(e, need)
   local room = inv and inv.get_insertable_count(item) or 0
+  if need.full then return room, room end
+  local missing_j = math.max(0, need.missing_j or 0)
   return math.min(math.ceil(missing_j / proto.fuel_value), room), room
 end
 
@@ -63,10 +67,9 @@ function M.other(cfg, n, item, free, partial)
   return 0
 end
 
--- The coal to the target once the burner's other fuels are swapped out into her
--- inventory -- the target of a slot of coal, min(TARGET_S, what it lasts full: the
--- coal's own, not the fuel's taken out) -- and the room for it then: (amount, room, the
--- coal worth the energy taken out).
+-- The coal once the burner's other fuels are swapped out into her inventory -- to full,
+-- all the room (a swap is only ever a burner's, filled to full -- Zdendys 2026-11-09):
+-- (amount, room, the coal worth the energy taken out).
 function M.wanted_after_swap(cfg, n)
   local coal = prototypes.item[cfg.FUEL]
   if not coal or (coal.fuel_value or 0) <= 0 then return 0, 0, 0 end
@@ -83,11 +86,7 @@ function M.wanted_after_swap(cfg, n)
       end
     end
   end
-  local per_s = n.usage * 60
-  local energy = math.max(0, n.t * per_s - out_j)          -- what stays in it
-  local target_j = math.min(cfg.TARGET_S * per_s, energy + room * coal.fuel_value)
-  local want = math.ceil(math.max(0, target_j - energy) / coal.fuel_value)
-  return math.min(want, room), room, math.ceil(out_j / coal.fuel_value)
+  return room, room, math.ceil(out_j / coal.fuel_value)
 end
 
 -- Whether all the burner's fuel other than `item` a swap would move out fits `into`
@@ -127,6 +126,76 @@ function M.coal(cfg, n, free, extra, swap)
   local take = math.min(amount, avail)
   if take < least then return 0, avail < amount end
   return take, avail < amount
+end
+
+-- A need she has no free coal for, as an entry of the fetch's short list
+-- (commands/upkeep_fetch.lua): {want = the coal it wants, t, target}, or nil -- only a
+-- need whose fuel lasts under its target (min(TARGET_S, what its full slot / chest
+-- lasts)) sends her to get coal, ranked against that target (reviews of 0.16.177: a
+-- half slot of a stone furnace, ~1100 s, made a fetch that outranked every build; a
+-- boiler's full slot, ~111 s, was always urgent against TARGET_S; it waits for her coal
+-- meanwhile). It wants only what keeps it its target -- a slot's full room, a chest's 4
+-- stacks are filled from what she carries (live: 4 stacks of several chests made a
+-- shortage of 1072 coal, a fetch at p 11.4, and full slots of ~12 burners one of ~230 at
+-- p ~9.5 -- each outranked every feed) -- at least MIN_BATCH, for a burner held by
+-- another fuel what its swap needs (review: a fetch of less never let the swap happen).
+function M.short_entry(cfg, n)
+  if n.t >= n.target then return nil end
+  local want, room = M.wanted(n.e, n, cfg.FUEL)
+  local least = cfg.MIN_BATCH
+  if room < 1 and not n.into then
+    local out
+    want, room, out = M.wanted_after_swap(cfg, n)
+    least = out + cfg.MIN_BATCH
+  end
+  local coal = prototypes.item[cfg.FUEL]
+  want = math.min(want, math.ceil(math.max(0, n.target - n.t) * n.usage * 60
+                                  / coal.fuel_value))
+  return {want = math.min(math.max(want, least), room), t = n.t, target = n.target}
+end
+
+-- What she may give of a fuel other than coal (`inv` her main inventory): wood above
+-- cfg.WOOD_KEEP (`keep` false: the keep too), any other all she holds unreserved;
+-- `extra` as in choose.
+local function free_other(cfg, inv, item, extra, keep)
+  local free = inv.get_item_count(item) - (storage.reserved[item] or 0) + (extra[item] or 0)
+  if item == cfg.WOOD and keep then free = free - cfg.WOOD_KEEP end
+  return free
+end
+
+-- The fuel an upkeep task for need n takes (`extra`: what a task about to be replaced
+-- would release, by item; `inv` her main inventory; `blocked`: another task waits for
+-- coal; `free_coal` her free coal above the floor). A slot already holding another fuel
+-- (only that fits it -- review: wood left to run dry): topped up with it from her
+-- surplus; else, at a burner, coal swapped in (the fuel step moves the other fuel into
+-- her inventory -- review: topping it up from the keep drained the wood the builds
+-- keep, the slot never going back to coal); else with it from all she holds unreserved,
+-- the keep too (no coal to swap in -- too little coal for what comes out, no room for it
+-- in her inventory --, or another task waits for coal -- a running burner before her
+-- wood stock). Else her wood surplus where it covers the need (Zdendys: wood is never
+-- kept in stock beyond what the builds need) -- also in part (review of 0.16.177: a
+-- slot's whole room of wood, 100, was more than her surplus mostly, so it was never
+-- burned; the fill goes on); else coal, unless another task waits for it.
+-- (item, amount, whether free coal is what limits it, swap)
+function M.choose(cfg, n, extra, inv, blocked, free_coal)
+  local held = M.held_fuel(cfg, n)
+  if held then
+    local amount = M.other(cfg, n, held, free_other(cfg, inv, held, extra, true), true)
+    if amount >= 1 or n.into then return held, amount, false, false end
+    -- (a swap only when her inventory has room for what comes out -- review: else the
+    -- step failed at every scan)
+    local coal_n, coal_short = 0, false
+    if not blocked and M.swap_fits(n, cfg.FUEL, inv) then
+      coal_n, coal_short = M.coal(cfg, n, free_coal, extra[cfg.FUEL], true)
+    end
+    if coal_n >= 1 then return cfg.FUEL, coal_n, false, true end
+    amount = M.other(cfg, n, held, free_other(cfg, inv, held, extra, false), true)
+    return held, amount, amount < 1 and coal_short, false
+  end
+  local wood_n = M.other(cfg, n, cfg.WOOD, free_other(cfg, inv, cfg.WOOD, extra, true), true)
+  if wood_n >= 1 or blocked then return cfg.WOOD, wood_n, false, false end
+  local amount, coal_short = M.coal(cfg, n, free_coal, extra[cfg.FUEL])
+  return cfg.FUEL, amount, coal_short, false
 end
 
 return M

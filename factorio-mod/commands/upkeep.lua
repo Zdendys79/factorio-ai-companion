@@ -10,10 +10,15 @@
 --   and is left alone until it stands without fuel at two scans in a row (a drained
 --   one never restarts by itself) -- then served by hand, named underfed; any other one
 --   is served by its fuel time like an unfed burner (the rules below are the others');
+-- - Zdendys 2026-11-09 (docs/architecture_roles.md Decided 5): a burner is fuelled by
+--   hand once its fuel is low -- its slot at half a stack or less (upkeep_need
+--   FUEL_SKIP_SHARE) or its fuel lasting under 5 minutes (FUEL_LOW_S), whichever comes
+--   first -- and then filled to full, the whole room of its slot;
 -- - t = the seconds its fuel lasts at its full consumption (the burning fuel's energy
 --   left + its fuel slot's); its target = min(TARGET_S, what a full slot lasts) (a
 --   boiler's full slot lasts ~111 s); p = log2(target / max(1, t)) -- a production's
---   shortage in TIME left, the priority by its reciprocal (Zdendys);
+--   shortage in TIME left, the priority by its reciprocal (Zdendys), at least MIN_P
+--   (a half slot can last far longer than the target -- a task still, the lowest);
 -- - its output's fill lowers the part above 1: p' = 1 + (p - 1) x (1 - 0.9 x fill)
 --   (products piling up need the supply less; a full output still leaves a little);
 -- - a mined-out drill or a furnace with nothing to smelt needs no fuel now -- skipped;
@@ -28,34 +33,33 @@
 --   makes it hers like an unfed one once its fuel lasts under LINE_DRY_S (a sparse
 --   belt is slow, not dead), named underfed, logged once per UNDERFED_LOG_TICKS;
 -- - a fuel chest an inserter feeds it from, supplied by nothing (Zdendys: she supplies
---   a production or a chest no belt with that material reaches yet), is what she fills:
---   once one of its burners runs down (it is that burner's nearest fuel chest), one need
---   for all the burners inserters from it feed: t = (the chest's fuel + theirs) over
---   their consumption together, target TARGET_S, the least output fill among them; a
---   burner of it under FED_DRY_S with no inserter from its chest supplying it at two
---   scans in a row is served by hand too (underfed when the chest has fuel: its
---   inserter does not deliver; one waiting only for the slot to empty -- the chest's
---   wood does not fit the slot's coal -- counts as supplying); a
---   chest with no room for coal or wood is full of fuel -- no need;
--- - p' > 1 makes an upkeep task: one fuel step at the burner (an insert step at a fuel
---   chest) -- a slot already holding another fuel (wood: no coal fits) topped up with
---   it from her surplus, else at a burner coal swapped in (the step moves the other
---   fuel into her inventory), else with it from all she holds unreserved; else with her
---   wood surplus (above WOOD_KEEP) wood where wood fits, the whole amount from her free
---   wood; else coal --, the coal to its
---   target (raised to MIN_BATCH, capped by the room and her free
---   coal above COAL_FLOOR; none when the free coal does not reach min(MIN_BATCH, the
---   room) -- "short"), priority p' (kept up to date each scan; the task pool's scheduler
---   ranks it with every other task's step by p' ^ (1 / (distance + 1)) -- it may come
---   between a build's steps).
+--   a production or a chest no belt with that material reaches yet), is what she fills
+--   (Zdendys 2026-11-09: kept at 4 stacks at least, a task now and then -- found through
+--   its burners, kept in a book and judged at every scan: commands/upkeep_chests.lua,
+--   upkeep_need.chest_need); a burner of it under FED_DRY_S with no inserter from its
+--   chest supplying it at two scans in a row is served by hand too (underfed when the
+--   chest has fuel: its inserter does not deliver; one waiting only for the slot to
+--   empty -- the chest's wood does not fit the slot's coal -- counts as supplying);
+-- - a burner's or a fuel chest's need makes an upkeep task: one fuel step at the
+--   burner (an insert step at a fuel chest) with the fuel and the amount
+--   upkeep_batch.choose picks (a burner's coal to full, a fuel chest's up to 4 stacks,
+--   capped by her free coal above COAL_FLOOR; none she has free coal for are "short" --
+--   upkeep_batch.short_entry: what the fetch is to get), priority p' (kept up to date
+--   each scan; the task pool's scheduler ranks it with every other task's step by
+--   p' ^ (1 / (distance + 1)) -- it may come between a
+--   build's steps). A burner given less than its room is marked filling (FILLING_KEEP_
+--   TICKS at most): fuelled on past the low mark until full. What feeds a burner whose
+--   fuel is not urgent (TARGET_S / 2 or more left) is read again only after
+--   FEEDS_RECHECK_TICKS (every line-fed burner passes the low gate; a chest-fed one's
+--   chest is kept with it and judged at every scan).
 -- At most MAX_TASKS upkeep tasks per companion, the highest p' (nearer first on a tie;
 -- one is replaced only by a need REPLACE_MARGIN higher, so ties do not churn); none
 -- with coal submitted while another task waits for coal (its need comes first). A task
--- no longer needed (and not being acted on) is cancelled quietly; ended upkeep tasks are removed
--- from storage.tasks (nothing polls them). Coal comes from her inventory (the
--- stopgap); burners she has no free coal for are listed as "short" in the status and
--- logged, and getting the coal is an action of its own (commands/upkeep_fetch.lua: a
--- coal store or mining, priority log2(short) + log2(T / t)).
+-- no longer needed (and not being acted on) is cancelled quietly; ended upkeep tasks
+-- are removed from storage.tasks (nothing polls them). Coal comes from her inventory;
+-- burners she has no free coal for are listed as "short" in the status and logged, and
+-- getting the coal is an action of its own (commands/upkeep_fetch.lua: a coal store --
+-- a coal drill's chest too -- or, while no drill with a chest can be had, mining).
 local u = require("commands.init")
 local ledger = require("commands.task_pool_ledger")
 local F = require("commands.upkeep_feeds")
@@ -65,6 +69,8 @@ local B = require("commands.upkeep_batch")
 local Feed = require("commands.upkeep_feed")
 local Stock = require("commands.upkeep_stock")
 local Regs = require("commands.upkeep_feed_regs")
+local Chests = require("commands.upkeep_chests")
+local Logs = require("commands.upkeep_logs")
 
 local M = {}
 
@@ -95,6 +101,12 @@ local SHORT_LOG_TICKS = M.SHORT_LOG_TICKS
 local FAIL_BACKOFF_TICKS = 3600
 -- (an inserter only with a burner: a burner inserter -- electric ones have none)
 local BURNER_TYPES = {"furnace", "mining-drill", "boiler", "inserter"}
+-- what feeds a burner whose fuel is not urgent (TARGET_S / 2 or more left) is read
+-- again after this many ticks (review of 0.16.177: since the half-slot rule every
+-- line-fed burner -- 5 items -- passes the scan's gate; feeds() is area searches)
+M.FEEDS_RECHECK_TICKS = 600
+-- a filling mark older than this is dropped (its burner gone or left alone)
+local FILLING_KEEP_TICKS = 36000
 
 function M.init()
   -- storage.upkeep = {enabled = {[cid] = true}, tasks = {[cid] = {[key] = task_id}},
@@ -105,13 +117,25 @@ function M.init()
   --   logs = {[book] = {[cid] = {[key] = tick logged}}} -- the books underfed, short,
   --   blocked (key "coal": another task waited for coal), noroom; under one table so a
   --   book's name can never be a state field's (review: a "fetch" book's pruning
-  --   deleted the fetch task's id)}
+  --   deleted the fetch task's id),
+  --   filling = {[cid] = {[key] = tick}}: a burner (a fuel chest) a task filled less
+  --   than full (than 4 stacks; her coal or wood ran short) -- fuelled on past the low
+  --   mark until full,
+  --   chests = {[cid] = {[chest key] = {chest, burners, tick}}}: the fuel chests she
+  --   supplies (found through their burners), their burners read at tick,
+  --   feeds_seen = {[cid] = {[key] = {tick, kind, chest}}}: what feeds a burner whose
+  --   fuel is not urgent ("other" / "chest" -- its nearest fuel chest -- / "none"), kept
+  --   FEEDS_RECHECK_TICKS (a "chest" record without a valid chest -- 0.16.177's first
+  --   form -- is dropped)}
   storage.upkeep = storage.upkeep or {}
   storage.upkeep.enabled = storage.upkeep.enabled or {}
   storage.upkeep.tasks = storage.upkeep.tasks or {}
   storage.upkeep.last_scan = storage.upkeep.last_scan or {}
   storage.upkeep.backoff = storage.upkeep.backoff or {}
   storage.upkeep.logs = storage.upkeep.logs or {}
+  storage.upkeep.filling = storage.upkeep.filling or {}
+  storage.upkeep.feeds_seen = storage.upkeep.feeds_seen or {}
+  storage.upkeep.chests = storage.upkeep.chests or {}
   -- (the books of 0.16.154 and before, at the top level: dropped)
   storage.upkeep.underfed, storage.upkeep.short, storage.upkeep.blocked = nil, nil, nil
   -- (the feed's and the stock's books set up -- and migrated -- with it, before any
@@ -127,19 +151,15 @@ end
 
 -- (the need measures live in commands/upkeep_need.lua)
 local NO_NEED = N.NO_NEED
-local output_fill = N.output_fill
 
 local function fuel_seconds(e)
   return N.fuel_seconds(e, M.FUEL)
 end
 
--- A burner's upkeep need -- its own slot filled (upkeep_need.burner_need).
-function M.burner_need(e)
-  return N.burner_need(e, M.TARGET_S, M.FUEL)
-end
-
-local function chest_need(group)
-  return N.chest_need(group, M.TARGET_S)
+-- A burner's upkeep need -- its own slot filled (upkeep_need.burner_need); `filling`:
+-- a fill that brought less than full goes on past the low mark.
+function M.burner_need(e, filling)
+  return N.burner_need(e, M.TARGET_S, M.FUEL, filling)
 end
 
 -- Whether another active task of the companion still waits for coal: its required
@@ -156,36 +176,13 @@ local function coal_wanted_elsewhere(cid)
   return false
 end
 
--- Log at most once per `every` ticks per burner key (book: storage.upkeep.logs[name][cid]).
-local function log_once(name, cid, key, every, msg)
-  storage.upkeep.logs = storage.upkeep.logs or {}
-  storage.upkeep.logs[name] = storage.upkeep.logs[name] or {}
-  local book = storage.upkeep.logs[name]
-  book[cid] = book[cid] or {}
-  local last = book[cid][key]
-  if not last or game.tick - last >= every then
-    book[cid][key] = game.tick
-    log("[ai-companion] " .. msg)
-  end
-end
-
--- The log books' entries older than their interval dropped (review: one entry per key
--- ever logged stayed for the whole game).
--- (the feed's and the stock's books too: feed.LOG_BOOKS, stock.LOG_BOOKS -- review: they
--- were never pruned)
+-- (the log books: commands/upkeep_logs.lua -- the feed's, the stock's and the fetch's
+-- books pruned too: their LOG_BOOKS -- review: they were never pruned)
+local log_once = Logs.log_once
 local LOG_BOOKS = {underfed = UNDERFED_LOG_TICKS, short = SHORT_LOG_TICKS,
                    blocked = SHORT_LOG_TICKS, noroom = SHORT_LOG_TICKS}
-for _, part in pairs({Feed, Stock}) do
+for _, part in pairs({Feed, Stock, Fetch}) do
   for name, every in pairs(part.LOG_BOOKS) do LOG_BOOKS[name] = every end
-end
-local function prune_log_books(cid)
-  local logs = storage.upkeep.logs or {}
-  for name, every in pairs(LOG_BOOKS) do
-    local book = logs[name] and logs[name][cid]
-    for key, tick in pairs(book or {}) do
-      if game.tick - tick >= every then book[key] = nil end
-    end
-  end
 end
 
 -- the error of a task that failed because she could not get to its burner
@@ -230,7 +227,7 @@ local function scan(cid, c)
   storage.upkeep.tasks[cid] = storage.upkeep.tasks[cid] or {}
   local mine = storage.upkeep.tasks[cid]
   prune(cid, mine)
-  prune_log_books(cid)
+  Logs.prune(cid, LOG_BOOKS)
   local off = storage.upkeep.backoff[cid]
   local pos = c.entity.position
   local needs = {}
@@ -264,6 +261,25 @@ local function scan(cid, c)
     d.last = game.tick
     return game.tick - d.first >= M.SCAN_TICKS
   end
+  -- the burners filled less than full, and what feeds those not urgent (module header)
+  storage.upkeep.filling = storage.upkeep.filling or {}
+  storage.upkeep.filling[cid] = storage.upkeep.filling[cid] or {}
+  local fill = storage.upkeep.filling[cid]
+  for k, tick in pairs(fill) do
+    if game.tick - tick > FILLING_KEEP_TICKS then fill[k] = nil end
+  end
+  storage.upkeep.feeds_seen = storage.upkeep.feeds_seen or {}
+  storage.upkeep.feeds_seen[cid] = storage.upkeep.feeds_seen[cid] or {}
+  local seen_feeds = storage.upkeep.feeds_seen[cid]
+  for k, v in pairs(seen_feeds) do
+    if game.tick - (v.tick or 0) >= M.FEEDS_RECHECK_TICKS then seen_feeds[k] = nil end
+  end
+  -- the fuel chests she supplies (commands/upkeep_chests.lua)
+  local chests = Chests.book(cid)
+  local function remember_chest(chest) Chests.remember(chests, chest) end
+  local function need_of(e)
+    return M.burner_need(e, fill[key_of(e)] ~= nil)
+  end
   -- A burner inserter's need (live: one that picks up a fuel feeds itself from what it
   -- carries and keeps ~1 item -- the 4-item rule of the other burners would flag it
   -- forever; a fully drained one never restarts by itself, even with coal at its
@@ -273,11 +289,11 @@ local function scan(cid, c)
   local function inserter_need(e)
     local key = key_of(e)
     if not F.inserter_self_fed(e) then
-      if not is_off(e) then add(M.burner_need(e), e) end
+      if not is_off(e) then add(need_of(e), e) end
     elseif e.status ~= defines.entity_status.no_fuel then
       down[key] = nil
     elseif not is_off(e) and down_twice(key, "self") then
-      local need = M.burner_need(e)
+      local need = need_of(e)
       if need then
         log_once("underfed", cid, key, UNDERFED_LOG_TICKS,
                  string.format("[UNDERFED] %s at %s: it carries fuel yet stands without "
@@ -287,18 +303,45 @@ local function scan(cid, c)
       add(need, e)
     end
   end
-  -- the fuel chests to judge: {[chest key] = chest} (a burner's nearest fuel chest)
-  local groups = {}
   for _, e in pairs(c.entity.surface.find_entities_filtered{
       position = pos, radius = M.SCAN_RADIUS, force = c.entity.force, type = BURNER_TYPES}) do
-    -- (cheap first: a burner whose own fuel lasts TARGET_S / 2 needs nothing either way;
-    -- one fed from a chest that still holds fuel keeps its slot topped up, so its chest
-    -- is judged once its own fuel runs down)
+    -- (cheap first: a burner whose fuel is not low -- more than half a stack in its slot
+    -- and 5 minutes or more of it, Zdendys 2026-11-09, upkeep_need.fuel_low -- needs
+    -- nothing either way unless a fill of it goes on (filling); own_t still judges a
+    -- supply line's delivery)
     local own_t = e.valid and e.burner and not NO_NEED[e.status] and fuel_seconds(e)
-    if own_t and own_t < M.TARGET_S / 2 and e.type == "inserter" then
+    local k = own_t and key_of(e)
+    local share, room
+    if own_t then share, room = N.fuel_slot_share(e, M.FUEL) end
+    -- (a fill goes on only while a batch still fits -- review: 2 coal walked to a slot
+    -- of 48; upkeep_need.MIN_ROOM)
+    if share and (share >= 1 or room < N.MIN_ROOM) then fill[k] = nil end
+    local low = own_t and (N.fuel_low(share, own_t) or fill[k] ~= nil)
+    -- what feeds a burner whose fuel is not urgent: kept FEEDS_RECHECK_TICKS (review of
+    -- 0.16.177: every line-fed burner passes the gate) -- one fed by a line is not hers
+    -- then; one fed from a chest has its chest judged; one fed by nothing is filled to
+    -- full. (a supplying line's burner is kept too while it has LINE_DRY_S of fuel --
+    -- review: a line-fed drill holds ~133 s, a boiler ~12 s, under TARGET_S / 2 -- its
+    -- line is judged only below LINE_DRY_S either way)
+    local calm = own_t and own_t >= M.TARGET_S / 2
+    local seen = low and seen_feeds[k]
+    if seen and not (calm or (seen.kind == "other" and own_t >= M.LINE_DRY_S)) then
+      seen = nil
+    end
+    if seen and seen.kind == "chest" and not (seen.chest and seen.chest.valid) then
+      seen_feeds[k], seen = nil, nil
+    end
+    if seen then
+      if seen.kind == "none" and not is_off(e) then add(need_of(e), e) end
+      if seen.kind == "chest" then remember_chest(seen.chest) end
+    elseif low and e.type == "inserter" then
       inserter_need(e)
-    elseif own_t and own_t < M.TARGET_S / 2 then
+    elseif low then
       local f = F.feeds(e)
+      if calm or (f.other and f.other_ok and own_t >= M.LINE_DRY_S) then
+        seen_feeds[k] = {tick = game.tick, chest = f.chests[1],
+                         kind = f.other and "other" or (#f.chests > 0 and "chest") or "none"}
+      end
       if f.other then
         -- its supply line feeds it while one of its sources supplies (the insertion
         -- limit keeps only a few items in it -- a boiler's ~12 s); down at two scans in
@@ -310,7 +353,7 @@ local function scan(cid, c)
         if f.other_ok or own_t >= M.LINE_DRY_S then
           down[key_of(e)] = nil
         elseif not is_off(e) and down_twice(key_of(e), "line") then
-          local need = M.burner_need(e)
+          local need = need_of(e)
           if need then
             log_once("underfed", cid, key_of(e), UNDERFED_LOG_TICKS,
                      string.format("[UNDERFED] %s at %s: its supply line delivers nothing "
@@ -322,7 +365,8 @@ local function scan(cid, c)
       elseif #f.chests > 0 then
         local chest = f.chests[1]
         local ck = key_of(chest)
-        groups[ck] = groups[ck] or chest
+        -- (its chest judged at every scan: kept at CHEST_STACKS, upkeep_need.chest_need)
+        remember_chest(chest)
         -- running dry with no inserter from its chest supplying it at two scans in a row
         -- (review: one scan's blip made a task the next one cancelled): served by hand
         -- (review: the chest's need alone left it dry), named underfed when its chest
@@ -338,32 +382,18 @@ local function scan(cid, c)
                                    .. "does not deliver (%s)", e.name, key_of(e), own_t, ck,
                                    tostring(f.chest_why)))
           end
-          add(M.burner_need(e), e)
+          add(need_of(e), e)
         end
       elseif not is_off(e) then
-        add(M.burner_need(e), e)
+        add(need_of(e), e)
       end
     end
   end
-  -- each fuel chest one of whose burners ran down: one need for all the burners it
-  -- feeds (review: the whole chest's burners, not only those under the cheap check);
-  -- a chest with no room for coal or wood is full of fuel -- no need (review: serving
-  -- its burners by hand then went to burners whose chest supplies them)
-  for _, chest in pairs(groups) do
-    local inv = chest.get_inventory(defines.inventory.chest)
-    if inv and (inv.get_insertable_count(M.FUEL) > 0 or inv.get_insertable_count(M.WOOD) > 0)
-       and not is_off(chest) then
-      local g = {chest = chest, usage = 0, energy = 0, fill = 1}
-      for _, b in ipairs(F.chest_burners(chest)) do
-        local _, _, usage, energy = fuel_seconds(b)
-        if usage and not NO_NEED[b.status] then
-          g.usage, g.energy = g.usage + usage, g.energy + energy
-          g.fill = math.min(g.fill, output_fill(b))
-        end
-      end
-      if g.usage > 0 then add(chest_need(g), chest) end
-    end
-  end
+  -- each fuel chest she supplies: one need for all the burners it feeds
+  -- (commands/upkeep_chests.lua)
+  Chests.judge(chests, {pos = pos, radius = M.SCAN_RADIUS, recheck = M.FEEDS_RECHECK_TICKS,
+                        fuel = M.FUEL, wood = M.WOOD, target_s = M.TARGET_S, fill = fill,
+                        is_off = is_off, add = add})
   table.sort(needs, function(a, b)
     if a.p ~= b.p then return a.p > b.p end
     return a.dist < b.dist
@@ -383,44 +413,10 @@ local function scan(cid, c)
     log_once("blocked", cid, "coal", SHORT_LOG_TICKS,
              "upkeep: another task waits for coal -- no new upkeep task with coal meanwhile")
   end
-  -- What she may give of a fuel other than coal: wood above WOOD_KEEP (`keep` false:
-  -- the keep too), any other all she holds unreserved; `extra` as in choose.
-  local function free_other(item, extra, keep)
-    local free = inv.get_item_count(item) - (storage.reserved[item] or 0) + (extra[item] or 0)
-    if item == M.WOOD and keep then free = free - M.WOOD_KEEP end
-    return free
-  end
-  -- The fuel an upkeep task for need n takes (`extra`: what a task about to be replaced
-  -- would release, by item). A slot already holding another fuel (only that fits it --
-  -- review: wood left to run dry): topped up with it from her surplus; else, at a burner,
-  -- coal swapped in (the fuel step moves the other fuel into her inventory -- review:
-  -- topping it up from the keep drained the wood the builds keep, the slot never going
-  -- back to coal); else with it from all she holds unreserved, the keep too (no coal to
-  -- swap in -- too little coal for what comes out, no room for it in her inventory --,
-  -- or another task waits for coal -- a running burner before her wood stock).
-  -- Else her wood surplus where it covers the need (Zdendys: wood is never kept in stock
-  -- beyond what the builds need); else coal, unless another task waits for it.
-  -- (item, amount, whether free coal is what limits it, swap)
+  -- the fuel an upkeep task for need n takes (upkeep_batch.choose; `extra`: what a task
+  -- about to be replaced would release, by item)
   local function choose(n, extra)
-    extra = extra or {}
-    local held = B.held_fuel(M, n)
-    if held then
-      local amount = B.other(M, n, held, free_other(held, extra, true), true)
-      if amount >= 1 or n.into then return held, amount, false, false end
-      -- (a swap only when her inventory has room for what comes out -- review: else the
-      -- step failed at every scan)
-      local coal_n, coal_short = 0, false
-      if not blocked and B.swap_fits(n, M.FUEL, inv) then
-        coal_n, coal_short = B.coal(M, n, free_coal(), extra[M.FUEL], true)
-      end
-      if coal_n >= 1 then return M.FUEL, coal_n, false, true end
-      amount = B.other(M, n, held, free_other(held, extra, false), true)
-      return held, amount, amount < 1 and coal_short, false
-    end
-    local wood_n = B.other(M, n, M.WOOD, free_other(M.WOOD, extra, true), false)
-    if wood_n >= 1 or blocked then return M.WOOD, wood_n, false, false end
-    local amount, coal_short = B.coal(M, n, free_coal(), extra[M.FUEL])
-    return M.FUEL, amount, coal_short, false
+    return B.choose(M, n, extra or {}, inv, blocked, free_coal())
   end
   local function open_count()
     local k = 0
@@ -446,6 +442,16 @@ local function scan(cid, c)
     local r = ledger.submit_task(cid, {step}, "upkeep", n.p)
     if r.task_id then
       mine[n.key] = r.task_id
+      -- (a burner given less than its room, a fuel chest less than its 4 stacks -- her
+      -- coal or wood short: the fill goes on past the low mark until full -- reviews of
+      -- 0.16.177)
+      local want, room
+      if swap then
+        want, room = B.wanted_after_swap(M, n)
+      else
+        want, room = B.wanted(n.e, n, item)
+      end
+      fill[n.key] = (amount < (n.into and want or room)) and game.tick or nil
     else
       u.log_error("upkeep: submit for " .. n.e.name .. " at " .. n.key .. " failed: "
                   .. tostring(r.error), "upkeep")
@@ -464,16 +470,9 @@ local function scan(cid, c)
         if amount >= 1 then
           submit(n, amount, item, swap)
         elseif coal_short then
-          -- (a burner held by another fuel: what its swap needs -- review: a fetch of
-          -- less never let the swap happen)
-          local want, room = B.wanted(n.e, n, M.FUEL)
-          local least = M.MIN_BATCH
-          if room < 1 and not n.into then
-            local out
-            want, room, out = B.wanted_after_swap(M, n)
-            least = out + M.MIN_BATCH
-          end
-          short[#short + 1] = {want = math.min(math.max(want, least), room), t = n.t}
+          -- (what the fetch is to get for it: upkeep_batch.short_entry)
+          local entry = B.short_entry(M, n)
+          if entry then short[#short + 1] = entry end
           log_once("short", cid, n.key, SHORT_LOG_TICKS,
                    string.format("upkeep: no free coal for %s at %s (%.0f s of fuel "
                                  .. "left; %d free above the floor)", n.e.name, n.key,
@@ -514,6 +513,8 @@ local function scan(cid, c)
       if n.into then fills[n.key] = true end
     end
     Fetch.update(cid, c, M.FUEL, short, free_coal(), fills, acting, log_once, M.TARGET_S)
+  else
+    Fetch.clear_short(cid)
   end
   -- feeding the productions no belt feeds, keeping her stock (commands/upkeep_feed.lua,
   -- upkeep_stock.lua)
@@ -576,7 +577,7 @@ function M.set_enabled(cid, on)
   if not on then
     -- (its books are not left to grow while it is off -- review)
     if storage.upkeep.down then storage.upkeep.down[cid] = nil end
-    prune_log_books(cid)
+    Logs.prune(cid, LOG_BOOKS)
     local active = storage.active_step and storage.active_step[cid]
     Fetch.cancel(cid, function(task_id) return active and active.task_id == task_id end)
     Feed.stop(cid, function(task_id) return active and active.task_id == task_id end)
