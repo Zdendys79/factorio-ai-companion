@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.171
+  Features:
+    - Build plans take removals ({"removals": [{entity, x, y}]}: an upgrade's old
+      buildings, their items reused). The split: the parts the removals will not give
+      back ensured first and the new primary piece's tile checked -- the old buildings
+      stand until then -- then the removals (optional: one already gone is noted, the
+      next pass makes up for it), then every part ensured again, the whole count, the
+      fill items, the places, the fills. A plan without removals ensures its parts
+      twice over, as before.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.170
   Features:
     - Build plans (commands/build_plan.lua, factorio-ai docs/build_plans.md -- Zdendys:

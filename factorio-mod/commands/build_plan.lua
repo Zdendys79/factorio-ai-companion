@@ -2,15 +2,20 @@
 -- controller hands over the whole plan of a build at once, under one task name -- its
 -- pieces (entity, exact position, direction) in placement order, back to front (a
 -- consumer before the inserter that feeds it, the inserter before its chest), and the
--- fills (fuel, material) -- and the mod splits it into its own steps itself:
---   1. every part ensured (gathered, fetched or crafted), twice over: a part a later
---      craft consumed is made again (a burner drill's recipe takes a stone furnace);
---   2. the fill items ensured;
---   3. with a resource: the primary piece's tile checked first (set_position,
---      verify_tile);
---   4. one place step per piece, in the plan's order (role -> which: the task's ctx
+-- fills (fuel, material), and what it takes down first (removals: an upgrade's old
+-- buildings, their items reused) -- and the mod splits it into its own steps itself:
+--   1. every part ensured (gathered, fetched or crafted) -- as many as the removals
+--      will not give back, so the old buildings stand until the rest is in hand;
+--      with a resource, the new primary piece's tile checked too (set_position,
+--      verify_tile) -- both before anything old is taken down;
+--   2. the removals, optional (one already gone is only noted; the next pass makes
+--      up for it);
+--   3. every part ensured again, the whole count: what a removal did not give, and a
+--      part a later craft consumed (a burner drill's recipe takes a stone furnace);
+--   4. the fill items ensured;
+--   5. one place step per piece, in the plan's order (role -> which: the task's ctx
 --      records the placed position);
---   5. one insert step per fill, optional (a fill that fails leaves the build
+--   6. one insert step per fill, optional (a fill that fails leaves the build
 --      standing; the task's step_errors say so) -- the fuel goes in only once the
 --      whole chain stands.
 -- The steps run one at a time, each competing in her queue by its priority; the next
@@ -19,7 +24,8 @@
 -- Plan JSON: {"name": "...", "resource": "iron-ore" | nil,
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
 --               "secondary" | nil}, ...],
---   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...]}
+--   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
+--   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
 local M = {}
 
@@ -62,6 +68,12 @@ local function check(plan)
       return "fill " .. i .. ": entity, x, y, a known item and a whole count >= 1 needed"
     end
   end
+  for i, r in ipairs(plan.removals or {}) do
+    if type(r) ~= "table" or type(r.x) ~= "number" or type(r.y) ~= "number"
+        or type(r.entity) ~= "string" or not prototypes.entity[r.entity] then
+      return "removal " .. i .. ": a known entity, x and y needed"
+    end
+  end
   if plan.resource ~= nil then
     if type(plan.resource) ~= "string" or not prototypes.entity[plan.resource] then
       return "unknown resource " .. tostring(plan.resource)
@@ -85,20 +97,19 @@ function M.expand(plan)
     if not counts[p.entity] then order[#order + 1] = p.entity end
     counts[p.entity] = (counts[p.entity] or 0) + 1
   end
+  local given = {}
+  for _, r in ipairs(plan.removals or {}) do
+    given[r.entity] = (given[r.entity] or 0) + 1
+  end
   local steps = {}
-  for _ = 1, 2 do
-    for _, item in ipairs(order) do
-      steps[#steps + 1] = {type = "ensure_item", item = item, count = counts[item]}
+  -- 1. the parts the removals will not give back (the old buildings stand meanwhile)
+  for _, item in ipairs(order) do
+    local short = counts[item] - (given[item] or 0)
+    if short > 0 then
+      steps[#steps + 1] = {type = "ensure_item", item = item, count = short}
     end
   end
-  local fill_order, fill_counts = {}, {}
-  for _, f in ipairs(plan.fills or {}) do
-    if not fill_counts[f.item] then fill_order[#fill_order + 1] = f.item end
-    fill_counts[f.item] = (fill_counts[f.item] or 0) + f.count
-  end
-  for _, item in ipairs(fill_order) do
-    steps[#steps + 1] = {type = "ensure_item", item = item, count = fill_counts[item]}
-  end
+  -- the new site's resource checked before anything old is taken down
   if plan.resource then
     for _, p in ipairs(plan.pieces) do
       if p.role == "primary" then
@@ -107,6 +118,24 @@ function M.expand(plan)
         break
       end
     end
+  end
+  -- 2. the removals (optional: one already gone only noted, the next pass makes up)
+  for _, r in ipairs(plan.removals or {}) do
+    steps[#steps + 1] = {type = "remove", entity = r.entity, x = r.x, y = r.y,
+                         optional = true}
+  end
+  -- 3. every part again, the whole count
+  for _, item in ipairs(order) do
+    steps[#steps + 1] = {type = "ensure_item", item = item, count = counts[item]}
+  end
+  -- 4. the fill items
+  local fill_order, fill_counts = {}, {}
+  for _, f in ipairs(plan.fills or {}) do
+    if not fill_counts[f.item] then fill_order[#fill_order + 1] = f.item end
+    fill_counts[f.item] = (fill_counts[f.item] or 0) + f.count
+  end
+  for _, item in ipairs(fill_order) do
+    steps[#steps + 1] = {type = "ensure_item", item = item, count = fill_counts[item]}
   end
   for _, p in ipairs(plan.pieces) do
     steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
