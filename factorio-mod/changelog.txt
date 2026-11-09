@@ -1,4 +1,31 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.173
+  Changes:
+    - A build plan's fill items are ensured by an optional step: a fill item she cannot
+      get no longer fails the whole build before anything is placed -- the build stands,
+      the inserts put in what she has, the task's step_errors say what was missing (the
+      fills were already optional).
+    - An optional fuel / insert step no longer holds its task back (task_ready): a plan
+      whose fill item she did not have waited at its first fill for 6000 ticks and then
+      failed "needs never satisfied" -- after every piece stood. This applies to every
+      plan's fills (units, coal pairs, coal-row units, taps too): they are best effort.
+      A required fuel / insert step is ready once its task's own unused reservation
+      covers its count (the place / remove steps keep the cumulative rule).
+    - A fuel or insert step puts in at most what she holds free: its task's own
+      reservation and what no other task reserved (another task's reserved coal no
+      longer goes into a plan's fill); a fuel step's swap is refused unless the step's
+      whole count is free.
+    - A failed optional ensure_item step drops its fetch books, as a done one does.
+    - Once a fuel / insert step is passed, its task's need of the item is recomputed
+      for the steps still ahead and a reservation they no longer need is released (the
+      other tasks' needs then looked at again); an optional fill's deficit kept
+      reserving newly mined items and was reported in fac_task_status after the step
+      had run.
+    - The upkeep holds its coal back for another task only when a step still ahead
+      that is not optional needs coal (a plan's coal fills no longer block its fuelling
+      of the burners near her; fresh coal still covers an older task's fill shortfall
+      first, as reservations go in task order).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.172
   Features:
     - A build plan's piece may be mirrored ({"mirror": true}): its place step places it

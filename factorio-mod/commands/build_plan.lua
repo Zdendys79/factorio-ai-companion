@@ -12,7 +12,9 @@
 --      up for it);
 --   3. every part ensured again, the whole count: what a removal did not give, and a
 --      part a later craft consumed (a burner drill's recipe takes a stone furnace);
---   4. the fill items ensured;
+--   4. the fill items ensured, optional (best effort, as the fills themselves: a fill
+--      item she cannot get leaves the build standing -- the inserts put in what she
+--      has; the task's step_errors say so);
 --   5. one place step per piece, in the plan's order (role -> which: the task's ctx
 --      records the placed position);
 --   6. one insert step per fill, optional (a fill that fails leaves the build
@@ -137,8 +139,11 @@ function M.expand(plan)
     if not fill_counts[f.item] then fill_order[#fill_order + 1] = f.item end
     fill_counts[f.item] = (fill_counts[f.item] or 0) + f.count
   end
+  -- (optional: a fill item that cannot be had must not fail the whole build before
+  -- anything is placed -- the fills are best effort)
   for _, item in ipairs(fill_order) do
-    steps[#steps + 1] = {type = "ensure_item", item = item, count = fill_counts[item]}
+    steps[#steps + 1] = {type = "ensure_item", item = item, count = fill_counts[item],
+                         optional = true}
   end
   for _, p in ipairs(plan.pieces) do
     steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,

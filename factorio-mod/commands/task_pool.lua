@@ -16,7 +16,8 @@
 --
 -- Procurement (mining raw ore, crafting intermediate items) is NOT reimplemented
 -- here -- a task with unmet needs just stays blocked until enough of the needed
--- item exists in the main inventory; something ELSE (the existing gather_queues/
+-- item exists in the main inventory (not for an optional fuel / insert step's items,
+-- 0.16.173 -- see "Any step: optional" below); something ELSE (the existing gather_queues/
 -- craft_queues macros, or a future task that supplies coal/plates as a side
 -- effect) is expected to top that up. This keeps this first version's scope to
 -- the mechanism Zdendys actually described tonight (pool/reservation/priority),
@@ -71,7 +72,11 @@
 --     only), raw=true (N counts all she holds of NAME, not what other tasks
 --     have not reserved) -- both the upkeep's getting material
 -- Any step: optional=true -- when it fails, its error goes into the task's step_errors
--- and the task goes on with the next step (task_pool_ledger.step_failed).
+-- and the task goes on with the next step (task_pool_ledger.step_failed). An optional
+-- fuel / insert step does not hold its task back for its items (task_ready: it runs
+-- with what she holds free -- her own reservation and what no other task reserved --
+-- since 0.16.173); once a fuel / insert step is passed, the task's need of its item is
+-- recomputed for the steps ahead (task_pool_ledger.step_passed).
 -- The hand steps (remove, fuel, insert, take, fill, take_out) act only within her reach.
 --
 -- ensure_item (2026-07-17, Zdendys's own architecture correction: procurement was
@@ -686,26 +691,14 @@ function M.tick()
         if kind == "satisfied" then
           table.remove(t.ctx.ensure_stack)
           if #t.ctx.ensure_stack == 0 then
-            -- Reset to nil, not just an empty table (2026-07-17, live-caught crash:
-            -- "attempt to index local 'need' (a nil value)" at start_ensure_item_action's
-            -- own `local need = stack[#stack]`). t.ctx is shared across ALL steps of
-            -- this task, and a task can have MULTIPLE ensure_item steps in a row (e.g.
-            -- build_ore_drill_row_unit_steps' burner-mining-drill THEN stone-furnace,
-            -- coal_pair.py). Leaving ensure_stack as `{}` here made line 866's own
-            -- `t.ctx.ensure_stack or {...}` initializer a no-op for the NEXT ensure_item
-            -- step -- an empty table is truthy in Lua -- so that step ran
-            -- start_ensure_item_action against a permanently empty stack instead of
-            -- pushing its own need, crashing every tick forever (active_step never
-            -- cleared -> companion deadlocked for the rest of the episode).
-            t.ctx.ensure_stack = nil
-            -- Clear alongside ensure_stack (2026-07-27, same "shared across ALL
-            -- steps of this task" reasoning as the comment above): without this,
-            -- a stale expired deadline from an EARLIER ensure_item step could make
-            -- a LATER step needing the SAME item name skip its own fresh 30s wait
-            -- window entirely (see task_pool_ensure_item.lua's own SMELT_WAIT_TICKS
-            -- docstring).
-            t.ctx.smelt_wait_deadline = nil
-            fetch.reset(t)      -- (and its fetch books: task_pool_fetch.lua)
+            -- the step's shared ctx state cleared (ledger.clear_ensure_ctx): its
+            -- ensure stack to nil, not just an empty table (2026-07-17, live-caught
+            -- crash: t.ctx is shared across ALL steps of this task, and a task can have
+            -- MULTIPLE ensure_item steps in a row -- an empty table is truthy in Lua, so
+            -- the next step ran on a permanently empty stack, crashing every tick), its
+            -- smelt wait (2026-07-27: a stale deadline let a later step for the same
+            -- item skip its own wait) and its fetch books (task_pool_fetch.lua)
+            ledger.clear_ensure_ctx(t)
             -- step_ticks (2026-07-28, action-timing instrumentation): recorded at
             -- every cursor advance, keyed by the PRE-increment cursor (the step
             -- that just finished) -- active.step_start_tick was stamped once when
@@ -782,7 +775,10 @@ function M.tick()
       elseif step.type == "fuel" then
         local pos = step_target_pos(t, step)
         local inv = c.entity.get_main_inventory()
-        local have = inv.get_item_count(step.item)
+        -- what she holds free: her task's own reservation and what no other task
+        -- reserved (ledger.free_count -- an optional fuel step runs without its full
+        -- reservation since 0.16.173, review)
+        local have = ledger.free_count(t, step.item, inv.get_item_count(step.item))
         -- NIL-POS CRASH (2026-07-28, live-caught: this exact step permanently wedged
         -- storage.active_step[cid] for the rest of a live episode -- `pos` reaching
         -- here nil, then flowing unguarded into the table.sort comparator added by
@@ -803,8 +799,8 @@ function M.tick()
         -- for every other unresolvable-step case just below.
         if not pos then
           ok, err = false, "fuel: no target position resolved"
-        elseif have == 0 then
-          ok, err = false, "no " .. step.item .. " in inventory"
+        elseif have <= 0 then
+          ok, err = false, "no " .. step.item .. " free in inventory"
         else
           -- TYPE-FILTER BUG (2026-07-28, live-caught: belt-row-tap iron-output-
           -- inserter refuel stuck at "still starved" for 790+ consecutive cycles
@@ -850,7 +846,7 @@ function M.tick()
             -- item fits it (task_pool_steps.swap_at_target) -- only at her own burner AT
             -- the position; one she cannot empty fails the step, no item handed to
             -- its neighbours (review: they took the whole budget, the step "done")
-            local swap_err = steps.swap_at_target(c, step, es[1], pos)
+            local swap_err = steps.swap_at_target(c, step, es[1], pos, have)
             if swap_err then es = {} end
             for _, e in ipairs(es) do
               if remaining <= 0 then break end
@@ -925,6 +921,8 @@ function M.tick()
             t.step_results[#t.step_results + 1] = result
           end
           t.cursor = t.cursor + 1
+          -- (a fuel / insert step's item: the need recomputed for the steps ahead)
+          ledger.step_passed(t, step)
           storage.active_step[cid] = nil
           if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
         else

@@ -142,11 +142,14 @@ local function chest_need(group)
   return N.chest_need(group, M.TARGET_S)
 end
 
--- Whether another active task of the companion still waits for coal.
+-- Whether another active task of the companion still waits for coal: its required
+-- steps ahead need more than its own unused reservation (ledger.required_short -- a
+-- build plan's fills are best effort, they do not hold the upkeep's coal back;
+-- 0.16.173 reviews).
 local function coal_wanted_elsewhere(cid)
   for _, t in pairs(storage.tasks) do
     if t.cid == cid and t.status == "active" and t.kind ~= "upkeep"
-       and t.needs and (t.needs[M.FUEL] or 0) > 0 then
+       and ledger.required_short(t, M.FUEL) then
       return true
     end
   end

@@ -97,7 +97,9 @@ function M.rank_pos(t)
 end
 
 -- A task's CURRENT step is ready to run if every item consumed by steps UP TO AND
--- INCLUDING the current cursor is already reserved for THIS task (2026-07-10,
+-- INCLUDING the current cursor is already reserved for THIS task -- since 0.16.173 for
+-- the place / remove steps; a fuel / insert step by its own unused reservation, see
+-- the 0.16.173 paragraph below (2026-07-10,
 -- root-caused via live reproduction: get_diag()/task_status() polling of a
 -- deliberately-starved, UNCONTESTED single submission -- scripts/
 -- repro_starved_upgrade.py-class test -- showed a task sit at cursor=1
@@ -119,12 +121,24 @@ end
 -- task_pool_busy / reactive_expert.py's is_task_pool guard, which stops a SECOND
 -- task from being submitted while another is active) -- this one reproduces with
 -- exactly ONE task submitted, no competing submission at all.
+--
+-- 0.16.173 (Zdendys's best-effort fills, two reviews): the place / remove steps keep the
+-- cumulative rule above (their entities); a fuel / insert step at the cursor is ready
+-- when its task's own unused reservation (reserved less consumed) covers its count --
+-- the cumulative sums no longer meet once a step put in less than its count, or an
+-- optional one used reservation the counts do not include -- and an OPTIONAL one is
+-- never held back (it runs with what she holds free, ledger.free_count).
 function M.task_ready(t)
-  local needed_so_far = ledger.derive_needs(t.steps, t.cursor)
+  local needed_so_far = ledger.derive_needs(t.steps, t.cursor, "places")
   for item, count in pairs(needed_so_far) do
     if (t.reserved[item] or 0) < count then
       return false
     end
+  end
+  local step = t.steps[t.cursor]
+  if step and (step.type == "fuel" or step.type == "insert") and not step.optional then
+    local own = (t.reserved[step.item] or 0) - ((t.consumed or {})[step.item] or 0)
+    if own < (step.count or 1) then return false end
   end
   return true
 end

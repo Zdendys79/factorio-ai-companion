@@ -7,8 +7,9 @@
 -- furnace the controller loads itself (upkeep_feed_regs "own" / "loading"). Within
 -- FETCH_REACH of her it is taken at once; farther she walks there (a bounded walk) and
 -- the place is judged again on arrival. A place she could not reach or take from is
--- not tried again by that step for that item (t.ctx.fetch_tried, cleared when the step
--- ends). Never more than fits her inventory (a full one fetches nothing -- review: she
+-- not tried again by that step for that item (t.ctx.fetch_tried, cleared with the other
+-- fetch books when the step ends -- task_pool_ledger.clear_ensure_ctx, done or a failed
+-- optional step). Never more than fits her inventory (a full one fetches nothing -- review: she
 -- walked to every holder taking 0), never from a furnace output a stock task of the
 -- upkeep is about to take from (upkeep_stock.claimed). While no place holds it, the
 -- places are searched again every RESCAN_TICKS only (the step's smelt wait calls this
@@ -129,13 +130,6 @@ function M.start(c, t, item, want)
   t.ctx.fetch = {x = e.position.x, y = e.position.y, key = tried_key(e, item),
                  item = item, want = want}
   return "fetch"
-end
-
--- The step ended: its fetch books dropped (a later step of the task judges the places
--- afresh -- review: a refilled furnace stayed "tried" for the task's other steps).
-function M.reset(t)
-  t.ctx.fetch, t.ctx.fetch_tried, t.ctx.fetch_next_scan = nil, nil, nil
-  t.ctx.fetch_noroom_logged = nil
 end
 
 -- Start the walk to the place in t.ctx.fetch (the step's state "ensuring", kind

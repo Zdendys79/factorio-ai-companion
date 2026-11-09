@@ -36,8 +36,16 @@ function M.run_insert(c, t, step)
     return false, "insert: count must be a whole number >= 1, got " .. tostring(step.count)
   end
   local inv = c.entity.get_main_inventory()
-  local have = inv.get_item_count(step.item)
-  if have == 0 then return false, "no " .. step.item .. " in inventory" end
+  local raw = inv.get_item_count(step.item)
+  if raw == 0 then return false, "no " .. step.item .. " in inventory" end
+  -- what she holds less what OTHER tasks reserved (ledger.free_count): an optional
+  -- insert runs without its own full reservation since 0.16.173 and must not take
+  -- another task's (review: an upkeep fuel task's coal went into a plan's fill)
+  local have, others = ledger.free_count(t, step.item, raw)
+  if have <= 0 then
+    return false, string.format("no %s free in inventory (%d held, %d reserved by other "
+                                .. "tasks)", step.item, raw, others)
+  end
   local filter = {position = pos, radius = INSERT_RADIUS}
   if step.entity then filter.name = step.entity end
   local target, best = nil, math.huge
@@ -76,10 +84,13 @@ local SWAP_RADIUS = 0.5
 -- the builds): every other fuel in the fuel inventory of `target` (the burner nearest
 -- the step's position `pos`) moved into her inventory, so the step's item fits it.
 -- Nothing is moved unless all of it fits her inventory and she holds the step's whole
--- count (review: a partial swap, or too little coal, left it less fuel than before).
+-- count free (review: a partial swap, or too little coal, left it less fuel than
+-- before).
+-- @param have what she holds of the item free (ledger.free_count -- what the fuel step
+--   may put in; 0.16.173 review: her raw count let a swap empty the burner for 2 coal)
 -- @return nil (no swap asked, or done) or the error (not her burner at the position, too
 -- little of the item, or no room in her inventory for what would come out)
-function M.swap_at_target(c, step, target, pos)
+function M.swap_at_target(c, step, target, pos, have)
   if not step.swap then return nil end
   if not (target and target.valid and target.force.name == c.entity.force.name
           and u.distance(target.position, pos) <= SWAP_RADIUS) then
@@ -88,9 +99,9 @@ function M.swap_at_target(c, step, target, pos)
   local fi = target.get_fuel_inventory()
   if not fi then return "fuel: swap -- the " .. target.name .. " has no fuel inventory" end
   local inv = c.entity.get_main_inventory()
-  local have, count = inv.get_item_count(step.item), step.count or 1
+  local count = step.count or 1
   if have < count then
-    return string.format("fuel: swap -- %d %s with her, the step needs %d", have,
+    return string.format("fuel: swap -- %d %s free with her, the step needs %d", have,
                          step.item, count)
   end
   -- (per entry -- the fuel slot of every burner the upkeep keeps is a single one)

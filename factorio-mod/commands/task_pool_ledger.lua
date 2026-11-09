@@ -19,7 +19,8 @@ local M = {}
 -- drills before repositioning them) -- netted against place/fuel demand here so
 -- a task that fully supplies its own materials doesn't show a needs deficit for
 -- items it was never actually short on. Without this, such a task would never
--- become "ready" (task_ready() gates on needs being empty) and its own remove
+-- become "ready" (task_ready() compares the place / remove steps' needs so far with
+-- the reservation) and its own remove
 -- steps -- the very thing that would supply what it "needs" -- could never run:
 -- a real catch-22, not just an inefficiency.
 --
@@ -30,7 +31,15 @@ local M = {}
 -- task_ready() below passes t.cursor to get only the needs of steps executed SO
 -- FAR (1..cursor) -- see that function's own comment for why this distinction is
 -- the actual fix.
-local function derive_needs(steps, upto)
+--
+-- mode (0.16.173): nil -- every step (the reservation bookkeeping: an optional fill's
+-- item is reserved for it too); "required" -- an OPTIONAL fuel / insert step (a build
+-- plan's fills) left out (required_short: the upkeep need not hold coal back for it);
+-- "places" -- only the place / remove steps (task_ready: their entities' cumulative
+-- count against the cumulative reservation; a fuel / insert step is judged by its own
+-- unused reservation instead -- one that put in less than its count left the
+-- cumulative sums apart, review).
+local function derive_needs(steps, upto, mode)
   local needs = {}
   -- min()'d against #steps (defensive, 2026-07-10): task_ready() passes t.cursor,
   -- which SHOULD never exceed #steps while a task is still "active" (M.tick()
@@ -42,7 +51,8 @@ local function derive_needs(steps, upto)
     local s = steps[i]
     if s.type == "place" then
       needs[s.entity] = (needs[s.entity] or 0) + 1
-    elseif s.type == "fuel" or s.type == "insert" then
+    elseif (s.type == "fuel" or s.type == "insert") and mode ~= "places"
+           and not (mode == "required" and s.optional) then
       needs[s.item] = (needs[s.item] or 0) + (s.count or 1)
     elseif s.type == "remove" then
       needs[s.entity] = (needs[s.entity] or 0) - 1
@@ -57,8 +67,9 @@ end
 -- A task's step used up `n` of `item` (a fuel step's coal, a place step's entity): it
 -- leaves the shared reservations at once (review: a task's used items stayed reserved
 -- until it ended, so upkeep / ensure_item saw less free than she held). t.reserved stays
--- cumulative -- task_ready compares it with the needs of the steps so far -- and
--- t.consumed records what release_reservations must not release twice.
+-- cumulative -- task_ready compares it with the place / remove steps' needs so far, and
+-- a fuel / insert step with its own unused part (t.reserved - t.consumed, 0.16.173) --
+-- and t.consumed records what release_reservations must not release twice.
 function M.consume(t, item, n)
   if not item or not n or n <= 0 then return end
   t.consumed = t.consumed or {}
@@ -240,14 +251,31 @@ function M.get_task_status(task_id)
   }
 end
 
+-- An ensure_item step ended (done, or an optional one failed): the per-step state it
+-- left in the task's shared ctx cleared -- its ensure stack (left as {} the next
+-- ensure_item step ran on an empty stack, crashing every tick), its smelt wait (a stale
+-- deadline made a later step for the same item skip its own wait) and its fetch books
+-- (task_pool_fetch: a later step judges the places afresh -- a refilled furnace stayed
+-- "tried"). One place for both ends (0.16.173 review: a failed optional ensure, now in
+-- every plan's fills, kept its fetch books). The gather attempts and the wood chop
+-- counts (gather_attempts, wood_chop_count, wood_tried) are not cleared: they count per
+-- task, across its ensure steps (task_pool_ensure_item).
+local function clear_ensure_ctx(t)
+  t.ctx.ensure_stack = nil
+  t.ctx.smelt_wait_deadline = nil
+  t.ctx.fetch, t.ctx.fetch_tried, t.ctx.fetch_next_scan = nil, nil, nil
+  t.ctx.fetch_noroom_logged = nil
+end
+
 -- A step of an active task failed. An optional step (step.optional = true -- one
 -- pick-up of a list, where one entity not found must not leave the rest standing) is
 -- recorded in t.step_errors and the task goes on with its next step (done after the
 -- last); any other step fails the task. The per-step state a failed step leaves in the
--- task's shared ctx (an ensure_item step's stack and smelt wait) is cleared, as a step's
--- success clears it -- else the next ensure_item step would run on the stale stack
--- (independent review); its step_ticks entry is written with failed = true. The caller
--- clears the companion's active step.
+-- task's shared ctx is cleared (clear_ensure_ctx), as a step's success clears it --
+-- else the next ensure_item step would run on the stale stack (independent review);
+-- its step_ticks entry is written with failed = true; a passed fuel / insert step's
+-- need is recomputed for the steps ahead (step_passed, 0.16.173). The caller clears the
+-- companion's active step.
 -- @param start_tick the tick the step started (active.step_start_tick), for step_ticks
 local function step_failed(task_id, reason, start_tick)
   local t = storage.tasks[task_id]
@@ -256,19 +284,78 @@ local function step_failed(task_id, reason, start_tick)
   if step and step.optional then
     t.step_errors = t.step_errors or {}
     t.step_errors[#t.step_errors + 1] = {step = t.cursor, error = tostring(reason)}
-    t.ctx.ensure_stack = nil
-    t.ctx.smelt_wait_deadline = nil
+    clear_ensure_ctx(t)
     t.step_ticks = t.step_ticks or {}
     t.step_ticks[t.cursor] = {type = step.type, start = start_tick, done = game.tick,
                               failed = true}
     t.cursor = t.cursor + 1
+    M.step_passed(t, step)
     if t.cursor > #t.steps then complete_task(task_id) end
   else
     fail_task(task_id, reason)
   end
 end
 
+-- What of `item` the task `t` may use of the `held` she holds: her task's own unused
+-- reservation and what no other task reserved (as task_pool_ensure_item's held(); the
+-- fuel and insert steps -- an optional one runs without its full reservation since
+-- 0.16.173 and must not take another task's). An optional step may use the task's whole
+-- own reservation, also what a required step after it would need -- no plan has one
+-- (its fills come last); when the reservations exceed what she holds, the other tasks'
+-- go first.
+local function free_count(t, item, held)
+  local own = math.max(0, ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0))
+  local others = math.max(0, (storage.reserved[item] or 0) - own)
+  return held - others, others
+end
+
+-- The steps of `t` from its cursor on (what is still ahead).
+local function steps_ahead(t)
+  local out = {}
+  for i = t.cursor, #t.steps do out[#out + 1] = t.steps[i] end
+  return out
+end
+
+-- A fuel / insert step was passed (done, or an optional one failed; t.cursor already
+-- on the next step): the task's need of its item recomputed from the steps still
+-- ahead, its own unused reservation covering them first; a reservation the steps ahead
+-- no longer need is released (0.16.173 review: an optional insert run with what she
+-- had left its deficit standing -- it kept reserving newly mined items, held the
+-- upkeep's coal back and was reported as a need after the step had run).
+local function step_passed(t, step)
+  if not step or (step.type ~= "fuel" and step.type ~= "insert") or not step.item then
+    return
+  end
+  local item = step.item
+  local ahead = derive_needs(steps_ahead(t))[item] or 0
+  local own = ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0)
+  own = math.max(0, own)
+  if own > ahead then
+    M.consume(t, item, own - ahead)
+    -- (freed while it stays in her inventory: the other tasks' needs are looked at again
+    -- -- refresh_needs, as release_reservations does; review)
+    storage.reservation_epoch = (storage.reservation_epoch or 0) + 1
+    own = ahead
+  end
+  local deficit = math.max(0, ahead - own)
+  t.needs = t.needs or {}
+  t.needs[item] = deficit > 0 and deficit or nil
+end
+
+-- Whether the steps still ahead that are NOT optional need more of `item` than the
+-- task's own unused reservation holds -- it waits for more (a fill does not: the upkeep
+-- need not hold its coal back for it; 0.16.173 reviews -- a task whose required step was
+-- covered and only its fill short held the upkeep's coal back too).
+local function required_short(t, item)
+  local own = math.max(0, ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0))
+  return (derive_needs(steps_ahead(t), nil, "required")[item] or 0) > own
+end
+
 M.derive_needs = derive_needs
+M.clear_ensure_ctx = clear_ensure_ctx
+M.free_count = free_count
+M.step_passed = step_passed
+M.required_short = required_short
 M.fail_task = fail_task
 M.cancel_task = cancel_task
 M.complete_task = complete_task
