@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.175
+  Bugfixes:
+    - A build next to moving belts no longer fails "cannot stay within reach of the build
+      target". The approach spots she walks to before a build are tile centres checked
+      over their whole tile -- a tile corner searched with radius 0.5 never found a 1x1
+      belt, so she was sent to stand on a belt field; a spot the snap brings under the
+      4-tile minimum is skipped. On a belt she starts a build only as far inside her
+      reach as that belt (its prototype's belt_speed) carries her during the build's
+      wait, plus half a tile, or while she stands still; she used to build from the
+      reach edge, and the belt carried her back out of reach during the wait, every
+      re-approach the same. With her walk over on a belt she walks on toward the target
+      (the walk stops at about 4.5 tiles from the build's centre). Off a belt nothing
+      changes.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.174
   Features:
     - A build plan's piece may carry a recipe ({"recipe": NAME}): its place step is

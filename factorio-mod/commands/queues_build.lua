@@ -41,20 +41,30 @@ local SOLID_TYPES = {
 -- its true center) -- a full 1-tile margin increase here comfortably covers that one
 -- outlier too (4 - 0.375 = 3.625, still well above the old 3-tile floor). 3 dropped
 -- from the candidate list entirely (not just de-prioritized) so it can never be
--- chosen even as a last resort among these candidates; only the very last, all-
--- candidates-blocked fallback below still needs its own check. Candidates on tiles that
--- block characters (u.char_spot_blocked: water, out-of-map) are skipped too.
+-- chosen even as a last resort among these candidates; the all-candidates-blocked
+-- fallback below has its own check too. Candidates on tiles that
+-- block characters (u.char_spot_blocked: water, out-of-map) are skipped too. Since
+-- 0.16.175 every candidate is a tile centre checked over its tile's area (a belt is
+-- found), and one whose real distance after that snap is under 4 is skipped: the
+-- candidates lie 4 to ~7.7 tiles from build_pos.
 local function find_approach_pos(surf, char_pos, build_pos, reach)
   local candidates = {}
   for _, dist in ipairs({5, 4, 6, 7}) do
     for _, angle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
       local rad = math.rad(angle)
+      -- the TILE CENTRE and its tile's area (live 2026-11-09: a tile corner with a
+      -- radius-0.5 search never found a 1x1 belt -- its centre is 0.71 from any corner
+      -- -- so she was sent to stand on a belt field, which carried her out of reach)
       local p = {
-        x = math.floor(build_pos.x + dist * math.sin(rad) + 0.5),
-        y = math.floor(build_pos.y - dist * math.cos(rad) + 0.5)
+        x = math.floor(build_pos.x + dist * math.sin(rad)) + 0.5,
+        y = math.floor(build_pos.y - dist * math.cos(rad)) + 0.5
       }
-      local blocked = surf.find_entities_filtered{position = p, radius = 0.5, type = SOLID_TYPES}
-      if #blocked == 0 and not u.char_spot_blocked(surf, p) then
+      local blocked = surf.find_entities_filtered{
+        area = {{p.x - 0.45, p.y - 0.45}, {p.x + 0.45, p.y + 0.45}}, type = SOLID_TYPES}
+      -- (the snap to a tile centre can bring a spot up to ~0.7 nearer: one under the
+      -- 4-tile minimum is skipped -- review)
+      if #blocked == 0 and u.distance(p, build_pos) >= 4
+         and not u.char_spot_blocked(surf, p) then
         candidates[#candidates + 1] = {pos = p, dist = u.distance(char_pos, p)}
       end
     end
@@ -196,6 +206,29 @@ local MAX_SELF_COLLISION_STEP_AWAY = 2
 -- re-approaches after she drifted out of reach in the BUILDING state, each with a fresh
 -- deadline -- bounded so a build cannot loop approaching/clearing/building forever
 local MAX_REAPPROACH = 3
+-- the entity types that carry a character standing on them
+local BELT_TYPES = {"transport-belt", "underground-belt", "splitter", "linked-belt",
+                    "loader", "loader-1x1", "lane-splitter"}
+-- where a walk toward the target on a belt stops, from the build's centre (Zdendys: at
+-- least 4 tiles from what is built; the 5-tick checks can overshoot it by under a
+-- tile); a belt faster than the room this leaves can still carry her out of reach --
+-- the bounded re-approaches end the build
+local MIN_BELT_BUILD_DIST = 4.5
+
+-- How far the belt under her (if any) carries her during the BUILD_TICKS wait, plus
+-- half a tile: 0 off a belt. The tile under her read by area (a 1x1 belt's position is
+-- its tile's centre); a yellow belt (belt_speed 0.03125 tiles/tick) gives ~2.4.
+local function belt_drift(surf, pos)
+  local tx, ty = math.floor(pos.x), math.floor(pos.y)
+  local belts = surf.find_entities_filtered{
+    area = {{tx + 0.05, ty + 0.05}, {tx + 0.95, ty + 0.95}}, type = BELT_TYPES}
+  local speed = 0
+  for _, b in ipairs(belts) do
+    speed = math.max(speed, b.prototype.belt_speed or 0)
+  end
+  if speed == 0 then return 0 end
+  return speed * BUILD_TICKS + 0.5
+end
 
 -- Start a smart build: auto-approach + auto-clear + place
 -- State machine: approaching -> clearing -> building -> done
@@ -290,6 +323,7 @@ function M.tick_build_queues()
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
+        q.last_pos = nil
         q.approach_deadline = u.approach_deadline(c.entity.position, approach)
       end
       return false
@@ -305,7 +339,26 @@ function M.tick_build_queues()
       if not q.approach_deadline then
         q.approach_deadline = u.approach_deadline(c.entity.position, q.position)
       end
-      if u.distance(c.entity.position, q.position) <= reach then
+      -- in reach off a belt (as always), or on a belt once she is as far inside her
+      -- reach as that belt can carry her during the BUILD_TICKS wait (belt_drift) or
+      -- she stands still (pushed against something: the belt does not carry her --
+      -- review). She used to build from the reach edge on a belt too, which carried her
+      -- out of reach during the wait, every re-approach the same: "cannot stay within
+      -- reach" (live 2026-11-09). On a belt with her walk over (the walker stops up to
+      -- 2 tiles short of its spot), she walks on toward the target.
+      local pos = c.entity.position
+      local dist = u.distance(pos, q.position)
+      local still = q.last_pos ~= nil and u.distance(q.last_pos, pos) < 0.01
+      q.last_pos = {x = pos.x, y = pos.y}
+      local ready = false
+      if dist <= reach then
+        local drift = belt_drift(surf, pos)
+        ready = drift == 0 or still or dist <= math.max(reach - drift, MIN_BELT_BUILD_DIST)
+        if not ready and storage.walking_queues[cid] == nil then
+          storage.walking_queues[cid] = {target = {x = q.position.x, y = q.position.y}}
+        end
+      end
+      if ready then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "clearing"
@@ -357,6 +410,7 @@ function M.tick_build_queues()
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
+        q.last_pos = nil
         q.approach_deadline = u.approach_deadline(c.entity.position, approach)
         return false
       end
