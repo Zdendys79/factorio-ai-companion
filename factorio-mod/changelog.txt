@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.179
+  Changes:
+    - ensure_item step option more = N: she is to hold what she holds of the item when
+      the step starts plus N (a count the controller read earlier made her also get
+      what she burned while the step waited in the queue).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.178
   Changes:
     - A build's raw material (an ensure_item step: stone, coal, ore) comes from the stores

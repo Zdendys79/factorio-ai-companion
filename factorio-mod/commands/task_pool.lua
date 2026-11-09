@@ -71,7 +71,8 @@
 --     (a raw material from the stores first, mined only while no drill of it with a
 --     chest can be had -- task_pool_ensure_item.lua); options: no_pull=true (nothing
 --     taken from places -- mining only), raw=true (N counts all she holds of NAME,
---     not what other tasks have not reserved) -- both the upkeep's getting material
+--     not what other tasks have not reserved) -- both the upkeep's getting material;
+--     more=M (N is what she holds of NAME when the step starts plus M)
 -- Any step: optional=true -- when it fails, its error goes into the task's step_errors
 -- and the task goes on with the next step (task_pool_ledger.step_failed). An optional
 -- fuel / insert step does not hold its task back for its items (task_ready: it runs
@@ -728,9 +729,17 @@ function M.tick()
         -- header comment, near WOOD_CHOP_REACH, for the full design). Genuinely
         -- async (gather/craft/chop can each take many ticks) -- excluded from the
         -- generic ok/err fall-through below the same way "place" is.
-        -- (no_pull / raw: the step's options, task_pool_ensure_item.lua)
-        t.ctx.ensure_stack = t.ctx.ensure_stack or
-          {{item = step.item, count = step.count, no_pull = step.no_pull, raw = step.raw}}
+        -- (no_pull / raw: the step's options, task_pool_ensure_item.lua; more = N: the
+        -- count is what she holds of the item when the step starts plus N -- review: a
+        -- count the controller read earlier made her get what she burned meanwhile too)
+        if not t.ctx.ensure_stack then
+          local count = step.count
+          if type(step.more) == "number" then
+            count = c.entity.get_main_inventory().get_item_count(step.item) + step.more
+          end
+          t.ctx.ensure_stack = {{item = step.item, count = count, no_pull = step.no_pull,
+                                 raw = step.raw}}
+        end
         local kind, err2 = ensure_item.start_ensure_item_action(c, cid, t)
         if kind == "satisfied" then
           table.remove(t.ctx.ensure_stack)
