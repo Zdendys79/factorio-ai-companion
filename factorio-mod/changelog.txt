@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.185
+  Bugfixes:
+    - A task's "fill" step loads only what she holds free -- less what other tasks
+      reserved (ledger.free_count, as the fuel and insert steps since 0.16.173); it took
+      another task's reserved items (factorio-ai STATUS item 8h). fac_building_fill (the
+      controller's direct command) is unchanged.
+    - task_pool.lua: an old comment said a place step has no ensure_item precondition --
+      it has one now.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.184
   Changes:
     - A furnace fed by a drill with its resource gone (and no source proven dry beside

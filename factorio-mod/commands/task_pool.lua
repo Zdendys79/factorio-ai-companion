@@ -416,7 +416,8 @@ end
 -- chance to hit ANY of queues_build.lua's own bounded per-step deadlines --
 -- those only start counting once a step is actually scheduled as active, which
 -- never happens while task_ready() is false. Live-caught: power_plant's pump
--- "place" step (a single-item need, no ensure_item precondition of its own)
+-- "place" step (then a single-item need, without the ensure_item precondition a place
+-- step has now)
 -- stalled this way for a full episode; the ONLY thing that eventually recovered
 -- it was power_plant_dispatch.py's own outer POWER_PLANT_STAGE_DEADLINE_TICKS=
 -- 18000 blind timeout, burning a full 300s per shore attempt before the 3-strikes

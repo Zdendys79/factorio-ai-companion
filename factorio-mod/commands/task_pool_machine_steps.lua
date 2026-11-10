@@ -5,6 +5,7 @@
 -- collect / collect_many.
 
 local targeting = require("commands.task_pool_targeting")
+local ledger = require("commands.task_pool_ledger")
 local machine_fill = require("commands.machine_fill")
 local machine_empty = require("commands.machine_empty")
 
@@ -28,13 +29,21 @@ end
 
 -- {type="fill", x=, y=, item=NAME, count=N}: up to N of the item from her inventory
 -- into the entity closest to (x, y) -- fac_building_fill's load (machine_fill.fill).
--- Not a need of the task (derive_needs): like the command, it loads what she has, up to
--- N. Result {inserted, item, into}.
+-- Not a need of the task (derive_needs): it loads what she holds FREE, up to N -- what
+-- she holds less what other tasks reserved (ledger.free_count, as the fuel and insert
+-- steps since 0.16.173 -- factorio-ai STATUS item 8h: a fill took another task's
+-- reserved items). Result {inserted, item, into}.
 -- @return boolean ok, string|nil err, table|nil result
 function M.run_fill(c, t, step)
   local pos, item, count, err = resolve(t, step)
   if err then return false, err end
-  local r = machine_fill.fill(c, pos, item, count)
+  local raw = c.entity.get_main_inventory().get_item_count(item)
+  local have, others = ledger.free_count(t, item, raw)
+  if raw > 0 and have <= 0 then
+    return false, string.format("fill: no %s free in inventory (%d held, %d reserved by "
+                                .. "other tasks)", item, raw, others)
+  end
+  local r = machine_fill.fill(c, pos, item, math.min(count, math.max(have, 0)))
   if r.error then return false, r.error end
   return true, nil, r
 end
