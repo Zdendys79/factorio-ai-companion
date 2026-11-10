@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.183
+  Bugfixes:
+    - The controller's walk is no longer taken over at its end: when a fac_move_to walk
+      arrives or gives up (storage.controller_walk_end), the task pool's idle dispatch
+      holds off the read window (max 600 ticks, 1 s of real time) so the controller's
+      poll sees the arrival before an upkeep task walks her away -- unless such holds
+      have lasted 3600 ticks without a break (the pool then picks; upkeep never starved
+      by back-to-back walks). get_diag shows the hold (holds_pool.controller_walk).
+    - fac_companion_position's walk_target and its last-arrival fallback carry the
+      controller's own walk only (a pool step's walk target or arrival read as the
+      controller's let its wait accept "arrived" 61 tiles off); walk_last_arrived is
+      recorded for controller walks only. A companion that disappears drops these books.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.182
   Changes:
     - Her surplus into the stores (upkeep_surplus.lua): stone, iron ore and copper ore

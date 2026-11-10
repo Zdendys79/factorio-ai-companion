@@ -529,14 +529,49 @@ end
 local ENDED_GRACE_TICKS = 600
 local ENDED_GRACE_REAL_S = 1
 
+-- The read window in game ticks now (ENDED_GRACE_TICKS, or ENDED_GRACE_REAL_S of real
+-- time at a high game speed).
+local function read_window()
+  return math.max(ENDED_GRACE_TICKS, 60 * ENDED_GRACE_REAL_S * game.speed)
+end
+
 -- Whether a queue entry holds the pool: running, or -- `grace` set: a queue whose
 -- result a pool step could overwrite -- ended within the read window (an entry without
 -- run_end_tick, an older save, holds only while running).
 local function holds_pool(q, grace)
   if activity.running(q) then return true end
   if not grace or type(q) ~= "table" or q.run_end_tick == nil then return false end
-  local window = math.max(ENDED_GRACE_TICKS, 60 * ENDED_GRACE_REAL_S * game.speed)
-  return game.tick - q.run_end_tick < window
+  return game.tick - q.run_end_tick < read_window()
+end
+
+-- the controller's walks holding the pool without a break longer than this let it pick
+-- again (review: back-to-back service walks shut every upkeep task out -- a hand-fed
+-- boiler could run dry); its holds count from storage.controller_hold_since
+local HOLD_STARVE_TICKS = 3600
+
+-- Whether the controller's own walk (fac_move_to) ended within the read window
+-- (storage.controller_walk_end, control.lua): its controller has not read the arrival
+-- yet -- a pool step taking her now walked her off before the poll, and the controller's
+-- wait read that as stuck (factorio-ai smoke_no_give_up11). Not once such holds have
+-- lasted HOLD_STARVE_TICKS without a break (note_controller_hold). Read-only.
+local function controller_walk_held(cid)
+  local ended = storage.controller_walk_end and storage.controller_walk_end[cid]
+  if ended == nil or game.tick - ended >= read_window() then return false end
+  local since = storage.controller_hold_since and storage.controller_hold_since[cid]
+  return since == nil or game.tick - since < HOLD_STARVE_TICKS
+end
+
+-- The idle dispatch's book of the holds (controller_walk_held): the tick the current
+-- unbroken hold began, dropped once no walk holds (its window over) or the pool picked.
+local function note_controller_hold(cid, picked)
+  storage.controller_hold_since = storage.controller_hold_since or {}
+  local ended = storage.controller_walk_end and storage.controller_walk_end[cid]
+  local in_window = ended ~= nil and game.tick - ended < read_window()
+  if picked or not in_window then
+    storage.controller_hold_since[cid] = nil
+  elseif storage.controller_hold_since[cid] == nil then
+    storage.controller_hold_since[cid] = game.tick
+  end
 end
 
 -- 2026-07-08, task #42: true if cid is busy in gather/fuel/build/belt_queues (see the
@@ -550,6 +585,7 @@ local function busy_elsewhere(cid)
       or holds_pool(storage.belt_queues and storage.belt_queues[cid], false)
       -- (an attack the controller's queued request started -- controller_requests.lua)
       or (storage.combat_queues and storage.combat_queues[cid]) ~= nil
+      or controller_walk_held(cid)
 end
 
 function M.tick()
@@ -1154,9 +1190,12 @@ function M.tick()
   -- start_build / start_gather cannot overwrite a result its other caller has not
   -- read yet.
   for cid, c in pairs(storage.companions or {}) do
+    note_controller_hold(cid, false)
     if c.entity and c.entity.valid and not storage.active_step[cid]
        and not storage.walking_queues[cid] and not busy_elsewhere(cid) then
       local task_id = pick_next(cid, c, true)
+      -- (the pool had its turn: an unbroken hold of the controller's walks starts anew)
+      note_controller_hold(cid, true)
       if task_id == M.CONTROLLER then
         -- the controller's queued command starts now; its own queue holds the pool
         -- from here (busy_elsewhere / walking_queues)
@@ -1250,6 +1289,8 @@ function M.get_diag(cid)
       fuel = holds_pool(storage.fuel_queues and storage.fuel_queues[cid], false),
       build = holds_pool(storage.build_queues and storage.build_queues[cid], true),
       belt = holds_pool(storage.belt_queues and storage.belt_queues[cid], false),
+      -- the controller's walk just ended (controller_walk_held)
+      controller_walk = controller_walk_held(cid),
     },
   }
   if active and active.task_id then

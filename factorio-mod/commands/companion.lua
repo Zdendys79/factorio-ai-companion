@@ -131,6 +131,10 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
     storage.walking_queues[id] = nil
     -- (her hand-craft count goes with her: a new companion under the id starts at 0)
     if storage.hand_crafts then storage.hand_crafts[id] = nil end
+    -- (her walk's books too: a new companion under the id inherits no hold, no arrival)
+    if storage.controller_walk_end then storage.controller_walk_end[id] = nil end
+    if storage.controller_hold_since then storage.controller_hold_since[id] = nil end
+    if storage.walk_last_arrived then storage.walk_last_arrived[id] = nil end
     requests.cancel(id)            -- and her queued controller command
     game.print("[#" .. id .. " gone]", u.print_color(u.COLORS.system))
     u.json_response({id = id, disappeared = true, dropped = dropped})
@@ -250,8 +254,13 @@ commands.add_command("fac_companion_position", nil, function(cmd)
     -- CURRENT (possibly-corrected) walk target here lets wait_arrive() also accept
     -- arrival relative to what the mod is ACTUALLY walking her to, not just the
     -- stale original -- see companion.py's wait_arrive() for the consuming side.
+    -- (the controller's own walk only -- fac_move_to's giveup_enabled: a pool step's
+    -- walk target read as the controller's let wait_arrive accept "arrived" 60 tiles
+    -- off the controller's target -- factorio-ai probe_service_walk_6; while such a walk
+    -- runs, the controller's last arrival is no target of it either)
     local wq = storage.walking_queues[id]
-    local walk_target = (wq and wq.target) and {x = wq.target.x, y = wq.target.y} or nil
+    local walk_target = (wq and wq.target and wq.giveup_enabled)
+      and {x = wq.target.x, y = wq.target.y} or nil
     -- walk_last_arrived fallback (2026-07-26, see control.lua's init_storage
     -- comment on storage.walk_last_arrived for the full race this closes): the
     -- live queue can be gone (walk_target nil above) NOT because no walk ever
@@ -261,7 +270,7 @@ commands.add_command("fac_companion_position", nil, function(cmd)
     -- the exact race a live mid-wait diagnostic (companion.py, same session)
     -- proved was happening (active:false from the very first poll of an
     -- affected wait).
-    if not walk_target and storage.walk_last_arrived[id] then
+    if not (wq and wq.giveup_enabled) and storage.walk_last_arrived[id] then
       local la = storage.walk_last_arrived[id]
       walk_target = {x = la.x, y = la.y}
     end

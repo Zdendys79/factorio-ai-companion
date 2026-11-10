@@ -86,6 +86,13 @@ local function init_storage()
   -- that could be misread as fresh) stash closes the race: Python can now recover
   -- the corrected target even after the queue is gone.
   storage.walk_last_arrived = storage.walk_last_arrived or {}
+  -- controller_walk_end: the game tick the controller's own walk (fac_move_to,
+  -- giveup_enabled) ended -- arrived or given up. The task pool holds off its read
+  -- window after it (task_pool.lua controller_walk_held): else a ready upkeep task took
+  -- her the next tick, before the controller's poll saw the arrival, and its wait read
+  -- her walking elsewhere as stuck (factorio-ai smoke_no_give_up11: 18 "give-up
+  -- (stuck)" walks, the visits skipped).
+  storage.controller_walk_end = storage.controller_walk_end or {}
   -- (0.16.164: a controller command is queued, never refused -- the refusal's upkeep
   -- yield is gone)
   storage.busy_refused = nil
@@ -562,7 +569,15 @@ local function process_walking_queues()
         -- here is already the walkability-CORRECTED point (target_checked ran
         -- earlier this same tick pass, at the top of this function), exactly
         -- what a caller polling immediately after this clears needs to recover.
-        storage.walk_last_arrived[cid] = {x = q.target.x, y = q.target.y, tick = game.tick}
+        if q.giveup_enabled then
+          -- (the controller's own walk only: a pool step's arrival read as the
+          -- controller's let its wait accept "arrived" 50 tiles off -- factorio-ai
+          -- probe_service_walk_6)
+          storage.walk_last_arrived[cid] = {x = q.target.x, y = q.target.y, tick = game.tick}
+          -- (made here too: a save loaded without a version change never ran init)
+          storage.controller_walk_end = storage.controller_walk_end or {}
+          storage.controller_walk_end[cid] = game.tick
+        end
         storage.walking_queues[cid] = nil
       end
       q.stuck_ticks = 0
@@ -636,6 +651,8 @@ local function process_walking_queues()
               result = (dist < 4) and "approx_arrived" or "unreachable",
               tick = game.tick,
             }
+            storage.controller_walk_end = storage.controller_walk_end or {}
+            storage.controller_walk_end[cid] = game.tick
             storage.walking_queues[cid] = nil
             e.walking_state = {walking = false}
             goto skip
