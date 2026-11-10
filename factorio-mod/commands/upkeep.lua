@@ -68,6 +68,7 @@ local N = require("commands.upkeep_need")
 local B = require("commands.upkeep_batch")
 local Feed = require("commands.upkeep_feed")
 local Stock = require("commands.upkeep_stock")
+local Surplus = require("commands.upkeep_surplus")
 local Regs = require("commands.upkeep_feed_regs")
 local Chests = require("commands.upkeep_chests")
 local Logs = require("commands.upkeep_logs")
@@ -142,6 +143,7 @@ function M.init()
   -- status read: review)
   Feed.init()
   Stock.init()
+  Surplus.init()
   Regs.init()
 end
 
@@ -181,7 +183,7 @@ end
 local log_once = Logs.log_once
 local LOG_BOOKS = {underfed = UNDERFED_LOG_TICKS, short = SHORT_LOG_TICKS,
                    blocked = SHORT_LOG_TICKS, noroom = SHORT_LOG_TICKS}
-for _, part in pairs({Feed, Stock, Fetch}) do
+for _, part in pairs({Feed, Stock, Surplus, Fetch}) do
   for name, every in pairs(part.LOG_BOOKS) do LOG_BOOKS[name] = every end
 end
 
@@ -516,14 +518,15 @@ local function scan(cid, c)
   else
     Fetch.clear_short(cid)
   end
-  -- feeding the productions no belt feeds, keeping her stock (commands/upkeep_feed.lua,
-  -- upkeep_stock.lua)
+  -- feeding the productions no belt feeds, keeping her stock and putting her surplus
+  -- into the stores (commands/upkeep_feed.lua, upkeep_stock.lua, upkeep_surplus.lua)
   Feed.scan(cid, c, acting, log_once)
   Stock.scan(cid, c, acting, log_once)
+  Surplus.scan(cid, c, acting, log_once)
 end
 
 -- the upkeep's parts with task records of their own, by their storage.upkeep book
-local PARTS = {feed = Feed, stock = Stock}
+local PARTS = {feed = Feed, stock = Stock, surplus = Surplus}
 
 -- The tick handler (control.lua's on_nth_tick(5), after the task pool's own tick so
 -- its reservations come first): each enabled companion's scan every SCAN_TICKS.
@@ -582,6 +585,7 @@ function M.set_enabled(cid, on)
     Fetch.cancel(cid, function(task_id) return active and active.task_id == task_id end)
     Feed.stop(cid, function(task_id) return active and active.task_id == task_id end)
     Stock.stop(cid, function(task_id) return active and active.task_id == task_id end)
+    Surplus.stop(cid, function(task_id) return active and active.task_id == task_id end)
     for key, task_id in pairs(storage.upkeep.tasks[cid] or {}) do
       local t = storage.tasks[task_id]
       if t and t.status == "active" and not (active and active.task_id == task_id) then

@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.182
+  Changes:
+    - Her surplus into the stores (upkeep_surplus.lua): stone, iron ore and copper ore
+      above a stack in her inventory (less what other open tasks reserved) go down to
+      70 % of a stack into the nearest plain chest within 300 tiles that already holds
+      the material, has room, no inserter picks from and the controller did not mark
+      its own -- one "insert" task, priority 0.5, not while a build is ready; a failed
+      deposit holds its chest off 3600 ticks, no store found is logged and searched
+      again 1800 ticks later.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.181
   Changes:
     - fac_belt_connect_start option "partial": short of belt items, the route's first part
