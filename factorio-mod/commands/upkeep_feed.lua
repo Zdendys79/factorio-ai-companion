@@ -24,7 +24,10 @@
 -- - then a line that delivers the item (upkeep_lines.input_line) makes it not hers --
 --   that verdict kept LINE_RECHECK_TICKS (review: a line check per inserter-fed furnace
 --   every scan); one delivering nothing at two scans in a row makes it hers once its
---   input lasts under LINE_DRY_S, logged as underfed;
+--   input lasts under LINE_DRY_S, logged as underfed; a furnace whose only source is
+--   a drill with its resource gone (and no source proven dry beside it) is not hers
+--   (Zdendys 2026-11-09: no hand supply once drills exist -- the controller's to
+--   replace), logged once;
 -- - no bound on how many furnaces she feeds by hand (Zdendys: "always to full" -- the
 --   earlier cap of 4 per input item, the stop while she held 70 % of the product and
 --   the half stack a smelted input kept back for her are gone): the list of the
@@ -72,22 +75,23 @@ M.LOG_BOOKS = {noline = HAND_KEEP_TICKS}
 
 -- her books kept per surface (review: a visit to another surface wiped them -- the
 -- hand-fed list and the back-off doubling were lost)
-local SURFACE_BOOKS = {"down", "lines", "backoff", "hand", "filling"}
+local SURFACE_BOOKS = {"down", "lines", "backoff", "hand", "filling", "mined"}
 
 function M.init()
   -- storage.upkeep.feed = {tasks = {[cid] = {[key] = task_id}}; per surface index s:
   --   down = {[cid] = {[s] = {[key] = first tick its line delivered nothing}}}, lines =
   --   {[cid] = {[s] = {[key] = tick a line was seen}}}, backoff = {[cid] = {[s] = {[key] =
   --   {until_tick, n}}}}, hand = {[cid] = {[s] = {[pos] = {item, tick}}}}, filling =
-  --   {[cid] = {[s] = {[key] = true: a fill in chunks goes on to full}}}; unknown =
+  --   {[cid] = {[s] = {[key] = true: a fill in chunks goes on to full}}}, mined = {[cid]
+  --   = {[s] = {[key] = true: its drill mined out, logged}}}; unknown =
   --   {[cid] = {[pos] = tick}} (rebuilt each scan; scanned = {[cid] = the surface index
   --   of her last scan}), picks = {[unit number]
   --   = {tick, items}: what an inserter's pickup last held -- upkeep_lines},
   --   books_version}; the registrations: upkeep_feed_regs.lua
   storage.upkeep = storage.upkeep or {}
   local f = storage.upkeep.feed or {}
-  for _, k in ipairs({"tasks", "down", "lines", "backoff", "hand", "filling", "unknown",
-                      "scanned", "picks"}) do
+  for _, k in ipairs({"tasks", "down", "lines", "backoff", "hand", "filling", "mined",
+                      "unknown", "scanned", "picks"}) do
     f[k] = f[k] or {}
   end
   -- (the hand cap's list of furnaces left unfed and its log book -- before 0.16.176:
@@ -199,7 +203,8 @@ function M.scan(cid, c, acting, log_once)
   local s = surface.index
   local mine = per(f.tasks, cid)
   local b = {down = per_surface(f.down, cid, s), lines = per_surface(f.lines, cid, s),
-             mine = mine, picks = f.picks, filling = per_surface(f.filling, cid, s)}
+             mine = mine, picks = f.picks, filling = per_surface(f.filling, cid, s),
+             mined = per_surface(f.mined, cid, s)}
   local off, hand = per_surface(f.backoff, cid, s), per_surface(f.hand, cid, s)
   -- (rebuilt every scan: a furnace gone leaves no entry behind; the status shows them
   -- only for the surface they were made on -- review)
@@ -224,7 +229,7 @@ function M.scan(cid, c, acting, log_once)
   -- (book entries of furnaces gone are dropped -- a line fed again was dropped by
   -- feed_need; a registration only by its own surface's scan: review -- a visit to
   -- another surface wiped every registration)
-  for _, book in pairs({b.down, b.lines, off, b.filling}) do
+  for _, book in pairs({b.down, b.lines, off, b.filling, b.mined}) do
     for key in pairs(book) do
       if not seen[key] then book[key] = nil end
     end
@@ -352,7 +357,8 @@ function M.stop(cid, acting)
       f.tasks[cid][key] = nil
     end
   end
-  for _, k in ipairs({"down", "lines", "backoff", "hand", "filling", "unknown", "scanned"}) do
+  for _, k in ipairs({"down", "lines", "backoff", "hand", "filling", "mined", "unknown",
+                      "scanned"}) do
     f[k][cid] = nil
   end
 end

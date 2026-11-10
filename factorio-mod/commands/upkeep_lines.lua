@@ -41,12 +41,14 @@ local function source_items(from)
   return set
 end
 
--- What the pickup `from` holds of `item`: true, false (only other items) or "empty".
+-- What the pickup `from` holds of `item`: true, false (only other items), "empty" (it
+-- held the item when last seen holding something) or "unknown" (never seen holding
+-- anything within MEMORY_TICKS: a source for any item -- but no proof of one, review: an
+-- old empty coal belt beside a mined-out drill read as a dry ore line).
 -- An empty one is judged by what it held when last seen holding something (memory:
 -- {[unit number] = {tick, items}}, kept MEMORY_TICKS): a fuel inserter's empty coal
 -- belt is no ore line that ran dry (review: it made a furnace without any ore line
--- "underfed", served only once its input lasted under LINE_DRY_S); never seen
--- holding anything: "empty" (a source for any item).
+-- "underfed", served only once its input lasted under LINE_DRY_S).
 local function source_holds(from, item, memory)
   local set = source_items(from)
   local unit = from.unit_number
@@ -58,7 +60,7 @@ local function source_holds(from, item, memory)
   if last and game.tick - last.tick < M.MEMORY_TICKS then
     return last.items[item] and "empty" or false
   end
-  return "empty"
+  return "unknown"
 end
 
 -- Whether a mining drill mines `item` (its resource's product).
@@ -74,15 +76,20 @@ end
 -- What delivers `item` into `machine`: "line" (a source that has the item at hand and
 -- is not stopped for want of energy, or supplies it now -- working, or waiting for room
 -- in the machine), "dry" (a source for it delivering nothing: its pickup empty, a drill
--- standing, a source without fuel or power) or nil (none -- a mined-out drill mines
--- nothing: hers to feed); and the
+-- standing, a source without fuel or power), "mined_out" (a drill dropping into it
+-- whose resource is gone and no other source but pickups never seen holding anything:
+-- the controller's to replace -- Zdendys 2026-11-09: no hand supply once drills exist;
+-- it was fed by hand meanwhile) or nil (none: hers to feed); and the
 -- status names of its sources for the item (for the log).
 -- An inserter whose pickup holds only other items is no line for `item` (the fuel
 -- inserter from a coal belt -- an empty pickup by what it last held, `memory`: see
 -- source_holds); one holding `item` in its hand is a line.
 function M.input_line(machine, item, memory)
   local sources, box = F.sources_around(machine)
-  local found, why = nil, {}
+  -- (known_dry: a "dry" source with proof it is one -- a drill of the item, a pickup
+  -- seen holding it, a hand holding it; one only "unknown" does not outweigh a mined-out
+  -- drill)
+  local found, why, mined_out, known_dry = nil, {}, false, false
   for _, src in pairs(sources) do
     local into = src.valid and F.drops_into(src, box)
     if src.valid and not into then
@@ -92,9 +99,12 @@ function M.input_line(machine, item, memory)
       -- its: a source for `item`; stocked: it has the item at hand (in its hand or at
       -- its pickup) -- a line whatever its status says (live: an inserter from a chest
       -- of 788 ore reported waiting_for_source_items at one scan)
-      local its, stocked = nil, false
+      local its, stocked, unknown = nil, false, false
       if src.type == "mining-drill" then
         its = mines(src, item)
+        if not its and src.status == defines.entity_status.no_minable_resources then
+          mined_out = true
+        end
       else
         local held = src.held_stack
         if held and held.valid_for_read then
@@ -103,8 +113,9 @@ function M.input_line(machine, item, memory)
         else
           local from = F.pickup_source(src)
           local h = from and source_holds(from, item, memory)
-          its = h == true or h == "empty"
+          its = h == true or h == "empty" or h == "unknown"
           stocked = h == true
+          unknown = h == "unknown"
         end
       end
       if its then
@@ -112,12 +123,17 @@ function M.input_line(machine, item, memory)
           return "line", {F.status_name(src)}
         end
         found = "dry"
+        if not unknown then known_dry = true end
         why[#why + 1] = src.name .. ":" .. F.status_name(src)
+      elseif src.type == "mining-drill"
+             and src.status == defines.entity_status.no_minable_resources then
+        why[#why + 1] = src.name .. ":mined-out"
       else
         why[#why + 1] = src.name .. ":not-for-" .. item
       end
     end
   end
+  if mined_out and not known_dry then return "mined_out", why end
   return found, why
 end
 

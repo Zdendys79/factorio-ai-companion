@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.184
+  Changes:
+    - A furnace fed by a drill with its resource gone (and no source proven dry beside
+      it -- a pickup never seen holding anything proves nothing) is no longer fed by
+      hand (Zdendys: no hand supply once drills exist -- the controller's to replace):
+      upkeep_lines.input_line reads it "mined_out", the feed need leaves it
+      (judged again after LINE_RECHECK_TICKS) and logs it once per furnace (the feed's
+      new per-surface book "mined", pruned with the others; nil-safe for older saves).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.183
   Bugfixes:
     - The controller's walk is no longer taken over at its end: when a fac_move_to walk

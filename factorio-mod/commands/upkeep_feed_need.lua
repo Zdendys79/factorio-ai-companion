@@ -121,7 +121,8 @@ local function idle_by_choice(e, c)
 end
 
 -- A furnace's feed need {key, e, item, p, t, want, gap (what it lacks to full), raw,
--- line, why} or nil. `b`: the companion's books {down, lines, mine, picks, filling};
+-- line, why} or nil. `b`: the companion's books {down, lines, mine, picks, filling,
+-- mined};
 -- `seen`: the keys judged this scan; `c`: the companion (her position, her free stock
 -- of a smelted input).
 local function feed_need(e, recipe, b, seen, c)
@@ -157,7 +158,21 @@ local function feed_need(e, recipe, b, seen, c)
   if line == "line" then
     -- (a line feeds it now: no fill of hers goes on -- review)
     b.down[key], b.filling[key] = nil, nil
+    if b.mined then b.mined[key] = nil end
     b.lines[key] = game.tick
+    return nil
+  elseif line == "mined_out" then
+    -- (its drill's resource is gone: not fed by hand -- the controller's to replace (a
+    -- base unit relocated, a plate row's drill not yet); judged again after
+    -- LINE_RECHECK_TICKS, logged once while it lasts)
+    b.down[key], b.filling[key] = nil, nil
+    b.lines[key] = game.tick
+    if b.mined and not b.mined[key] then
+      b.mined[key] = true
+      log(string.format("[ai-companion] upkeep feed: the drill into the %s at %s is mined "
+                        .. "out -- not fed by hand (the controller's to replace)", e.name,
+                        pos_key(e)))
+    end
     return nil
   elseif line == "dry" then
     b.down[key] = b.down[key] or game.tick
