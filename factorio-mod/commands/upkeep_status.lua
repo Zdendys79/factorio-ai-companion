@@ -6,6 +6,7 @@ local Fetch = require("commands.upkeep_fetch")
 local Stores = require("commands.supply_stores")
 local Feed = require("commands.upkeep_feed")
 local Stock = require("commands.upkeep_stock")
+local Hand = require("commands.upkeep_hand")
 
 local M = {}
 
@@ -47,6 +48,9 @@ function M.status(cid)
   -- last feed), unknown (furnaces whose input it cannot tell), held_off (after
   -- failures)} -- commands/upkeep_feed.lua
   out.feed = Feed.status(cid)
+  -- the burners / fuel chests it served by hand lately (0.16.189, Decided 8):
+  -- [{at, fills, item, tick, supply = "broken" | "none"}] -- commands/upkeep_hand.lua
+  out.hand_fuel = Hand.status(cid)
   -- keeping her stock: [{item, task_id, priority, at}] -- commands/upkeep_stock.lua
   out.stock = Stock.status(cid)
   return out

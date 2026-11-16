@@ -133,18 +133,22 @@ local function per_surface(f, cid, s)
   return mine[s]
 end
 
--- Forget ended tasks: a feed done lists its furnace as fed by hand; one that failed
+-- Forget ended tasks: a feed done lists its furnace as fed by hand (0.16.189: with its own
+-- supply "broken" -- a line delivering nothing, `down` -- or "none"); one that failed
 -- holds its furnace off (doubled while it repeats, at most x16), every failure logged
 -- (the back-off spaces them -- review: a log book keyed by the doubled wait swallowed
 -- the repeats).
-local function prune(mine, off, hand)
+local function prune(mine, off, hand, down)
   for key, task_id in pairs(mine) do
     local t = storage.tasks[task_id]
     if not t or t.status ~= "active" then
       local pos, item = key:match("^(.-)|(.+)$")
       if t and t.status == "done" then
         off[key] = nil
-        if item ~= "clear" then hand[pos] = {item = item, tick = game.tick} end
+        if item ~= "clear" then
+          hand[pos] = {item = item, tick = game.tick,
+                       supply = (down and down[key]) and "broken" or "none"}
+        end
       elseif t and t.status == "failed" then
         local n = ((off[key] and off[key][2]) or 0) + 1
         local wait = FAIL_BACKOFF_TICKS * 2 ^ math.min(n - 1, 4)
@@ -211,7 +215,7 @@ function M.scan(cid, c, acting, log_once)
   f.unknown[cid] = {}
   f.scanned[cid] = s
   local unknown = f.unknown[cid]
-  prune(mine, off, hand)
+  prune(mine, off, hand, b.down)
   local needs, by_key, seen, present, seen_pos, owned = {}, {}, {}, {}, {}, {}
   local inv = c.entity.get_main_inventory()
   for _, e in pairs(surface.find_entities_filtered{type = "furnace",
@@ -306,7 +310,7 @@ local function on_her_surface(f, cid)
 end
 
 -- The feed upkeep's part of the status -- her current surface's: its open tasks, the
--- furnaces fed by hand lately (rule 6; hand_fed: [{at, item, tick}] -- the tick of the
+-- furnaces fed by hand lately (rule 6; hand_fed: [{at, item, tick, supply}] -- the tick of the
 -- last feed), the furnaces whose input it cannot tell, the feeds held off after
 -- failures (held_off: [{at, item, until_tick}] -- the controller's own feeding steps in
 -- for its furnaces meanwhile; review: another surface's entries matched furnaces here
@@ -329,7 +333,8 @@ function M.status(cid)
   end
   for pos, v in pairs(on_her_surface(f.hand, cid)) do
     if type(v) == "table" then
-      out.hand_fed[#out.hand_fed + 1] = {at = pos, item = v.item, tick = v.tick}
+      out.hand_fed[#out.hand_fed + 1] = {at = pos, item = v.item, tick = v.tick,
+                                         supply = v.supply or "none"}
     end
   end
   -- (her last scan's lists, only while she is still on its surface)

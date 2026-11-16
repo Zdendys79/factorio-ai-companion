@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.189
+  Features:
+    - The devices the upkeep serves by hand go to the controller (factorio-ai
+      docs/architecture_roles.md Decided 8, STATUS item 10): the fuel upkeep books every
+      burner / fuel chest it served by hand (commands/upkeep_hand.lua: its last tick, what
+      it filled, and its own supply "broken" -- a line that delivered nothing -- or
+      "none"; per surface, kept 36000 ticks, only while she has her upkeep on);
+      /fac_upkeep reports her surface's as hand_fuel, a spot that holds nothing any more
+      dropped. The feed's
+      hand_fed entries carry the same supply state.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.188
   Bugfixes:
     - A drill counts as mined out when no resource lies in its mining area too, not only

@@ -72,6 +72,7 @@ local Surplus = require("commands.upkeep_surplus")
 local Regs = require("commands.upkeep_feed_regs")
 local Chests = require("commands.upkeep_chests")
 local Logs = require("commands.upkeep_logs")
+local Hand = require("commands.upkeep_hand")
 
 local M = {}
 
@@ -214,8 +215,9 @@ local function prune(cid, mine)
                                      c.entity.position.y) or ""
         log("[ai-companion] upkeep: the task at " .. key .. " failed (" ..
             tostring(t.error) .. ") -- held off " .. ticks .. " ticks" .. at)
-      elseif t and t.status == "done" and off[key] then
+      elseif t and t.status == "done" then
         off[key] = nil                       -- served again: the back-off ends
+        Hand.note(cid, key, t)          -- (the list for the controller)
       end
       mine[key] = nil
       storage.tasks[task_id] = nil
