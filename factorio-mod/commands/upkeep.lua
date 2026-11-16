@@ -152,7 +152,6 @@ local function key_of(e)
 end
 
 -- (the need measures live in commands/upkeep_need.lua)
-local NO_NEED = N.NO_NEED
 
 local function fuel_seconds(e)
   return N.fuel_seconds(e, M.FUEL)
@@ -311,7 +310,7 @@ local function scan(cid, c)
     -- and 5 minutes or more of it, Zdendys 2026-11-09, upkeep_need.fuel_low -- needs
     -- nothing either way unless a fill of it goes on (filling); own_t still judges a
     -- supply line's delivery)
-    local own_t = e.valid and e.burner and not NO_NEED[e.status] and fuel_seconds(e)
+    local own_t = e.valid and e.burner and not N.no_need(e) and fuel_seconds(e)
     local k = own_t and key_of(e)
     local share, room
     if own_t then share, room = N.fuel_slot_share(e, M.FUEL) end

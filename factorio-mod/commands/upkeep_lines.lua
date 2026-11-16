@@ -100,11 +100,11 @@ function M.input_line(machine, item, memory)
       -- its pickup) -- a line whatever its status says (live: an inserter from a chest
       -- of 788 ore reported waiting_for_source_items at one scan)
       local its, stocked, unknown = nil, false, false
+      local gone = false             -- (a drill of another item with its resource gone)
       if src.type == "mining-drill" then
         its = mines(src, item)
-        if not its and src.status == defines.entity_status.no_minable_resources then
-          mined_out = true
-        end
+        gone = not its and F.drill_mined_out(src)
+        if gone then mined_out = true end
       else
         local held = src.held_stack
         if held and held.valid_for_read then
@@ -125,8 +125,7 @@ function M.input_line(machine, item, memory)
         found = "dry"
         if not unknown then known_dry = true end
         why[#why + 1] = src.name .. ":" .. F.status_name(src)
-      elseif src.type == "mining-drill"
-             and src.status == defines.entity_status.no_minable_resources then
+      elseif gone then
         why[#why + 1] = src.name .. ":mined-out"
       else
         why[#why + 1] = src.name .. ":not-for-" .. item

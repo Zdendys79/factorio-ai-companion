@@ -45,6 +45,12 @@ M.CHEST_LOW_STACKS = 2
 M.NO_NEED = {[defines.entity_status.no_minable_resources] = true,
              [defines.entity_status.no_ingredients] = true}
 
+-- Whether a burner needs no fuel now: NO_NEED, or a drill whose resource is gone
+-- whatever its status (upkeep_feeds.drill_mined_out: one without fuel reads no_fuel).
+function M.no_need(e)
+  return M.NO_NEED[e.status] or (e.type == "mining-drill" and F.drill_mined_out(e))
+end
+
 -- (seconds its fuel lasts, seconds its slots filled would last -- each slot with the
 -- fuel it holds, an empty one with `fuel` --, joules per tick, the joules it holds) at
 -- full consumption; nil when not measurable. (review: a slot holding wood has no room
@@ -133,7 +139,7 @@ end
 -- its seconds left against min(target_s, a full slot), lowered by its output's fill,
 -- at least MIN_P.
 function M.burner_need(e, target_s, fuel, filling)
-  if M.NO_NEED[e.status] then return nil end
+  if M.no_need(e) then return nil end
   local share, room = M.fuel_slot_share(e, fuel)
   if share >= 1 or room < M.MIN_ROOM then return nil end
   local t, full, usage = M.fuel_seconds(e, fuel)

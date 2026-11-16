@@ -52,7 +52,7 @@ function M.judge(book, ctx)
       local g = {chest = chest, usage = 0, energy = 0, fill = 1}
       for _, b in ipairs(rec.burners) do
         local _, _, usage, energy
-        if b.valid and b.status ~= defines.entity_status.no_minable_resources then
+        if b.valid and not (b.type == "mining-drill" and F.drill_mined_out(b)) then
           _, _, usage, energy = N.fuel_seconds(b, ctx.fuel)
         end
         if usage then

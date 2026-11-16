@@ -448,4 +448,15 @@ M.supplying = supplying
 M.status_name = status_name
 M.BELT_TYPES = BELT_TYPES
 
+-- Whether a drill's resource is gone: its status says so, or no resource lies in its
+-- mining area (0.16.188: a burner drill mined out while it had no fuel -- her hand
+-- mining its last ore -- reports no_fuel, not no_minable_resources: live probe; its
+-- furnace was read as having no ore line and fed by hand, and the drill itself was
+-- fuelled -- factorio-ai STATUS item 5).
+function M.drill_mined_out(drill)
+  if drill.status == defines.entity_status.no_minable_resources then return true end
+  return drill.surface.count_entities_filtered{area = drill.mining_area,
+                                               type = "resource"} == 0
+end
+
 return M

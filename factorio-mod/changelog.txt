@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.188
+  Bugfixes:
+    - A drill counts as mined out when no resource lies in its mining area too, not only
+      on the status no_minable_resources: a mined-out burner drill without fuel reports
+      no_fuel (live probe), and its furnace was read as having no ore line and fed by
+      hand again (factorio-ai STATUS item 5). The fuel upkeep, the supply chests' burner
+      count and the feed's line check share it (upkeep_feeds.drill_mined_out,
+      upkeep_need.no_need): such a drill is not fuelled either.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.187
   Changes:
     - An ensure_item step's gather attempts and wood chop count are its own (cleared
