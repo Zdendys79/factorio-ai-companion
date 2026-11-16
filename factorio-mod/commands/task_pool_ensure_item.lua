@@ -218,8 +218,9 @@ function M.start_ensure_item_action(c, cid, t)
     -- the OUTER loop of re-issuing a FRESH start_gather call if one full cycle
     -- still left a shortfall -- a genuinely scarce/partially-unreachable patch
     -- (a real, previously-observed scenario for coal specifically) would retry
-    -- forever with no failure signal. Counts per-item so a task needing several
-    -- DIFFERENT raw resources tracks each independently.
+    -- forever with no failure signal. Counts per item, per ensure step (cleared when the
+    -- step ends, 0.16.187), so a step needing several DIFFERENT raw resources tracks
+    -- each independently.
     local deficit = need.count - held(need.item)
     -- Zdendys 2026-11-09 (factorio-ai docs/no_hand_mining.md): from the stores first --
     -- the nearest place holding it she may take from, a drill's chest too

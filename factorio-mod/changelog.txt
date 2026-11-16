@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.187
+  Changes:
+    - An ensure_item step's gather attempts and wood chop count are its own (cleared
+      when the step ends, with the rest of its per-step state): a plan ensures each part
+      twice, and the second pass had only what the first left of the attempts
+      (factorio-ai STATUS item 8h). The trees found unreachable stay excluded for the
+      whole task.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.186
   Features:
     - A build plan's piece may carry "filter" (an item): an inserter placed with it gets

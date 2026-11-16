@@ -258,10 +258,13 @@ end
 -- (task_pool_fetch: a later step judges the places afresh -- a refilled furnace stayed
 -- "tried"). One place for both ends (0.16.173 review: a failed optional ensure, now in
 -- every plan's fills, kept its fetch books). The gather attempts and the wood chop
--- counts (gather_attempts, wood_chop_count, wood_tried) are not cleared: they count per
--- task, across its ensure steps (task_pool_ensure_item).
+-- count (gather_attempts, wood_chop_count) are cleared too (0.16.187): each ensure step
+-- gets its own bound -- a plan ensures each part twice (before and after its removals),
+-- and the second pass had only what the first left of the attempts (factorio-ai STATUS
+-- item 8h). The trees found unreachable (wood_tried) stay excluded for the whole task.
 local function clear_ensure_ctx(t)
   t.ctx.ensure_stack = nil
+  t.ctx.gather_attempts, t.ctx.wood_chop_count = nil, nil
   t.ctx.smelt_wait_deadline, t.ctx.raw_wait_deadline = nil, nil
   t.ctx.fetch, t.ctx.fetch_tried, t.ctx.fetch_next_scan = nil, nil, nil
   t.ctx.fetch_noroom_logged = nil
