@@ -2,6 +2,7 @@
 -- queues.lua). Verbatim move.
 
 local u = require("commands.init")
+local inserter_filter = require("commands.inserter_filter")
 local core = require("commands.queues_core")
 
 local valid_companion = core.valid_companion
@@ -236,7 +237,8 @@ end
 -- clear a candidate's footprint the same way before deciding it is blocked.
 M.clear_build_area = clear_build_area
 
-function M.start_build(cid, entity_name, position, direction, mirror)
+-- `filter` (0.16.186, optional): an inserter's one item filter, set as it is placed.
+function M.start_build(cid, entity_name, position, direction, mirror, filter)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
 
@@ -266,6 +268,7 @@ function M.start_build(cid, entity_name, position, direction, mirror)
     -- can_place_entity treat a nil mirror field identically to omitting it,
     -- so this is a no-op for all pre-existing build_queues use.
     mirror = mirror or nil,
+    filter = filter,
     approach = approach,
     state = "approaching",
     tick_start = game.tick,
@@ -557,6 +560,16 @@ function M.tick_build_queues()
       -- real one) can end up overlapping the first entity's real footprint. (placed is
       -- guaranteed valid here -- the destroyed case returned above already.)
       q.placed_position = {x = placed.position.x, y = placed.position.y}
+      -- an inserter's filter (0.16.186; commands/inserter_filter.lua)
+      if q.filter then
+        local why = inserter_filter.apply(placed, q.filter, c.entity)
+        if why then
+          q.failed = why
+          q.run_end_tick = game.tick
+          q.state = "failed"
+          return false
+        end
+      end
       q.run_end_tick = game.tick
       q.state = "done"
       return false

@@ -17,7 +17,10 @@
 --      has; the task's step_errors say so);
 --   5. one place step per piece, in the plan's order (role -> which: the task's ctx
 --      records the placed position), a piece with a recipe followed by its
---      set_recipe step (0.16.174: an assembler, a chemical plant, a refinery);
+--      set_recipe step (0.16.174: an assembler, a chemical plant, a refinery); an
+--      inserter with a filter gets it as it is placed (0.16.186: a line's burner
+--      inserter takes only coal -- unfiltered, an empty furnace takes iron plates
+--      for steel);
 --   6. one insert step per fill, optional (a fill that fails leaves the build
 --      standing; the task's step_errors say so) -- the fuel goes in only once the
 --      whole chain stands.
@@ -26,7 +29,8 @@
 --
 -- Plan JSON: {"name": "...", "resource": "iron-ore" | nil,
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
---               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil}, ...],
+--               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil,
+--               "filter": ITEM | nil}, ...],
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
@@ -94,6 +98,15 @@ local function check(plan, force)
     end
     if p.mirror ~= nil and type(p.mirror) ~= "boolean" then
       return "piece " .. i .. ": mirror must be true or false"
+    end
+    if p.filter ~= nil then
+      if type(p.filter) ~= "string" or not prototypes.item[p.filter] then
+        return "piece " .. i .. ": filter must be a known item"
+      end
+      local e = prototypes.entity[p.entity]
+      if e.type ~= "inserter" or (e.filter_count or 0) < 1 then
+        return "piece " .. i .. ": " .. p.entity .. " takes no filter"
+      end
     end
     if p.recipe ~= nil then
       if type(p.recipe) ~= "string" then return "piece " .. i .. ": recipe must be a name" end
@@ -184,7 +197,8 @@ function M.expand(plan, force)
   end
   for _, p in ipairs(plan.pieces) do
     steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
-                         dir = p.dir or 0, which = p.role, mirror = p.mirror or nil}
+                         dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
+                         filter = p.filter}
     -- (an assembler's recipe right after it stands -- 0.16.174)
     if p.recipe then
       steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,

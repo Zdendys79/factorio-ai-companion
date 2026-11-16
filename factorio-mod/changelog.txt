@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.186
+  Features:
+    - A build plan's piece may carry "filter" (an item): an inserter placed with it gets
+      use_filters on and filter 1 set as it stands (factorio-ai line mining: a line's
+      burner inserter takes only coal -- unfiltered, an empty furnace takes iron plates
+      for steel). The plan check refuses an unknown item and a piece with no filter
+      slots; a filter that cannot be set fails the place step (logged).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.185
   Bugfixes:
     - A task's "fill" step loads only what she holds free -- less what other tasks
