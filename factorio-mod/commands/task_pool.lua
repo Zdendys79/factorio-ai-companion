@@ -90,11 +90,14 @@
 -- since 0.16.173); once a fuel / insert step is passed, the task's need of its item is
 -- recomputed for the steps ahead (task_pool_ledger.step_passed).
 --   {type="set_recipe", x=, y=, entity=NAME, recipe=NAME}
+--   {type="replace", x=, y=, entity=NEW, old=OLD}       (an upgrade in place: the OLD
+--                                                        building fast-replaced by NEW --
+--                                                        task_pool_replace.lua)
 --                                                       -> the recipe of the machine of that
 --                                                          name (a plan's piece's "recipe";
 --                                                          task_pool_steps.run_set_recipe)
--- The hand steps (remove, fuel, insert, set_recipe, take, fill, take_out) act only within
--- her reach.
+-- The hand steps (remove, fuel, insert, set_recipe, take, fill, take_out, replace) act
+-- only within her reach (replace: her build distance).
 --
 -- ensure_item (2026-07-17, Zdendys's own architecture correction: procurement was
 -- kept OUT of this module by the ORIGINAL v1 design above, back when neither
@@ -188,7 +191,7 @@ local lay = require("commands.task_pool_lay")
 local CRAFT_QUEUE_WAIT_TICKS = 1800
 -- the steps that act on their target by hand, only within her reach (the acting state)
 local REACH_STEPS = {remove = true, fuel = true, insert = true, set_recipe = true,
-                     take = true, fill = true, take_out = true}
+                     take = true, fill = true, take_out = true, replace = true}
 
 local M = {}
 
@@ -203,6 +206,7 @@ local run_verify_tile = steps.run_verify_tile
 local run_pick_orientation = steps.run_pick_orientation
 local run_insert = steps.run_insert
 local run_set_recipe = steps.run_set_recipe
+local run_replace = require("commands.task_pool_replace").run_replace
 local run_take = steps.run_take
 
 -- ensure_item step (2026-07-17, Zdendys's own architecture correction -- see
@@ -1023,6 +1027,8 @@ function M.tick()
         ok, err = run_insert(c, t, step)
       elseif step.type == "set_recipe" then
         ok, err = run_set_recipe(c, t, step)
+      elseif step.type == "replace" then
+        ok, err = run_replace(c, t, step)
       elseif step.type == "fill" then
         ok, err, result = machine_steps.run_fill(c, t, step)
       elseif step.type == "take_out" then

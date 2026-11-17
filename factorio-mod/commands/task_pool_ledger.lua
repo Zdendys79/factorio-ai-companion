@@ -49,7 +49,9 @@ local function derive_needs(steps, upto, mode)
   -- removes that risk entirely regardless of whether the invariant ever holds.
   for i = 1, math.min(upto or #steps, #steps) do
     local s = steps[i]
-    if s.type == "place" then
+    if s.type == "place" or s.type == "replace" then
+      -- (a replace takes its NEW building's item as a place does -- the OLD one comes
+      -- back to her, not needed)
       needs[s.entity] = (needs[s.entity] or 0) + 1
     elseif s.type == "lay" then
       -- (a run of belt pieces, task_pool_lay.lua: every piece, as place steps, for

@@ -31,13 +31,18 @@
 -- Plan JSON: {"name": "...", "resource": "iron-ore" | nil,
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
 --               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil,
---               "filter": ITEM | nil, "ug": "input" | "output" | nil}, ...],
+--               "filter": ITEM | nil, "ug": "input" | "output" | nil,
+--               "replaces": OLD | nil}, ...],
+--   ("replaces": an upgrade in place -- the OLD building standing there is
+--    fast-replaced by the piece, a replace step instead of a place step:
+--    task_pool_replace.lua; the OLD one comes back to her, its recipe stays)
 --   ("ug": an underground belt's side -- the entrance or the exit; create_entity's
 --    type, which can_place_entity does not take)
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
 local belt_runs = require("commands.belt_runs")
+local replace_check = require("commands.replace_check")
 
 local M = {}
 
@@ -110,6 +115,16 @@ local function check(plan, force)
       end
       if prototypes.entity[p.entity].type ~= "underground-belt" then
         return "piece " .. i .. ": " .. p.entity .. " is no underground belt (ug)"
+      end
+    end
+    if p.replaces ~= nil then
+      if type(p.replaces) ~= "string" then
+        return "piece " .. i .. ": replaces must be an entity name"
+      end
+      local why = replace_check.problem(p.entity, p.replaces)
+      if why then return "piece " .. i .. ": " .. why end
+      if p.role ~= nil or p.ug ~= nil or p.mirror ~= nil then
+        return "piece " .. i .. ": a replaced piece takes no role, ug or mirror"
       end
     end
     if p.filter ~= nil then
@@ -217,6 +232,14 @@ function M.expand(plan, force)
         pieces[i] = {entity = p.entity, x = p.x, y = p.y, dir = p.dir or 0, ug = p.ug}
       end
       steps[#steps + 1] = {type = "lay", pieces = pieces}
+    elseif g.piece.replaces then
+      local p = g.piece
+      steps[#steps + 1] = {type = "replace", entity = p.entity, old = p.replaces,
+                           x = p.x, y = p.y}
+      if p.recipe then
+        steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,
+                             recipe = p.recipe}
+      end
     else
       local p = g.piece
       steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,

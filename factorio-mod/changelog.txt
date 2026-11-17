@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.199
+  Features:
+    - A build plan's piece may replace a building in place ("replaces": OLD): a new
+      task-pool step "replace" (task_pool_replace.lua) fast-replaces the OLD building
+      nearest the piece's position with the piece as a player would
+      (create_entity{fast_replace=true, character=her}) -- its recipe and contents stay,
+      the OLD building comes back into her inventory, and the NEW item is taken from it
+      (the engine does not: never a free build). NEW must share OLD's fast-replaceable
+      group; belts are laid, not replaced; the new one keeps the old one's mirroring, an
+      old one that did not come back to her (inventory full) is logged. First use: the pack assemblers' tier upgrade
+      (assembling-machine-1 -> 2).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.198
   Bugfixes:
     - fac_building_fuel (Python's direct fuelling of the burners round her) uses only

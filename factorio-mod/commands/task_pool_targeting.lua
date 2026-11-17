@@ -21,7 +21,8 @@ M.WALK_REACH = 2      -- mirrors MINE_ADJACENT_RANGE-class "close enough" used e
 -- walked her to within 2 tiles of a boxed-in drill -- the same timeout).
 local REACH_KIND = {place = "build", lay = "build", fuel = "reach", remove = "reach",
                     insert = "reach", set_recipe = "reach", take = "reach", fill = "reach",
-                    take_out = "reach", set_position = "none", read_drop_position = "none"}
+                    take_out = "reach", replace = "build", set_position = "none",
+                    read_drop_position = "none"}
 
 -- The distance within which `step` acts without walking closer: the character's
 -- build / reach distance for the steps above, no limit for the two data steps,
