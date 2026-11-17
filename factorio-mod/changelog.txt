@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.197
+  Bugfixes:
+    - fac_building_fill (Python's direct fill of a machine or chest) puts in only what
+      no task of hers reserved (task_pool_ledger.free_count, as the task pool's own fill
+      and insert steps do): it took from her whole inventory, so a fill could use plates
+      a steel-furnace feed had reserved, whose insert then came up short. All of it
+      reserved: "No <item> free (<held> held, <reserved> reserved by tasks)".
+---------------------------------------------------------------------------------------------------
 Version: 0.16.196
   Bugfixes:
     - The pole route search's empty route for a {pole} goal whose pole already stands:

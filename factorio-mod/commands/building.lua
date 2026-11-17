@@ -4,6 +4,7 @@ local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
 local entity_at = require("commands.entity_at")
 local machine_fill = require("commands.machine_fill")
+local ledger = require("commands.task_pool_ledger")
 local machine_empty = require("commands.machine_empty")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
@@ -349,9 +350,18 @@ commands.add_command("fac_building_fill", nil, function(cmd)
     if u.distance(c.entity.position, pos) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return   -- must be in reach to load a machine
     end
+    -- only what no task of hers reserved (factorio-ai docs/mod_upkeep_supply.md stage 2,
+    -- "Known": a fill from Python took plates a steel-furnace feed had reserved, whose
+    -- insert then came up short) -- as the task pool's own fill and insert steps
+    local held = c.entity.get_main_inventory().get_item_count(item)
+    local free, others = ledger.free_count({}, item, held)
+    if held > 0 and free <= 0 then
+      u.json_response({id = id, error = string.format(
+        "No %s free (%d held, %d reserved by tasks)", item, held, others)}); return
+    end
     -- the entity closest to the target tile (machine_fill.fill, shared with the task
     -- pool's "fill" step)
-    local r = machine_fill.fill(c, pos, item, count)
+    local r = machine_fill.fill(c, pos, item, math.min(count, math.max(free, 0)))
     r.id = id
     u.json_response(r)
   end)
