@@ -115,7 +115,7 @@ end
 
 local function start_of(e)
   return {e.position.x, e.position.y, e.prototype.get_max_wire_distance(),
-          e.prototype.get_supply_area_distance() or 0, room(e)}
+          e.prototype.get_supply_area_distance() or 0, room(e), e.electric_network_id}
 end
 
 -- The poles a route may start from: one named pole (the nearest at that spot), or every
@@ -300,10 +300,34 @@ end
 
 -- Whether a start pole itself reaches the goal (a wire to the goal pole, or its own
 -- supply area over the supply point).
-local function start_reaches(s, st)
+-- For a {pole} goal whose pole stands (`goal_net`, its network id): only a start on
+-- that same network -- a pole within wire reach is not wired to it when one of the two
+-- was full as the other was placed (a pole wires itself only when it is placed: live
+-- review, line mining's re-chain); a goal not standing yet (the count search): by
+-- distance and room.
+local function start_reaches(s, st, goal_net)
   local d = dist(st[1], st[2], s.goal[1], s.goal[2])
-  if s.kind == "pole" then return st[5] and d <= math.min(s.reach, st[3] - HOP_MARGIN) end
+  if s.kind == "pole" then
+    if goal_net ~= nil then return goal_net == st[6] end
+    return st[5] and d <= math.min(s.reach, st[3] - HOP_MARGIN)
+  end
   return d <= math.min(s.reach, st[4])
+end
+
+-- The network id of the pole standing on the goal spot of a {pole} goal (the nearest
+-- within 0.6; -1 when it has none: no start is on it), false when none stands, nil for
+-- a supply goal.
+local function goal_network(surf, s)
+  if s.kind ~= "pole" then return nil end
+  local best, bd = nil, math.huge
+  for _, e in pairs(surf.find_entities_filtered{position = {s.goal[1], s.goal[2]},
+                                                radius = 0.6, type = "electric-pole",
+                                                force = "player"}) do
+    local d = (e.position.x - s.goal[1]) ^ 2 + (e.position.y - s.goal[2]) ^ 2
+    if d < bd then best, bd = e, d end
+  end
+  if not best then return false end
+  return best.electric_network_id or -1
 end
 
 -- One search's share of a pass: `budget` units -- a start seeded, a node expanded or a
@@ -314,9 +338,11 @@ local function work(surf, s, budget, ctx)
   if not s.starts then
     -- a start pole that reaches the goal itself: the nearest (an empty route)
     local all, best, bd = starts_of(surf, s), nil, math.huge
+    local net = goal_network(surf, s)
+    if net == false then net = nil end
     for _, st in ipairs(all) do
       local d = dist(st[1], st[2], s.goal[1], s.goal[2])
-      if d < bd and start_reaches(s, st) then best, bd = st, d end
+      if d < bd and start_reaches(s, st, net) then best, bd = st, d end
     end
     if best then finish(s, "ok", {}, {best[1], best[2]}) return end
     s.starts = {}

@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.196
+  Bugfixes:
+    - The pole route search's empty route for a {pole} goal whose pole already stands:
+      only from a start on that pole's own electric network. A start within wire reach
+      but not wired to it (one of the two full when the other was placed -- a pole wires
+      itself only as it is placed) answered "ok" with no pole, and the goal stayed
+      unpowered (review: line mining's second chain after a dropped side). A goal pole
+      not standing yet (the count search) is still judged by distance and room.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.195
   Changes:
     - The pole route search's estimate of the poles still needed is whole (the distance
