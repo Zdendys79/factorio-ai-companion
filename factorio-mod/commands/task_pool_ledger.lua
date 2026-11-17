@@ -51,6 +51,15 @@ local function derive_needs(steps, upto, mode)
     local s = steps[i]
     if s.type == "place" then
       needs[s.entity] = (needs[s.entity] or 0) + 1
+    elseif s.type == "lay" then
+      -- (a run of belt pieces, task_pool_lay.lua: every piece, as place steps, for
+      -- "places" -- task_ready compares the cumulative reservation, which a laid piece
+      -- stays in; else the pieces not yet laid -- the steps ahead against the task's
+      -- unused reservation, which a laid piece left; at submit none is laid yet)
+      for j = (mode == "places") and 1 or ((s.laid or 0) + 1), #(s.pieces or {}) do
+        local e = s.pieces[j].entity
+        needs[e] = (needs[e] or 0) + 1
+      end
     elseif (s.type == "fuel" or s.type == "insert") and mode ~= "places"
            and not (mode == "required" and s.optional) then
       needs[s.item] = (needs[s.item] or 0) + (s.count or 1)

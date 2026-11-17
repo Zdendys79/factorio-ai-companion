@@ -41,6 +41,11 @@
 --                                                             own drop_position flips side);
 --                                                             an inserter's filter 1 (0.16.186);
 --                                                             an underground belt's side
+--   {type="lay", pieces={{entity=, x=, y=, dir=0-3, ug=|nil},...}, laid=N|nil}
+--                                                       -> a run of belt pieces laid as
+--                                                             she walks along (0.16.192,
+--                                                             task_pool_lay.lua; a build
+--                                                             plan's expand makes it)
 --   {type="remove", which=/x,y/ref=, entity=NAME}
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N, swap=true|nil}
 --                                                       -> swap: the target's other fuel
@@ -177,6 +182,7 @@ local activity = require("commands.activity")
 local entity_at = require("commands.entity_at")
 local machine_steps = require("commands.task_pool_machine_steps")
 local fetch = require("commands.task_pool_fetch")
+local lay = require("commands.task_pool_lay")
 
 -- an ensure_item craft waits at most this long for her crafting queue to empty
 local CRAFT_QUEUE_WAIT_TICKS = 1800
@@ -244,6 +250,7 @@ function M.cancel_task(task_id)
   if active and active.task_id == task_id then
     storage.active_step[t.cid] = nil
     local own_walk = active.state == "walking" or active.state == "building"
+      or active.state == "laying"
       or (active.state == "ensuring" and (active.ensuring_kind == "chop_walk"
                                           or active.ensuring_kind == "fetch_walk"))
     if active.state == "building" then storage.build_queues[t.cid] = nil end
@@ -601,7 +608,7 @@ function M.tick()
     if not t or t.status ~= "active" then
       -- (a walk of the step's own stops with it -- review: a task failed or cancelled
       -- through the ledger left her walking to its target, the idle pick blocked)
-      if active.state == "walking" or (active.state == "ensuring"
+      if active.state == "walking" or active.state == "laying" or (active.state == "ensuring"
           and (active.ensuring_kind == "chop_walk" or active.ensuring_kind == "fetch_walk")) then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
@@ -696,6 +703,12 @@ function M.tick()
         ok, err = false, string.format("Too far: %s target (%.1f,%.1f) is %.1f tiles from her",
                                        step.type, reach_pos.x, reach_pos.y,
                                        u.distance(c.entity.position, reach_pos))
+      elseif step.type == "lay" then
+        -- a run of belt pieces (task_pool_lay.lua): laid in its own "laying" state below,
+        -- this same tick on (each piece recorded in t.placed as it stands); the opening
+        -- walk's deadline is not the lay's (each piece has its own)
+        active.state = "laying"
+        active.approach_deadline, active.route_extend = nil, nil
       elseif step.type == "place" then
         -- Handled entirely inline (not via the generic ok/err fall-through below,
         -- see the bug note there): start_build's OWN failure is reported
@@ -1036,7 +1049,7 @@ function M.tick()
       -- transitioned to their own separate polling state) -- every OTHER step
       -- type completes synchronously within this same tick, so their ok/err is
       -- resolved here.
-      if step.type ~= "place" and step.type ~= "ensure_item" then
+      if step.type ~= "place" and step.type ~= "ensure_item" and step.type ~= "lay" then
         if ok then
           -- step_ticks: see the "ensure_item" cursor-advance site above for the
           -- full rationale (same capture, same pre-increment cursor key).
@@ -1060,6 +1073,21 @@ function M.tick()
           storage.active_step[cid] = nil
         end
       end
+    end
+
+    if active.state == "laying" then
+      local res, why = lay.tick(cid, c, t, step, active)
+      if res == "done" then
+        t.step_ticks = t.step_ticks or {}
+        t.step_ticks[t.cursor] = {type = step.type, start = active.step_start_tick, done = game.tick}
+        t.cursor = t.cursor + 1
+        storage.active_step[cid] = nil
+        if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
+      elseif not res then
+        ledger.step_failed(active.task_id, why, active.step_start_tick)
+        storage.active_step[cid] = nil
+      end
+      goto continue
     end
 
     if active.state == "building" then

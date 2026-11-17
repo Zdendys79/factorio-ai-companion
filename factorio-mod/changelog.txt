@@ -1,4 +1,25 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.192
+  Features:
+    - A build plan's run of belt pieces is laid at belt speed (factorio-ai
+      docs/belt_planning.md step 1b): build_plan.lua's expand turns two or more belt
+      pieces in a row, each following the last (the next tile, or an underground
+      entrance's exit within its span), into one "lay" step (belt_runs.lua) instead of a
+      place step each -- a place step waits 60 ticks after its approach, a 200-belt
+      route as single pieces 12000 ticks of waits. The task pool lays it in its own
+      "laying" state (task_pool_lay.lua): each piece as soon as its tile is in her build
+      reach while she keeps walking along the run (toward the piece 8 ahead -- no stop
+      per piece; live 50 belts in 300 ticks, the mod's own belt route 557), the area
+      cleared first, the real item used (never a free build), the underground side as
+      planned, the reservation consumed and the piece recorded in the task's placed; a
+      walk to a piece out of reach has its deadline (kept when the walker ends a walk
+      short -- a fresh walk then) and 2 fresh tries (for a walk that moves but never
+      arrives), and no progress for 600 ticks (her inventory unchanged, she within 5
+      tiles) fails the step. Its belts are reserved like place steps' (derive_needs
+      counts every piece for task_ready's cumulative check, the pieces not yet laid for
+      the steps ahead); the scheduler ranks it from its next piece (build reach); a
+      cancel or the task's end stops its walk. A lay step without pieces fails cleanly.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.191
   Features:
     - A build plan's piece may carry an underground belt's side: "ug": "input" | "output"

@@ -19,8 +19,8 @@ M.WALK_REACH = 2      -- mirrors MINE_ADJACENT_RANGE-class "close enough" used e
 -- set_position (it only sets ctx.px/py) and read_drop_position (it only reads a
 -- drill's drop_position) need no walk at all (independent review: with x/y they still
 -- walked her to within 2 tiles of a boxed-in drill -- the same timeout).
-local REACH_KIND = {place = "build", fuel = "reach", remove = "reach", insert = "reach",
-                    set_recipe = "reach", take = "reach", fill = "reach",
+local REACH_KIND = {place = "build", lay = "build", fuel = "reach", remove = "reach",
+                    insert = "reach", set_recipe = "reach", take = "reach", fill = "reach",
                     take_out = "reach", set_position = "none", read_drop_position = "none"}
 
 -- The distance within which `step` acts without walking closer: the character's
@@ -53,6 +53,11 @@ end
 -- specific/intentional choice if a step somehow carries both).
 function M.step_target_pos(t, step)
   if step.x and step.y then return {x = step.x, y = step.y} end
+  -- a lay (task_pool_lay.lua): its next piece to lay
+  if step.type == "lay" then
+    local p = step.pieces and step.pieces[(step.laid or 0) + 1]
+    return p and {x = p.x, y = p.y} or nil
+  end
   -- candidates (2026-07-07): use the FIRST candidate as the nominal walking/
   -- scheduling target -- they cluster close together (fallback alternatives
   -- for the SAME intended spot), so any one of them is a fine approximation

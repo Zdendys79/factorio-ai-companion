@@ -16,7 +16,8 @@
 --      item she cannot get leaves the build standing -- the inserts put in what she
 --      has; the task's step_errors say so);
 --   5. one place step per piece, in the plan's order (role -> which: the task's ctx
---      records the placed position), a piece with a recipe followed by its
+--      records the placed position; a run of belt pieces is one lay step instead --
+--      belt_runs.lua, task_pool_lay.lua), a piece with a recipe followed by its
 --      set_recipe step (0.16.174: an assembler, a chemical plant, a refinery); an
 --      inserter with a filter gets it as it is placed (0.16.186: a line's burner
 --      inserter takes only coal -- unfiltered, an empty furnace takes iron plates
@@ -35,6 +36,8 @@
 --    type, which can_place_entity does not take)
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
+
+local belt_runs = require("commands.belt_runs")
 
 local M = {}
 
@@ -205,14 +208,25 @@ function M.expand(plan, force)
     steps[#steps + 1] = {type = "ensure_item", item = item, count = fill_counts[item],
                          optional = true}
   end
-  for _, p in ipairs(plan.pieces) do
-    steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
-                         dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
-                         filter = p.filter, ug = p.ug}
-    -- (an assembler's recipe right after it stands -- 0.16.174)
-    if p.recipe then
-      steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,
-                           recipe = p.recipe}
+  -- (a run of two or more belt pieces, each following the last, is one lay step: laid
+  -- as she walks along, no build wait per piece -- belt_runs.lua, task_pool_lay.lua)
+  for _, g in ipairs(belt_runs.group(plan.pieces)) do
+    if g.lay then
+      local pieces = {}
+      for i, p in ipairs(g.lay) do
+        pieces[i] = {entity = p.entity, x = p.x, y = p.y, dir = p.dir or 0, ug = p.ug}
+      end
+      steps[#steps + 1] = {type = "lay", pieces = pieces}
+    else
+      local p = g.piece
+      steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
+                           dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
+                           filter = p.filter, ug = p.ug}
+      -- (an assembler's recipe right after it stands -- 0.16.174)
+      if p.recipe then
+        steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,
+                             recipe = p.recipe}
+      end
     end
   end
   for _, f in ipairs(plan.fills or {}) do
