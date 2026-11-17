@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.195
+  Changes:
+    - The pole route search's estimate of the poles still needed is whole (the distance
+      left over the hop, rounded up -- still never more than needed), ties going to the
+      spot nearest the goal: a fractional estimate made every spot within one pole of the
+      best route about equal and the search opened a band some 80 tiles wide round a long
+      line (424 tiles, 59 poles: 21864 expansions of the 40000 cap, now 7899; an 8-pole
+      route 7; 500 tiles, 70 poles: 19467).
+    - A label that cannot reach the goal within max_poles (its poles plus the whole
+      estimate) is not kept: a limit at the shortest count no longer widens the search
+      (82 expansions, it was 7763); a goal out of reach within max_poles now ends
+      "no_route" once the spots that could still make it are used up (a lake goal at
+      max_poles 20: 12509 expansions), no longer "node_cap" -- both the site's fault.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.194
   Features:
     - A pole route search of the mod's own (factorio-ai docs/power_lines.md step 1;

@@ -251,6 +251,16 @@ end
 -- dropped. Both are kept because a pole limit with a resource cost needs them: the
 -- cheaper way to a tile may use more poles than a dearer one.
 local function add_label(s, tx, ty, g, p, par)
+  -- h: the whole poles still needed at least (every hop costs >= 1 and covers <= hop):
+  -- admissible and consistent; whole, so every node within one pole of the best has
+  -- the same f and the tie goes to the one nearest the goal (n.h, the distance left)
+  -- -- a fractional h opened a band ~80 tiles wide round a 424-tile line (21864
+  -- expansions, live)
+  local hn = math.max(0, dist(tx + 0.5, ty + 0.5, s.goal[1], s.goal[2]) - s.reach)
+  local need = math.ceil(hn / s.hop - 1e-9)
+  -- a label that cannot reach the goal within max_poles is never kept (live: a pole
+  -- limit at the shortest count expanded 7763 nodes against 1265 without it)
+  if p + need > s.max_poles then return end
   local k = key(tx, ty)
   local ls = s.labels[k]
   if ls then
@@ -264,9 +274,9 @@ local function add_label(s, tx, ty, g, p, par)
     local o = s.nodes[i]
     if g <= o.g and p <= o.p then s.dead[i] = true else kept[#kept + 1] = i end
   end
-  local hn = math.max(0, dist(tx + 0.5, ty + 0.5, s.goal[1], s.goal[2]) - s.reach)
   local i = #s.nodes + 1
-  local n = {f = g + hn / s.hop, h = hn, g = g, p = p, x = tx, y = ty, par = par, i = i}
+  local n = {f = g + need, h = hn, g = g, p = p, x = tx, y = ty,
+             par = par, i = i}
   s.nodes[i] = n
   kept[#kept + 1] = i
   s.labels[k] = kept
