@@ -22,8 +22,8 @@ local function follows(a, b)
   if math.abs(dx) + math.abs(dy) == 1 then return true end
   if a.ug ~= "input" or b.ug ~= "output" or a.entity ~= b.entity then return false end
   if dx ~= 0 and dy ~= 0 then return false end
-  -- (max_underground_distance: the entrance-to-exit span -- 5 for the yellow tier, as
-  -- queues_belt.lua's UNDERGROUND_MAX_DISTANCE)
+  -- (max_underground_distance: the entrance-to-exit span -- 5 for the yellow tier,
+  -- data/base/prototypes/entity/transport-belts.lua max_distance)
   local max = prototypes.entity[a.entity].max_underground_distance or 0
   return math.abs(dx) + math.abs(dy) <= max
 end

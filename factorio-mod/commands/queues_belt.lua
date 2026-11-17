@@ -1,30 +1,15 @@
--- AI Companion -- BELT CONNECT queue (Stage 0.2, 2026-07-04; 2026-07-19 size-refactor
--- split out of queues.lua). Fully self-contained: owns storage.belt_queues exclusively,
--- no cross-section calls beyond queues_core.lua. Uses commands.pathfind, its only user
--- in the whole original queues.lua (confirmed by grep before this split).
+-- AI Companion -- the route queue (Stage 0.2, 2026-07-04; 2026-07-19 size-refactor
+-- split out of queues.lua): a fluid pipeline of pipes and pipe-to-ground pairs between
+-- two points (pathfind.lua pipe mode), laid by the companion walking along it, one tile
+-- per queue tick, with the real items. Fully self-contained: owns storage.belt_queues
+-- (its name kept from the belt days) exclusively, no cross-section calls beyond
+-- queues_core.lua.
 --
--- Model=WHAT/mod=HOW split (belt/inserter automation plan): the model/Python side already
--- knows the exact relative geometry of what it just built (furnace, drill, assembler --
--- same proven pattern as _build_ore_drill_furnace) and places any INSERTERS itself via the
--- existing fac_building_place/_rotate/fac_inserter_set_filter primitives. This command
--- handles ONLY the one genuinely-new problem: routing a transport-belt corridor between two
--- already-chosen points, avoiding water/buildings (pathfind.lua's A*; ore patches are
--- ordinary ground, see pathfind.lua), with an
--- underground-belt straight-line fallback (entrance to exit at most 5 tiles, yellow tier)
--- for a gap no walkable route crosses -- not for a "pure" route (2026-11-06, see
--- start_belt_connect); "underground" routes cross obstacles inside the search instead
--- (pathfind.lua). No `material`/inserter-type param -- narrower than the original plan
--- sketch (which had this command also place+type both end inserters); simplified during
--- implementation per the plan's own flagged Open Question #3 ("exact algorithm needs its
--- own design pass"). Async like fac_building_place_start/_status: the companion really
--- walks the path (no teleporting) and consumes real transport-belt/underground-belt items,
--- one tile per queue tick.
--- Confirmed straight from the engine's own prototype data (not the ambiguous/contradictory
--- wiki wording -- cubic dev ai bot flagged this as an off-by-one, 2026-07-04):
--- /base/prototypes/entity/transport-belts.lua's "underground-belt" (yellow tier) entry has
--- max_distance = 5 -- entrance and exit tiles can be up to 5 tiles apart (4 tiles of actual
--- underground gap in between), NOT 4 tiles apart. Named to match the engine field exactly
--- so this stays unambiguous.
+-- Belt routes are no longer the mod's (0.16.193, factorio-ai docs/belt_planning.md step
+-- 5, Zdendys): Python plans them (src/rl/belt_route.py) and the mod lays them as a build
+-- plan's "lay" step (task_pool_lay.lua). This queue's belt mode -- the pure / partial /
+-- underground options, the partial prefix, the straight underground-pair fallback -- is
+-- gone; a belt record of an older version found in storage is dropped as failed.
 
 local u = require("commands.init")
 local pathfind = require("commands.pathfind")
@@ -33,8 +18,6 @@ local requests = require("commands.controller_requests")
 
 local M = {}
 
-local UNDERGROUND_MAX_DISTANCE = 5   -- yellow-tier underground-belt (entrance-to-exit span)
-
 local function step_dir(a, b)
   if b.x > a.x then return defines.direction.east end
   if b.x < a.x then return defines.direction.west end
@@ -42,11 +25,8 @@ local function step_dir(a, b)
   return defines.direction.north
 end
 
--- the items a route is built of: belts, or (pipe mode) pipes
-local ITEMS = {
-  belt = {plain = "transport-belt", underground = "underground-belt"},
-  pipe = {plain = "pipe", underground = "pipe-to-ground"},
-}
+-- the items a route is built of
+local ITEMS = {plain = "pipe", underground = "pipe-to-ground"}
 
 local function opposite(dir) return (dir + 8) % 16 end
 
@@ -58,113 +38,46 @@ local STEP_OFF_DISTANCE = 3
 -- fails (each one with a new path request, a new deadline and a stand spot reach - 2
 -- short of the tile, on her side)
 local APPROACH_RETRIES = 2
--- the fewest tiles a partial route lays (fewer: the old "Insufficient" answer -- a
--- handful of belts is no step worth a walk)
-M.PARTIAL_MIN_TILES = 5
-
--- The route's first part the items cover (opts.partial -- factorio-ai 2026-11-09,
--- Zdendys: a long belt's material comes in step by step; build what can be built, go
--- on later): nodes in order while a plain one has an item and an underground entrance
--- has two (itself and its exit, which directly follows it); never ending on an entrance
--- (its exit would be missing). The kept nodes keep their directions: the last one faces
--- the rest of the route, whose next part starts in front of it. Returns the prefix and
--- its plain / underground counts.
-function M.partial_prefix(path, have_plain, have_underground)
-  local out, plain, under = {}, 0, 0
-  local i = 1
-  while i <= #path do
-    local node = path[i]
-    if node.underground == "entrance" then
-      local exit = path[i + 1]
-      if not exit or under + 2 > have_underground then break end
-      out[#out + 1] = node
-      out[#out + 1] = exit
-      under = under + 2
-      i = i + 2
-    elseif node.underground then
-      break                -- an exit without its entrance: never at a prefix's start
-    else
-      if plain + 1 > have_plain then break end
-      out[#out + 1] = node
-      plain = plain + 1
-      i = i + 1
-    end
-  end
-  return out, plain, under
-end
-
--- opts (optional, 2026-11-06): {pure = true} -- the route avoids every tile something
--- from outside would put items onto or take them from (pathfind.lua, fed_tiles): a plate
--- belt must carry only its own plates. {pipe = true} (blue science B1') lays a fluid
--- pipeline instead: pipes and pipe-to-ground pairs (pathfind.lua pipe mode), the same
--- queue, walk and item rules. A pipe-to-ground's surface connection is on its facing
--- side, so an entrance faces back toward the source and an exit toward the sink.
+-- opts: {pipe = true} (blue science B1', required -- belts are Python's, see the header)
+-- lays a fluid pipeline of pipes and pipe-to-ground pairs (pathfind.lua pipe mode); with
+-- {plan = true} only its need is returned. A pipe-to-ground's surface connection is on
+-- its facing side, so an entrance faces back toward the source and an exit toward the
+-- sink.
 function M.start_belt_connect(cid, from_pos, to_pos, opts)
+  if not (opts and opts.pipe) then
+    return {error = "belt routes are planned in Python (a build plan's lay step) -- "
+                    .. "only option 'pipe' is routed here"}
+  end
   local c = core.valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
   -- Task-pool ownership (2026-07-08, task #42; task_pool.lua never calls this): while a
   -- step holds her the route is queued (controller_requests.lua: never refused, started
   -- by the scheduler); a plan only searches -- it needs no body and runs at once
-  if not (opts and opts.plan) then
+  if not opts.plan then
     local queued = requests.gate(cid, "belt", {from = from_pos, to = to_pos, opts = opts},
                                  from_pos)
     if queued then return queued end
   end
   local surf = c.entity.surface
   local force = c.entity.force
-
-  local pipe = opts and opts.pipe and true or false
-  local items = pipe and ITEMS.pipe or ITEMS.belt
   local path, reason = pathfind.find_path(surf, from_pos, to_pos, force, opts)
-  if not path and (reason == "dest-fed" or (opts and opts.pure) or pipe or (opts and opts.plan)) then
-    -- (pipe mode: the search already hops as far as a pipe-to-ground reaches; a plan
-    -- reports the search's own result, not the straight-pair fallback)
-    -- no underground fallback for a pure route (independent review 2026-11-06): the pair
-    -- is placed without the fed-tile check (for dest-fed its exit would even stand on
-    -- that fed tile), and an underground exit on the caller's join tile cannot be turned
-    -- into the belt it must feed (turning an underground swaps its input/output sides)
+  if not path then
+    -- (the search already hops as far as a pipe-to-ground reaches)
     return {error = "no path", reason = reason, expansions = pathfind.last_expansions}
   end
-  if not path then
-    -- No walkable route at all within the search budget -- try a direct underground-belt
-    -- pair across the gap (only when it's a straight axis-aligned hop within the yellow
-    -- tier's max distance; A* already tried routing AROUND anything shorter/bypassable).
-    local fx, fy = math.floor(from_pos.x), math.floor(from_pos.y)
-    local tx, ty = math.floor(to_pos.x), math.floor(to_pos.y)
-    local same_row = (fx == tx) or (fy == ty)
-    local dist = math.abs(tx - fx) + math.abs(ty - fy)
-    if same_row and dist >= 1 and dist <= UNDERGROUND_MAX_DISTANCE then
-      path = {
-        {x = fx, y = fy, dir = step_dir({x = fx, y = fy}, {x = tx, y = ty}), underground = "entrance"},
-        {x = tx, y = ty, dir = step_dir({x = fx, y = fy}, {x = tx, y = ty}), underground = "exit"},
-      }
+  -- Each tile's direction as OUTGOING (toward the next tile), not the A* search's "arrived
+  -- from" bookkeeping; the last tile has no next -- it continues straight. An entrance's
+  -- outgoing direction points at its exit; a pipe-to-ground entrance must face the other
+  -- way (its surface side toward the source).
+  for i = 1, #path do
+    if path[i + 1] then
+      path[i].dir = step_dir(path[i], path[i + 1])
     else
-      -- `reason` distinguishes WHY find_path failed (task #43 diagnostic follow-up,
-      -- 2026-07-10): "start-blocked" / "dest-blocked" / "unreachable" (2026-10-23) /
-      -- "budget-exhausted". Additive
-      -- only -- `error` stays exactly "no path" so every existing caller checking
-      -- `.get("error")` for truthiness is unaffected.
-      return {error = "no path", reason = reason or "budget-exhausted"}
+      path[i].dir = (path[i - 1] and path[i - 1].dir) or defines.direction.north
     end
-  else
-    -- Recompute each tile's direction as OUTGOING (toward the next tile), not the A*
-    -- search's internal "arrived from" bookkeeping -- a Factorio belt's direction is the
-    -- way it moves items (matches the tile-to-tile step it feeds INTO), so tile i's belt
-    -- must face tile i+1, not tile i-1. The last tile has no next -- continue straight.
-    for i = 1, #path do
-      if path[i + 1] then
-        path[i].dir = step_dir(path[i], path[i + 1])
-      else
-        path[i].dir = (path[i - 1] and path[i - 1].dir) or defines.direction.north
-      end
-    end
-    -- an entrance's outgoing direction points at its exit; a pipe-to-ground entrance must
-    -- face the other way (its surface side toward the source)
-    if pipe then
-      for _, node in ipairs(path) do
-        if node.underground == "entrance" then node.dir = opposite(node.dir) end
-      end
-    end
+  end
+  for _, node in ipairs(path) do
+    if node.underground == "entrance" then node.dir = opposite(node.dir) end
   end
 
   local need_belt, need_underground = 0, 0
@@ -174,7 +87,7 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   end
   -- "plan" (0.16.145): the route and its item need only -- nothing is started, no items
   -- are checked (a caller checks a route exists before building what it connects)
-  if opts and opts.plan then
+  if opts.plan then
     -- extent: the route's bounding box, its longer side in tiles. A fluid segment longer
     -- than the engine's pipeline extent (utility-constants default_pipeline_extent 320)
     -- does not flow into or out of machines (live 2026-11-06: 330 straight pipes, the
@@ -190,36 +103,26 @@ function M.start_belt_connect(cid, from_pos, to_pos, opts)
   end
 
   local inv = c.entity.get_main_inventory()
-  local have_belt = inv.get_item_count(items.plain)
-  local have_underground = inv.get_item_count(items.underground)
-  local route_tiles, partial = #path, false
-  if opts and opts.partial and (have_belt < need_belt or have_underground < need_underground) then
-    local prefix, p_plain, p_under = M.partial_prefix(path, have_belt, have_underground)
-    if #prefix >= M.PARTIAL_MIN_TILES then
-      path, need_belt, need_underground, partial = prefix, p_plain, p_under, true
-    end
-  end
+  local have_belt = inv.get_item_count(ITEMS.plain)
+  local have_underground = inv.get_item_count(ITEMS.underground)
   if have_belt < need_belt or have_underground < need_underground then
-    -- the field names stay "belt" for both kinds (one status shape for the callers)
+    -- the field names stay "belt" (one status shape for the callers)
     return {
-      error = pipe and "Insufficient pipe items" or "Insufficient belt items",
+      error = "Insufficient pipe items",
       need_belt = need_belt, need_underground = need_underground,
       have_belt = have_belt, have_underground = have_underground
     }
   end
 
   storage.belt_queues[cid] = {path = path, idx = 1, tiles_placed = 0, state = "placing",
-    pipe = pipe,
-    -- a partial route (opts.partial): the whole route's length, for its status
-    partial = partial, route_tiles = route_tiles,
+    pipe = true,
     -- run_start_tick/run_end_tick (2026-07-28, action-timing instrumentation,
     -- batch 2): this domain already has a "done"/"failed" freeze grace period
     -- (get_belt_connect_status consumes it exactly once before deleting), so
     -- run_end_tick (set at each terminal transition in tick_belt_queues) is
     -- reliably readable by the next poll.
     run_start_tick = game.tick}
-  return {started = true, tiles = #path, need_belt = need_belt, need_underground = need_underground,
-          partial = partial or nil, route_tiles = partial and route_tiles or nil}
+  return {started = true, tiles = #path, need_belt = need_belt, need_underground = need_underground}
 end
 
 function M.tick_belt_queues()
@@ -228,6 +131,19 @@ function M.tick_belt_queues()
     -- fix as tick_build_queues -- otherwise a poll a moment after completion just sees
     -- plain "active:false", indistinguishable from success).
     if q.state == "done" or q.state == "failed" then return false end
+    -- a belt route of an older version (q.pipe nil: before 0.16.193 a record without it
+    -- was a belt) -- the belt mode is gone (header): dropped as failed, its caller told
+    if not q.pipe then
+      if q.walking then                      -- (her walk to its tile stops with it)
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+      end
+      q.failed = "a belt route of an older mod version -- belt routes are planned in Python"
+      u.log_error(q.failed .. " (dropped)", "belt_queue")
+      q.run_end_tick = game.tick
+      q.state = "failed"
+      return false
+    end
 
     local surf = c.entity.surface
     local reach = c.entity.build_distance or 10
@@ -286,7 +202,7 @@ function M.tick_belt_queues()
       elseif game.tick >= q.approach_deadline then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
-        q.failed = "cannot reach belt tile (" .. node.x .. "," .. node.y .. ") -- " ..
+        q.failed = "cannot reach route tile (" .. node.x .. "," .. node.y .. ") -- " ..
                    q.tiles_placed .. "/" .. #q.path .. " placed before giving up"
         q.run_end_tick = game.tick
         q.state = "failed"
@@ -299,9 +215,7 @@ function M.tick_belt_queues()
       q.walking = false
     end
 
-    -- q.pipe is nil on records from before pipe mode: those are belts
-    local items = q.pipe and ITEMS.pipe or ITEMS.belt
-    local item = node.underground and items.underground or items.plain
+    local item = node.underground and ITEMS.underground or ITEMS.plain
     local pos = {x = node.x, y = node.y}
 
     -- A pipe collides with characters (a belt and a pipe-to-ground do not -- live
@@ -311,7 +225,7 @@ function M.tick_belt_queues()
     -- sideways to the route, by walking; bounded. (Another character -- the player --
     -- on a route tile still fails the route as "Cannot place pipe"; planning tests a
     -- belt, which characters do not block.)
-    if q.pipe and not node.underground then
+    if not node.underground then
       local p, cx, cy = c.entity.position, node.x + 0.5, node.y + 0.5
       if math.abs(p.x - cx) < 0.5 and math.abs(p.y - cy) < 0.5 then
         if not q.step_off_deadline then
@@ -364,9 +278,6 @@ function M.tick_belt_queues()
       q.state = "failed"; return false
     end
     local create_args = {name = item, position = pos, direction = node.dir, force = c.entity.force}
-    if node.underground and not q.pipe then
-      create_args.type = (node.underground == "entrance") and "input" or "output"
-    end
     local placed = surf.create_entity(create_args)
     if not placed then
       q.failed = "create_entity returned nil"
@@ -396,9 +307,7 @@ function M.get_belt_connect_status(cid)
   if not q then return {active = false} end
   if q.state == "done" then
     storage.belt_queues[cid] = nil
-    -- (partial: only the route's first part was laid -- nil-safe for an older entry)
     return {active = false, connected = true, tiles = q.tiles_placed,
-      partial = q.partial or nil, route_tiles = q.partial and q.route_tiles or nil,
       run_start_tick = q.run_start_tick, run_end_tick = q.run_end_tick}
   end
   if q.state == "failed" then

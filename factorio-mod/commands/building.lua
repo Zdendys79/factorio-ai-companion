@@ -521,23 +521,14 @@ commands.add_command("fac_inserter_set_filter", nil, function(cmd)
   end)
 end)
 
--- fac_belt_connect_start/<...>_status <cid> <from_x> <from_y> <to_x> <to_y> -- 2026-07-04,
--- belt/inserter automation plan Stage 0.2. See queues.lua's belt-connect section for the
--- full design rationale (model=WHAT, mod=HOW routing; narrower than the original plan
--- sketch -- no material/inserter placement here, see that comment block). Async like
--- fac_building_place_start/_status: mirrors that exact start+poll pattern.
--- Optional option words after the coordinates (2026-11-06): "pure" -- the route avoids
--- tiles a foreign belt end, inserter or drill would put items onto (or an inserter take
--- them from), see pathfind.lua fed_tiles; "underground" -- the route may cross belts and
--- other obstacles by underground-belt pairs (pathfind.lua UG_MAX_DISTANCE). Without them
--- the behaviour is unchanged. "pipe" (2026-11-06, blue science B1', no belt option) lays a
--- fluid pipeline of pipes and pipe-to-ground pairs instead (pathfind.lua pipe mode); the
--- same _status command reports it. "plan" (2026-11-06) only plans: the reply is
+-- fac_belt_connect_start/<...>_status <cid> <from_x> <from_y> <to_x> <to_y> pipe [plan] --
+-- the mod's route queue (queues_belt.lua): a fluid pipeline of pipes and pipe-to-ground
+-- pairs (pathfind.lua pipe mode), laid as she walks it; "plan" only plans: the reply is
 -- {planned, tiles, need_belt, need_underground, expansions, extent} or {error = "no path",
--- reason, expansions}, and nothing is started. "partial" (factorio-ai 2026-11-09, Zdendys:
--- a long belt's material comes in step by step -- build what can be built, go on later):
--- short of items, the route's first part the items cover is laid (queues_belt.lua
--- partial_prefix); its status then answers partial = true and route_tiles.
+-- reason, expansions}, nothing started. Belt routes are no longer routed here (0.16.193,
+-- factorio-ai docs/belt_planning.md step 5): Python plans them and lays them as a build
+-- plan's "lay" step -- the former belt options ("pure", "underground", "partial") are
+-- refused, and a route without "pipe" is answered with an error.
 commands.add_command("fac_belt_connect_start", nil, function(cmd)
   u.safe_command(function()
     local five = "^(%S+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)%s+([%d.-]+)"
@@ -547,21 +538,15 @@ commands.add_command("fac_belt_connect_start", nil, function(cmd)
     if not id then u.not_found(); return end
     local fx, fy, tx, ty = tonumber(args[2]), tonumber(args[3]), tonumber(args[4]), tonumber(args[5])
     if not (fx and fy and tx and ty) then u.error_response("Invalid coordinates"); return end
-    -- option words (0.16.142): "pure" and/or "underground" (pathfind.lua find_path);
-    -- "pipe" (0.16.144) without the belt options -- they mean nothing for a pipeline;
-    -- "plan" (0.16.145) with any of them: only the route's need, nothing started;
-    -- "partial": the part the items cover when they do not cover the whole route
+    -- option words: "pipe" (required -- belts are Python's) and "plan" (only the
+    -- route's need, nothing started)
     local opts = {}
-    local known = {pure = true, underground = true, pipe = true, plan = true, partial = true}
+    local known = {pipe = true, plan = true}
     for word in string.gmatch(args[6] or "", "%S+") do
       if not known[word] then
-        u.error_response("Unknown option '" .. word
-          .. "' (only 'pure', 'underground', 'pipe', 'plan', 'partial')"); return
+        u.error_response("Unknown option '" .. word .. "' (only 'pipe', 'plan')"); return
       end
       opts[word] = true
-    end
-    if opts.pipe and (opts.pure or opts.underground) then
-      u.error_response("Option 'pipe' takes no belt option"); return
     end
     local result = queues.start_belt_connect(id, {x = fx, y = fy}, {x = tx, y = ty}, opts)
     result.id = id

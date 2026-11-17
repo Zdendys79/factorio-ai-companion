@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.193
+  Changes:
+    - The belt mode of the route command is retired (factorio-ai docs/belt_planning.md
+      step 5): every belt route is planned in Python and laid as a build plan's lay
+      step. fac_belt_connect_start routes only pipelines now ("pipe", with "plan");
+      without "pipe" it answers an error, the former belt options ("pure",
+      "underground", "partial") are unknown options. Gone with it: the partial prefix,
+      the straight underground-pair fallback, the belt items, the "pure" fed-tile
+      search and the belt underground hop in pathfind.lua (find_path is pipe-only,
+      "pipe-only" otherwise) and the belt search's node budget. A belt route record of
+      an older version found in storage is dropped as failed with a message.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.192
   Features:
     - A build plan's run of belt pieces is laid at belt speed (factorio-ai
