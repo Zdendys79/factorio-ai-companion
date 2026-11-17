@@ -6,6 +6,7 @@ local task_pool = require("commands.task_pool")
 local activity = require("commands.activity")
 local upkeep = require("commands.upkeep")
 local crash_site_start = require("commands.crash_site_start")
+local pole_route = require("commands.pole_route")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -973,6 +974,8 @@ script.on_nth_tick(5, function(ev)
   guard_tick("spectate", spectate.tick_spectators,  ev.tick)
   guard_tick("orphan_mining", queues.tick_orphan_mining_cleanup, ev.tick)
   guard_tick("task_pool", task_pool.tick, ev.tick)
+  -- the pole route searches (commands/pole_route.lua): not tied to a companion
+  guard_tick("pole_route", pole_route.tick, ev.tick)
   -- the mod's own fuel upkeep (upkeep.lua): after the pool's tick, so its reservations
   -- of newly mined coal come first; its tasks enter the pool for the next tick
   guard_tick("upkeep", upkeep.tick, ev.tick)

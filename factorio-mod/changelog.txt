@@ -1,4 +1,32 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.194
+  Features:
+    - A pole route search of the mod's own (factorio-ai docs/power_lines.md step 1;
+      commands/pole_route.lua), not tied to a companion: /fac_pole_route_start <json>
+      returns an id, /fac_pole_route_status <id> its state and, once done, its route (pole
+      spots), its start pole and reason ("ok", "no_route", "node_cap", "deadline",
+      "no_start", "error", "cancelled"), /fac_pole_route_cancel <id>|all ends one or drops
+      every one. Goal: a wire to a pole ({pole}, its own spot never taken) or a supply
+      reach ({supply, reach}); start: one named pole or every pole on a generator's
+      network with room for a wire (the prototype's auto_connect_up_to_n_wires); avoid
+      tiles, max_poles, a 1x1 pole type and an added cost for resource tiles. A* over tile
+      centres (a hop within the prototype's wire reach less 0.1; each tile keeps the
+      labels of cost and pole count no other beats in both, so the pole limit loses no
+      route); a spot must take the pole (can_place_entity) and be neither avoided,
+      reserved (reserved_tiles.lua, new reserved_at) nor kept off. Worked on the nth tick:
+      24 budget units a pass (a start seeded, a node expanded, a dead label popped) shared
+      by the running searches in turn (2-6.2 ms a pass live), the starts seeded first, the
+      node cap 40000 and a deadline in the budget units the search itself got (units_max a
+      shorter one); a start pole covering a supply goal itself (full or not) answers an
+      empty route from the nearest; the whole state in storage (a save mid-search loads
+      with it); every parameter checked at the start (a bad one an error reply; max_poles
+      and units_max rounded down); the status reply has the passes worked and the units
+      got; a search that fails ends "error" (logged), the rest go on; a search not asked
+      about and a reply not read for 36000 ticks are dropped; every 200th pass timed and
+      logged.
+    - /fac_keep_off <owner> add x1 y1 x2 y2 | remove | list, /fac_keep_off clear:
+      rectangles no pole route may take (planned expansions), by owner.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.193
   Changes:
     - The belt mode of the route command is retired (factorio-ai docs/belt_planning.md

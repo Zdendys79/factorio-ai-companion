@@ -21,6 +21,13 @@ local function key(x, y)
   return math.floor(x) .. ":" .. math.floor(y)
 end
 
+-- Whether whole tile (tx, ty) is reserved (by any owner) -- one look-up, for a search
+-- that checks each tile once (commands/pole_route.lua caches it).
+function M.reserved_at(tx, ty)
+  local book = storage.reserved_tiles
+  return book ~= nil and book[key(tx, ty)] ~= nil
+end
+
 -- The reserved whole tiles as a lookup {[x] = {[y] = true}} (integers), or nil when
 -- none is reserved -- built once per route search, so the search's tile checks make no
 -- strings.
