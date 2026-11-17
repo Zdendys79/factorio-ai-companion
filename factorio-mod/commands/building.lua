@@ -212,8 +212,15 @@ commands.add_command("fac_building_fuel", nil, function(cmd)
     if not id then u.not_found(); return end
     local fuel, amount = args[2], tonumber(args[3]) or 5
     local inv = c.entity.get_inventory(defines.inventory.character_main)
-    local have = inv.get_item_count(fuel)
-    if have == 0 then u.json_response({id = id, error = "No " .. fuel}); return end
+    local held = inv.get_item_count(fuel)
+    if held == 0 then u.json_response({id = id, error = "No " .. fuel}); return end
+    -- only what no task of hers reserved (the upkeep's coal, a feed's fuel -- as
+    -- fac_building_fill and the task pool's fuel step)
+    local have, others = ledger.free_count({}, fuel, held)
+    if have <= 0 then
+      u.json_response({id = id, error = string.format(
+        "No %s free (%d held, %d reserved by tasks)", fuel, held, others)}); return
+    end
     -- radius 3->6 (2026-07-27, Zdendys: "oprav to hlaseni!" after "drill fuel failed
     -- (No burner nearby)" kept recurring even right after a successful go_to() to the
     -- drill): this search is centered on the COMPANION's position, but go_to()'s own

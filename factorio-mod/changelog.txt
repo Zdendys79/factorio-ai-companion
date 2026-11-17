@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.198
+  Bugfixes:
+    - fac_building_fuel (Python's direct fuelling of the burners round her) uses only
+      what no task reserved too, as fac_building_fill since 0.16.197: it could put the
+      upkeep's reserved coal into a burner. All of it reserved: "No <fuel> free (...)".
+---------------------------------------------------------------------------------------------------
 Version: 0.16.197
   Bugfixes:
     - fac_building_fill (Python's direct fill of a machine or chest) puts in only what
