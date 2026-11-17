@@ -30,7 +30,9 @@
 -- Plan JSON: {"name": "...", "resource": "iron-ore" | nil,
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
 --               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil,
---               "filter": ITEM | nil}, ...],
+--               "filter": ITEM | nil, "ug": "input" | "output" | nil}, ...],
+--   ("ug": an underground belt's side -- the entrance or the exit; create_entity's
+--    type, which can_place_entity does not take)
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
@@ -98,6 +100,14 @@ local function check(plan, force)
     end
     if p.mirror ~= nil and type(p.mirror) ~= "boolean" then
       return "piece " .. i .. ": mirror must be true or false"
+    end
+    if p.ug ~= nil then
+      if p.ug ~= "input" and p.ug ~= "output" then
+        return "piece " .. i .. ": ug must be input or output"
+      end
+      if prototypes.entity[p.entity].type ~= "underground-belt" then
+        return "piece " .. i .. ": " .. p.entity .. " is no underground belt (ug)"
+      end
     end
     if p.filter ~= nil then
       if type(p.filter) ~= "string" or not prototypes.item[p.filter] then
@@ -198,7 +208,7 @@ function M.expand(plan, force)
   for _, p in ipairs(plan.pieces) do
     steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
                          dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
-                         filter = p.filter}
+                         filter = p.filter, ug = p.ug}
     -- (an assembler's recipe right after it stands -- 0.16.174)
     if p.recipe then
       steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,

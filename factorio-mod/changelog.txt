@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.191
+  Features:
+    - A build plan's piece may carry an underground belt's side: "ug": "input" | "output"
+      (factorio-ai docs/belt_planning.md step 1). build_plan.lua checks it (an
+      underground-belt only), the place step carries it to the build queue, which
+      passes it to create_entity as its type (can_place_entity takes none) and fails
+      the step -- the piece taken down, the item kept -- if it stood on the other side.
+      start_build checks it too (a raw place step can carry it).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.190
   Changes:
     - A task step's walk that times out tells where it stood (factorio-ai STATUS 8 (q): a

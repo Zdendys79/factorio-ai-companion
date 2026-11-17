@@ -35,10 +35,12 @@
 --                             ignore_entities_at={{x=,y=},...}|nil}
 --                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
 --   {type="place", which=/x,y/ref/candidates={{x=,y=,dir=},...}, entity=NAME, dir=N,
---                  mirror=true|nil, filter=ITEM|nil}      -> horizontal mirror (live-
+--                  mirror=true|nil, filter=ITEM|nil,
+--                  ug="input"|"output"|nil}              -> horizontal mirror (live-
 --                                                             verified: burner-mining-drill's
 --                                                             own drop_position flips side);
---                                                             an inserter's filter 1 (0.16.186)
+--                                                             an inserter's filter 1 (0.16.186);
+--                                                             an underground belt's side
 --   {type="remove", which=/x,y/ref=, entity=NAME}
 --   {type="fuel", which=/x,y/ref=, item=NAME, count=N, swap=true|nil}
 --                                                       -> swap: the target's other fuel
@@ -775,7 +777,8 @@ function M.tick()
           end
           pos, place_dir = {x = chosen.x, y = chosen.y}, chosen.dir
         end
-        local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror, step.filter)
+        local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror, step.filter,
+                                       step.ug)
         if r.error then
           ledger.step_failed(active.task_id, r.error, active.step_start_tick)
           storage.active_step[cid] = nil

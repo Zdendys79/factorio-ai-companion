@@ -238,9 +238,20 @@ end
 M.clear_build_area = clear_build_area
 
 -- `filter` (0.16.186, optional): an inserter's one item filter, set as it is placed.
-function M.start_build(cid, entity_name, position, direction, mirror, filter)
+-- `ug` (0.16.191, optional): an underground belt's side, "input" or "output" (a raw
+-- place step can carry it too, so it is checked here, not only by build_plan.lua).
+function M.start_build(cid, entity_name, position, direction, mirror, filter, ug)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
+  if ug ~= nil then
+    local proto = prototypes.entity[entity_name]
+    if ug ~= "input" and ug ~= "output" then
+      return {error = "ug must be input or output, not " .. tostring(ug)}
+    end
+    if not proto or proto.type ~= "underground-belt" then
+      return {error = entity_name .. " is no underground belt (ug)"}
+    end
+  end
 
   local dir = direction or defines.direction.north
   local inv = c.entity.get_main_inventory()
@@ -269,6 +280,9 @@ function M.start_build(cid, entity_name, position, direction, mirror, filter)
     -- so this is a no-op for all pre-existing build_queues use.
     mirror = mirror or nil,
     filter = filter,
+    -- ug: an underground belt's side ("input" | "output" | nil) -- create_entity's
+    -- type only (can_place_entity takes none); nil for every other build
+    ug = ug,
     approach = approach,
     state = "approaching",
     tick_start = game.tick,
@@ -531,8 +545,18 @@ function M.tick_build_queues()
         position = q.position,
         direction = q.direction,
         force = c.entity.force,
-        mirror = q.mirror
+        mirror = q.mirror,
+        type = q.ug
       }
+      -- an underground belt must stand on the asked side (the item not yet taken)
+      if placed and q.ug and placed.belt_to_ground_type ~= q.ug then
+        local got = placed.belt_to_ground_type
+        placed.destroy()
+        q.failed = "underground belt stood as " .. tostring(got) .. ", not " .. q.ug
+        q.run_end_tick = game.tick
+        q.state = "failed"
+        return false
+      end
       -- Only keep the building if a real item was actually consumed; else remove it (no free build).
       local destroyed = false
       if placed and c.entity.remove_item{name = q.entity, count = 1} < 1 then
