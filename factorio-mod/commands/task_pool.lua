@@ -640,9 +640,29 @@ function M.tick()
         -- NO deadline at all -- see the dispatch site's own comment for the live
         -- symptom this caused). Mirrors queues.lua's identical "cannot reach -> fail
         -- and let the caller retry/relocate" pattern instead of spinning forever.
+        -- The reason keeps its start (the controller matches "could not reach") and
+        -- tells where the walk stood (a smoke's power plant block failed with no
+        -- detail -- STATUS 8 (q)): the tiles left, her position, the path's progress,
+        -- the walker's stuck state (control.lua: stuck = 5-tick samples without moving,
+        -- reset by each bypass round; bypass = the samples left in the current round;
+        -- tries = the bypass rounds of this stuck spell), the ticks she has not reached
+        -- the next waypoint, the walk's age.
+        local q = storage.walking_queues[cid] or {}
+        local pos = c.entity.position
+        local left = walk_pos and string.format("%.1f", u.distance(pos, walk_pos)) or "?"
+        local why = string.format(
+          "could not reach step target (walking timed out: %s tiles left, she at %.1f,%.1f, "
+          .. "path %s/%s%s, stuck %d samples, bypass round %d left, %d tries, waypoint "
+          .. "stall %d ticks, after %d ticks)",
+          left, pos.x, pos.y, tostring(q.path_idx or "-"), tostring(q.path and #q.path or "-"),
+          q.path_pending and " pending" or "", math.floor(q.stuck_ticks or 0),
+          math.floor(q.bypass_ticks or 0), math.floor(q.bypass_attempts or 0),
+          math.floor(q.waypoint_stall_ticks or 0),
+          game.tick - (active.step_start_tick or game.tick))
+        u.log_error(why, "task_pool")
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
-        ledger.step_failed(active.task_id, "could not reach step target (walking timed out)", active.step_start_tick)
+        ledger.step_failed(active.task_id, why, active.step_start_tick)
         storage.active_step[cid] = nil
         goto continue
       elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t) then

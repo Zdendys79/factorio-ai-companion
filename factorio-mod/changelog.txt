@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.190
+  Changes:
+    - A task step's walk that times out tells where it stood (factorio-ai STATUS 8 (q): a
+      power plant block failed with only "walking timed out"): its reason keeps its start
+      ("could not reach step target (walking timed out" -- the controller matches it) and
+      adds the tiles left, her position, the path's progress, the walker's stuck state
+      (5-tick samples, the bypass round, its tries), the ticks without reaching the next
+      waypoint and the walk's age; also logged to the mod's error ring.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.189
   Features:
     - The devices the upkeep serves by hand go to the controller (factorio-ai
