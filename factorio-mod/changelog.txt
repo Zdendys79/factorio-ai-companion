@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.200
+  Bugfixes:
+    - A crude pipeline's pieces clear their tile before they are placed (items on the
+      ground, trees, rocks into her inventory -- queues_build.clear_build_area, as a belt
+      run's lay does): the route planner counts them passable, and an item lying on a
+      planned pipe-to-ground tile failed a 55-piece pipeline 47 pieces in ("Cannot place
+      pipe-to-ground").
+---------------------------------------------------------------------------------------------------
 Version: 0.16.199
   Features:
     - A build plan's piece may replace a building in place ("replaces": OLD): a new

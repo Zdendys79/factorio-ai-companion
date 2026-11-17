@@ -1,9 +1,9 @@
 -- AI Companion -- the route queue (Stage 0.2, 2026-07-04; 2026-07-19 size-refactor
 -- split out of queues.lua): a fluid pipeline of pipes and pipe-to-ground pairs between
 -- two points (pathfind.lua pipe mode), laid by the companion walking along it, one tile
--- per queue tick, with the real items. Fully self-contained: owns storage.belt_queues
--- (its name kept from the belt days) exclusively, no cross-section calls beyond
--- queues_core.lua.
+-- per queue tick, with the real items. Owns storage.belt_queues (its name kept from the
+-- belt days) exclusively; calls queues_core.lua and queues_build.lua (clear_build_area:
+-- each piece's tile cleared before it is placed).
 --
 -- Belt routes are no longer the mod's (0.16.193, factorio-ai docs/belt_planning.md step
 -- 5, Zdendys): Python plans them (src/rl/belt_route.py) and the mod lays them as a build
@@ -15,6 +15,7 @@ local u = require("commands.init")
 local pathfind = require("commands.pathfind")
 local core = require("commands.queues_core")
 local requests = require("commands.controller_requests")
+local build = require("commands.queues_build")
 
 local M = {}
 
@@ -269,6 +270,13 @@ function M.tick_belt_queues()
       q.run_end_tick = game.tick
       q.state = "failed"; return false
     end
+    -- what lies on the tile is cleared into her inventory first, as a belt run's lay
+    -- does (queues_build.clear_build_area: items on the ground, trees, rocks) -- the
+    -- route planner counts them passable (live: an item on the ground failed a planned
+    -- crude pipeline "Cannot place pipe-to-ground" 47 pieces in)
+    -- (the tile's centre: node x / y is its corner -- the padded area then stays on it)
+    build.clear_build_area(surf, item, {x = node.x + 0.5, y = node.y + 0.5},
+                           c.entity.get_main_inventory(), node.dir)
     -- `type` (input/output) is a create_entity-only field for underground belts, not a
     -- valid can_place_entity param -- keep the collision check's args separate so an
     -- unrecognized key can't make the check itself error or behave unexpectedly.
