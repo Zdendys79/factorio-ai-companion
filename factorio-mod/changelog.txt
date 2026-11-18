@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.208
+  Changes:
+    - The job-end events file holds the current session only: the first event after the
+      game loaded rewrites it (it grew across every run before).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.207
   Features:
     - Job-end events for the controller's walks (kind "walk", her id): arrived, or the

@@ -8,7 +8,8 @@
 -- instead of polling the job's status over RCON until a real-time timeout. A line:
 --   {"seq": N, "tick": T, "kind": "task", "id": task_id, "cid": cid,
 --    "status": "done" | "failed" | "cancelled", "error": reason or nil}
--- seq grows by one per event and survives a save (storage.event_seq), so a reader tells
+-- The file holds the current session only (its first event rewrites it). seq grows by one
+-- per event and survives a save (storage.event_seq), so a reader tells
 -- new lines from old ones. The last RING events are also kept in storage.events and read
 -- by /fac_events <since_seq> -- the fallback when the file cannot be read.
 local u = require("commands.init")
@@ -17,6 +18,10 @@ local M = {}
 
 M.FILE = "ai-companion/events.jsonl"
 local RING = 200
+-- the first event after the game loaded (a server start, a save loaded) starts the file
+-- afresh, the later ones append: the file holds this session only and never grows past
+-- it. A module local -- not storage: it is no game state (the file is the server's own)
+local session_started = false
 
 -- Record one event (the module header); its table gains seq and tick.
 function M.emit(ev)
@@ -28,9 +33,10 @@ function M.emit(ev)
   ring[#ring + 1] = ev
   if #ring > RING then table.remove(ring, 1) end
   local ok, err = pcall(function()
-    helpers.write_file(M.FILE, helpers.table_to_json(ev) .. "\n", true, 0)
+    helpers.write_file(M.FILE, helpers.table_to_json(ev) .. "\n", session_started, 0)
   end)
   if not ok then u.log_error("event not written: " .. tostring(err), "events") end
+  session_started = true
 end
 
 -- /fac_events <since_seq>: the kept events with seq above since_seq, oldest first.
