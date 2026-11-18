@@ -55,7 +55,9 @@ function M.init()
   --   {[cid] = {[item] = the tick the next store search may run}}}
   storage.upkeep = storage.upkeep or {}
   local s = storage.upkeep.surplus or {}
-  for _, k in ipairs({"tasks", "into", "backoff", "search"}) do s[k] = s[k] or {} end
+  for _, k in ipairs({"tasks", "into", "backoff", "search", "asked"}) do
+    s[k] = s[k] or {}
+  end
   storage.upkeep.surplus = s
   return s
 end
@@ -178,9 +180,15 @@ function M.scan(cid, c, acting, log_once)
             -- it plans a surplus chest at the item's consumer, or one in the central
             -- store for an item with no consumer)
             s.search[cid][item] = game.tick + NOSTORE_RESEARCH_TICKS
-            -- (one id per item: a reader keeps the last event of a kind and id -- review)
-            events.emit({kind = "surplus", id = cid .. ":" .. item, cid = cid,
-                         status = "nostore", item = item, count = surplus})
+            -- (one id per item: a reader keeps the last event of a kind and id -- review;
+            -- at most one a NOSTORE_LOG_TICKS an item: smoke_full_1118w sent 1552, one
+            -- each search back-off, crowding the events ring the job ends share)
+            local asked = per(s.asked, cid)
+            if not asked[item] or game.tick - asked[item] >= NOSTORE_LOG_TICKS then
+              asked[item] = game.tick
+              events.emit({kind = "surplus", id = cid .. ":" .. item, cid = cid,
+                           status = "nostore", item = item, count = surplus})
+            end
             log_once("nostore", cid, item, NOSTORE_LOG_TICKS, string.format(
               "upkeep surplus: %d %s on hand (above its keep) and no store or surplus "
               .. "chest of it within %d tiles -- a surplus chest asked of the planner",

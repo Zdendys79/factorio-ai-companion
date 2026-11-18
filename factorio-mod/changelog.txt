@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.217
+  Bugfixes:
+    - A "surplus" request is sent at most once per item every 18000 ticks (a smoke sent
+      1552, one each search back-off, crowding the events ring the job ends share).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.216
   Features:
     - Two chest kinds only (Zdendys): a store (one per material, at its production) and
