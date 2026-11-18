@@ -417,9 +417,15 @@ M.DRILL_CHEST_KEEP = 10
 function M.store_share(chest, item)
   local n = chest.get_item_count(item)
   if n <= 0 then return 0 end
-  -- (a chest with a role is judged by it: a store feeding a belt gives everything, a
-  -- buffer only above its keep -- commands/chest_roles.lua)
+  -- (a chest with a role is judged by it: a store -- even feeding a belt -- and a central
+  -- surplus chest give everything, a consumer's or a belt's surplus chest nothing --
+  -- commands/chest_roles.lua)
   local by_role = roles.share(chest, item, n)
+  -- (a fuel drill's output chest keeps its partner's DRILL_CHEST_KEEP even as a store --
+  -- Zdendys: a coal pair's chest is the coal's store, its partner fed from it first)
+  if by_role and by_role > 0 and is_fuel(item) and drill_fills(chest, item) then
+    return math.max(0, by_role - M.DRILL_CHEST_KEEP)
+  end
   if by_role then return by_role end
   if not M.picked_from(chest) then return n end
   if is_fuel(item) and drill_fills(chest, item) then

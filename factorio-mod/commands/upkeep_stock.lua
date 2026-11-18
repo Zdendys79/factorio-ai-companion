@@ -28,6 +28,13 @@ local Regs = require("commands.upkeep_feed_regs")
 local M = {}
 
 M.STOCK_ITEMS = {"iron-plate", "copper-plate", "steel-plate", "stone-brick"}
+local STOCK_SET = {}
+for _, item in ipairs(M.STOCK_ITEMS) do STOCK_SET[item] = true end
+
+-- Whether `item` is one of her stock items (upkeep_surplus leaves them to this band).
+function M.is_stock_item(item)
+  return STOCK_SET[item] == true
+end
 M.LOW_SHARE = N.STOCK_LOW_SHARE   -- below this share of a stack: a need
 M.TARGET_SHARE = N.STOCK_TARGET_SHARE   -- what a stock task fills up to
 M.MIN_TAKE = 10          -- a source holding less (unless the whole need) is no source

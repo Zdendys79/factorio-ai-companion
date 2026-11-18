@@ -1,32 +1,50 @@
--- Chest roles (factorio-ai docs/stores_and_buffers.md, stage 1a; Zdendys: a store chest
--- at each production, a buffer chest at a consumer filled by hand, a surplus chest at a
--- belt's start, a central store for items with no consumer).
+-- Chest roles (factorio-ai docs/stores_and_buffers.md). Zdendys knows only TWO chest
+-- kinds:
+--   store   -- the "vyrovnavaci bedna": ONE per material, at its production (its machine
+--              outputs into it); everyone may take from it;
+--   surplus -- the "prebytkova bedna": the helpers put their surplus into it; several,
+--              placed where its consumption is assured -- `at`:
+--                "consumer" -- joined by an inserter into a consumer (a fuel chest, the
+--                              plastic plant's coal chest): the consumer's;
+--                "belt"     -- at a belt's start, its inserter putting onto the belt
+--                              first (a plate row's head coal chest): the belt's;
+--                "central"  -- in the central store near the map centre, for an item
+--                              with no consumer: nobody's, so it may be taken from.
 --
--- storage.chest_roles[unit_number] = {entity, role, item}: role one of ROLES, item the
--- item it is for. A chest with a role is judged by it, not by the inserters round it:
---   store, central -- give everything (even with an inserter taking from it to a belt:
---     the old rule read such a chest as giving nothing) and are stores;
---   buffer -- belongs to its consumer: gives nothing (a fuel chest, the plastic plant's
---     coal chest -- review: her coal fetches drained them; once her surplus routing fills
---     buffers, stage 2, what lies above BUFFER_KEEP may be given), and is no store;
---   surplus -- a belt's, at its start: gives nothing (what is in it goes onto the belt
---     first -- a plate row's head coal chest), and is no store.
--- An entry goes with its chest (script.register_on_object_destroyed -> M.on_destroyed);
--- a read of an entry whose entity is gone drops it too.
+-- storage.chest_roles[unit_number] = {entity, role, item, at}. A chest with a role is
+-- judged by it for its item (another item by the old rule), not by the inserters round
+-- it: a store and a central surplus chest give everything (even with an inserter taking
+-- from them -- the old rule read such a chest as giving nothing) and are stores; a
+-- consumer's or a belt's surplus chest gives nothing (review: her coal fetches drained
+-- the fuel chests) and is no store. An entry goes with its chest
+-- (script.register_on_object_destroyed -> M.on_destroyed); a read of an entry whose
+-- entity is gone drops it too.
 --
--- /fac_chest_role <x> <y> <role|none> [item] -- set (or clear) the role of the chest at
---   (x, y) -> {role, item, unit} or {error}
--- /fac_chests -- {chests = [{x, y, role, item, name, count}]}
+-- /fac_chest_role <x> <y> <store|surplus|none> [item] [at] -- set (or clear) the role of
+--   the chest at (x, y) -> {role, item, at, unit} or {error}
+-- /fac_chests -- {count, chests = [{x, y, role, item, at, name, count}]}
 local u = require("commands.init")
 
 local M = {}
 
-M.ROLES = {store = true, buffer = true, surplus = true, central = true}
-M.GIVING = {store = true, central = true}
+M.ROLES = {store = true, surplus = true}
+M.AT = {consumer = true, belt = true, central = true}
 
 local function book()
   storage.chest_roles = storage.chest_roles or {}     -- (lazily: no init without a version change)
   return storage.chest_roles
+end
+
+-- An entry saved by 0.16.214/0.16.215 (roles buffer, central, surplus without a place)
+-- converted to the two kinds in place (review: a relocation copying an old role made
+-- the mod refuse its whole plan).
+local OLD = {buffer = "consumer", central = "central"}
+local function upgrade(r)
+  if OLD[r.role] then
+    r.at, r.role = OLD[r.role], "surplus"
+  elseif r.role == "surplus" and not r.at then
+    r.at = "belt"
+  end
 end
 
 -- The role entry of `chest`, or nil.
@@ -38,11 +56,18 @@ function M.get(chest)
     roles[chest.unit_number] = nil
     return nil
   end
+  if r then upgrade(r) end
   return r
 end
 
--- Set `chest`'s role (`role` nil clears it). Returns the entry or nil, error.
-function M.set(chest, role, item)
+-- Whether a role entry gives what it holds (a store, a central surplus chest).
+local function giving(r)
+  return r.role == "store" or (r.role == "surplus" and r.at == "central")
+end
+
+-- Set `chest`'s role (`role` nil clears it); `at` for a surplus chest. Returns the entry
+-- or nil, error.
+function M.set(chest, role, item, at)
   if not (chest and chest.valid and chest.unit_number) then return nil, "no chest" end
   if chest.type ~= "container" and chest.type ~= "logistic-container" then
     return nil, "not a chest: " .. chest.name
@@ -54,7 +79,11 @@ function M.set(chest, role, item)
   end
   if not M.ROLES[role] then return nil, "unknown role: " .. tostring(role) end
   if not (item and prototypes.item[item]) then return nil, "unknown item: " .. tostring(item) end
-  roles[chest.unit_number] = {entity = chest, role = role, item = item}
+  if role == "surplus" and not M.AT[at] then
+    return nil, "a surplus chest needs at = consumer | belt | central, not " .. tostring(at)
+  end
+  roles[chest.unit_number] = {entity = chest, role = role, item = item,
+                              at = role == "surplus" and at or nil}
   script.register_on_object_destroyed(chest)
   return roles[chest.unit_number]
 end
@@ -74,8 +103,7 @@ end
 function M.share(chest, item, n)
   local r = M.get(chest)
   if not r or r.item ~= item then return nil end
-  if M.GIVING[r.role] then return n end
-  return 0                                       -- (a buffer, a surplus chest)
+  return giving(r) and n or 0
 end
 
 -- Whether `chest` is a store of `item` by its role (true / false), or nil when it has
@@ -83,15 +111,25 @@ end
 function M.store(chest, item)
   local r = M.get(chest)
   if not r or r.item ~= item then return nil end
-  return M.GIVING[r.role] == true
+  return giving(r)
+end
+
+-- The rank of `chest` as a target for her surplus of `item` (1 its store, 2 a
+-- consumer's or a belt's surplus chest of it, 3 a central one), or nil: no role for it.
+function M.target_rank(chest, item)
+  local r = M.get(chest)
+  if not r or r.item ~= item then return nil end
+  if r.role == "store" then return 1 end
+  return r.at == "central" and 3 or 2
 end
 
 commands.add_command("fac_chest_role", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s+(%S+)%s*(%S*)$",
+    local args = u.parse_args("^(%-?%d+%.?%d*)%s+(%-?%d+%.?%d*)%s+(%S+)%s*(%S*)%s*(%S*)$",
                               cmd.parameter)
     local x, y, role = tonumber(args[1]), tonumber(args[2]), args[3]
     local item = args[4] ~= "" and args[4] or nil
+    local at = args[5] ~= "" and args[5] or nil
     local chest
     for _, e in pairs(game.surfaces[1].find_entities_filtered{
         position = {x, y}, radius = 0.5, type = {"container", "logistic-container"}}) do
@@ -101,9 +139,10 @@ commands.add_command("fac_chest_role", nil, function(cmd)
       end
     end
     if not chest then u.json_response({error = "no chest at " .. x .. "," .. y}); return end
-    local r, err = M.set(chest, role ~= "none" and role or nil, item)
+    local r, err = M.set(chest, role ~= "none" and role or nil, item, at)
     if err then u.json_response({error = err}); return end
-    u.json_response({role = r and r.role or "none", item = r and r.item, unit = chest.unit_number})
+    u.json_response({role = r and r.role or "none", item = r and r.item, at = r and r.at,
+                     unit = chest.unit_number})
   end)
 end)
 
@@ -112,8 +151,9 @@ commands.add_command("fac_chests", nil, function(_cmd)
     local out = {}
     for unit, r in pairs(book()) do
       if r.entity and r.entity.valid then
+        upgrade(r)
         out[#out + 1] = {x = r.entity.position.x, y = r.entity.position.y, role = r.role,
-                         item = r.item, name = r.entity.name,
+                         item = r.item, at = r.at, name = r.entity.name,
                          count = r.entity.get_item_count(r.item)}
       else
         storage.chest_roles[unit] = nil

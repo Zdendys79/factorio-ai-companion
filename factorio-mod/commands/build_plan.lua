@@ -32,8 +32,9 @@
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
 --               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil,
 --               "filter": ITEM | nil, "ug": "input" | "output" | nil,
---               "chest_role": "store" | "buffer" | "surplus" | "central" | nil,
---               "chest_item": ITEM (with chest_role),
+--               "chest_role": "store" | "surplus" | nil, "chest_item": ITEM (with
+--               chest_role), "chest_at": "consumer" | "belt" | "central" (a surplus
+--               chest's place),
 --               "replaces": OLD | nil}, ...],
 --   ("replaces": an upgrade in place -- the OLD building standing there is
 --    fast-replaced by the piece, a replace step instead of a place step:
@@ -151,6 +152,9 @@ local function check(plan, force)
       if type(p.chest_item) ~= "string" or not prototypes.item[p.chest_item] then
         return "piece " .. i .. ": chest_role needs a known chest_item"
       end
+      if p.chest_role == "surplus" and not chest_roles.AT[p.chest_at] then
+        return "piece " .. i .. ": a surplus chest needs chest_at consumer | belt | central"
+      end
       local e = prototypes.entity[p.entity]
       if e.type ~= "container" and e.type ~= "logistic-container" then
         return "piece " .. i .. ": " .. p.entity .. " is no chest"
@@ -265,7 +269,8 @@ function M.expand(plan, force)
       steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
                            dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
                            filter = p.filter, ug = p.ug,
-                           chest = p.chest_role and {role = p.chest_role, item = p.chest_item}}
+                           chest = p.chest_role and {role = p.chest_role, item = p.chest_item,
+                                                     at = p.chest_at}}
       -- (an assembler's recipe right after it stands -- 0.16.174)
       if p.recipe then
         steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,

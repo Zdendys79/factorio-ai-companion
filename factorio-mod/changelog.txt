@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.216
+  Features:
+    - Two chest kinds only (Zdendys): a store (one per material, at its production) and
+      a surplus chest (at a consumer, a belt's start or the central store).
+    - Her surplus by chest role: every item she holds but coal, wood and her stock items
+      above a stack (a placeable one above 2 stacks) goes into its store while it has
+      room, only then into a surplus chest of it; a chest without a role is no target;
+      with none a "surplus" event asks the planner for a surplus chest.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.215
   Features:
     - A plan piece's chest_role / chest_item registers the chest's role as it is placed.

@@ -602,7 +602,7 @@ function M.tick_build_queues()
       end
       -- a chest's role (factorio-ai docs/stores_and_buffers.md stage 1b)
       if q.chest then
-        local _, err = chest_roles.set(placed, q.chest.role, q.chest.item)
+        local _, err = chest_roles.set(placed, q.chest.role, q.chest.item, q.chest.at)
         if err then
           u.log_error("build queue: chest role not set on " .. placed.name .. ": " .. err,
                       "build_queue")
