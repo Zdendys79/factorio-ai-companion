@@ -2,6 +2,7 @@
 -- has a supply line of its own, or a fuel chest that is hers to fill (Zdendys: she
 -- supplies a production or a chest no belt with that material reaches yet).
 local u = require("commands.init")
+local roles = require("commands.chest_roles")
 
 local M = {}
 
@@ -416,6 +417,10 @@ M.DRILL_CHEST_KEEP = 10
 function M.store_share(chest, item)
   local n = chest.get_item_count(item)
   if n <= 0 then return 0 end
+  -- (a chest with a role is judged by it: a store feeding a belt gives everything, a
+  -- buffer only above its keep -- commands/chest_roles.lua)
+  local by_role = roles.share(chest, item, n)
+  if by_role then return by_role end
   if not M.picked_from(chest) then return n end
   if is_fuel(item) and drill_fills(chest, item) then
     return math.max(0, n - M.DRILL_CHEST_KEEP)
@@ -426,6 +431,8 @@ end
 -- Whether the chest is a store of `item` at all (store_share's rule, whatever it holds
 -- now): no inserter picks from it, or it is a fuel drill's output chest.
 function M.is_store(chest, item)
+  local by_role = roles.store(chest, item)
+  if by_role ~= nil then return by_role end
   if not M.picked_from(chest) then return true end
   return is_fuel(item) and drill_fills(chest, item)
 end

@@ -10,6 +10,7 @@ local pole_route = require("commands.pole_route")
 local events = require("commands.events")
 local ground_pick = require("commands.ground_pick")
 local inv_watch = require("commands.inventory_watch")
+local chest_roles = require("commands.chest_roles")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -372,6 +373,11 @@ local function request_walk_path(cid, q, e)
     q.path_failed_tick = game.tick
   end
 end
+
+-- a chest with a role gone: its role goes with it (commands/chest_roles.lua)
+script.on_event(defines.events.on_object_destroyed, function(ev)
+  chest_roles.on_destroyed(ev)
+end)
 
 script.on_event(defines.events.on_script_path_request_finished, function(ev)
   local cid = storage.path_requests and storage.path_requests[ev.id]

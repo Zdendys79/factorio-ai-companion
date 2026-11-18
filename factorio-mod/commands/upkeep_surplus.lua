@@ -21,6 +21,7 @@ local ledger = require("commands.task_pool_ledger")
 local F = require("commands.upkeep_feeds")
 local Regs = require("commands.upkeep_feed_regs")
 local Stock = require("commands.upkeep_stock")
+local roles = require("commands.chest_roles")
 
 local M = {}
 
@@ -67,8 +68,12 @@ local function store_for(c, item, off)
       type = "container", force = c.entity.force, position = pos, radius = M.RADIUS}) do
     local inv = e.get_inventory(defines.inventory.chest)
     local held = off[pos_key(e) .. "|" .. item]
+    -- (a chest with a role: a store of it counts even with an inserter taking from it;
+    -- a buffer is its consumer's -- stage 2 routes to it -- commands/chest_roles.lua)
+    local is_store = roles.store(e, item)
+    if is_store == nil then is_store = not F.picked_from(e) end
     if inv and inv.get_item_count(item) > 0 and inv.get_insertable_count(item) > 0
-       and not (held and game.tick < held) and not F.picked_from(e) and not Regs.own(e) then
+       and not (held and game.tick < held) and is_store and not Regs.own(e) then
       local d = u.distance(pos, e.position)
       if d < best_d then best, best_d = e, d end
     end

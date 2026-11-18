@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.214
+  Features:
+    - Chest roles (store, buffer, surplus, central): /fac_chest_role, /fac_chests; a chest
+      with a role is judged by it when she fetches or puts her surplus away -- a store
+      feeding a belt gives everything, a buffer only above its keep (commands/chest_roles.lua).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.213
   Changes:
     - The ground pickup takes everything that fits, over any limit and kinds she does
