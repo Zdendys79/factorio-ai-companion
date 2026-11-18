@@ -35,8 +35,11 @@ function M.emit(ev)
   local ok, err = pcall(function()
     helpers.write_file(M.FILE, helpers.table_to_json(ev) .. "\n", session_started, 0)
   end)
-  if not ok then u.log_error("event not written: " .. tostring(err), "events") end
-  session_started = true
+  if ok then
+    session_started = true
+  else
+    u.log_error("event not written: " .. tostring(err), "events")
+  end
 end
 
 -- /fac_events <since_seq>: the kept events with seq above since_seq, oldest first.

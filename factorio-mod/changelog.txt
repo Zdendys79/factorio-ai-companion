@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.209
+  Bugfixes:
+    - The events file's session start counts only once a write succeeded (a first write
+      that failed left the later lines appended to the old file).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.208
   Changes:
     - The job-end events file holds the current session only: the first event after the
