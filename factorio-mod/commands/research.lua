@@ -52,7 +52,19 @@ commands.add_command("fac_research_set", nil, function(cmd)
     if not tech then u.json_response({id = id, error = "Not found"}); return end
     if tech.researched then u.json_response({id = id, error = "Already done"}); return end
     for _, p in pairs(tech.prerequisites) do if not p.researched then u.json_response({id = id, error = "Missing: " .. p.name}); return end end
-    if force.add_research(args[2]) then u.json_response({id = id, researching = args[2]})
-    else u.json_response({id = id, error = "Failed"}) end
+    -- (add_research appends to the BACK of the queue: behind a current research it only
+    -- queued, and a second call failed -- "still not the current research", smoke
+    -- smoke_full_1118p. The target goes to the queue's front; the rest keep their order
+    -- and a tech left off keeps its progress)
+    local queue = {args[2]}
+    for _, t in pairs(force.research_queue or {}) do
+      if t.name ~= args[2] then queue[#queue + 1] = t.name end
+    end
+    force.research_queue = queue
+    local cur = force.current_research
+    if cur and cur.name == args[2] then u.json_response({id = id, researching = args[2]})
+    else
+      u.json_response({id = id, error = "Failed: current " .. (cur and cur.name or "none")})
+    end
   end)
 end)

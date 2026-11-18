@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.210
+  Bugfixes:
+    - /fac_research_set makes its tech the current research: it goes to the research
+      queue's front, the rest kept in order (add_research only appended it -- behind a
+      running research it was queued, and a second call failed).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.209
   Bugfixes:
     - The events file's session start counts only once a write succeeded (a first write
