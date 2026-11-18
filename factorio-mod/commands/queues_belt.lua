@@ -16,6 +16,7 @@ local pathfind = require("commands.pathfind")
 local core = require("commands.queues_core")
 local requests = require("commands.controller_requests")
 local build = require("commands.queues_build")
+local events = require("commands.events")
 
 local M = {}
 
@@ -131,7 +132,16 @@ function M.tick_belt_queues()
     -- TERMINAL: sit here until get_belt_connect_status consumes+clears this entry (same
     -- fix as tick_build_queues -- otherwise a poll a moment after completion just sees
     -- plain "active:false", indistinguishable from success).
-    if q.state == "done" or q.state == "failed" then return false end
+    if q.state == "done" or q.state == "failed" then
+      -- its end once as a job-end event (commands/events.lua: kind "pipe", the
+      -- companion's id -- one route at a time each)
+      if not q.event_sent then
+        q.event_sent = true
+        events.emit({kind = "pipe", id = cid, cid = cid, status = q.state,
+                     error = q.failed, tiles = q.tiles_placed})
+      end
+      return false
+    end
     -- a belt route of an older version (q.pipe nil: before 0.16.193 a record without it
     -- was a belt) -- the belt mode is gone (header): dropped as failed, its caller told
     if not q.pipe then

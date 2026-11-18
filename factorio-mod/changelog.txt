@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.205
+  Features:
+    - Job-end events for pipeline routes too: a route's end (done / failed, its reason
+      and the pieces laid -- also when the queues' no-progress backstop ends it) is an
+      event of kind "pipe" with the companion's id.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.204
   Features:
     - Job-end events: every task-pool task's end (done / failed / cancelled, with its

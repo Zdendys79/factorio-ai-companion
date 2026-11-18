@@ -9,6 +9,7 @@
 -- working completely unchanged.
 
 local u = require("commands.init")
+local events = require("commands.events")
 
 local M = {}
 
@@ -139,6 +140,13 @@ function M.process_queue(queue_name, processor)
       end
       if q._stale_ticks > UNIVERSAL_STALE_TICKS
           and (q.state == "done" or (queue_name == "belt_queues" and q.state == "failed")) then
+        -- (a route its processor ended while she stood still: its end event here, the
+        -- processor no longer runs for it -- review)
+        if queue_name == "belt_queues" and not q.event_sent then
+          q.event_sent = true
+          events.emit({kind = "pipe", id = cid, cid = cid, status = q.state,
+                       error = q.failed, tiles = q.tiles_placed})
+        end
         -- TERMINAL re-entry guard (2026-07-12, closing the follow-up flagged in
         -- 6d00d54): gather_queues/fuel_queues can now sit HERE, frozen in q.state=
         -- "done", waiting for get_gather_status/get_fuel_status to consume+clear them
@@ -362,6 +370,11 @@ function M.process_queue(queue_name, processor)
               q.tiles_placed or 0, q.path and #q.path or 0)
             u.log_error(q.failed .. " (the queues' backstop)", "belt_queue")
             q.state = "failed"
+            -- (its processor no longer runs for it: the end event here --
+            -- commands/events.lua)
+            q.event_sent = true
+            events.emit({kind = "pipe", id = cid, cid = cid,
+              status = "failed", error = q.failed, tiles = q.tiles_placed})
           else
             to_remove[#to_remove + 1] = cid
           end
