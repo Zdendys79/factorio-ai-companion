@@ -22,6 +22,10 @@ local function start_move(id, x, y)
   if storage.walk_last_outcome then storage.walk_last_outcome[id] = nil end
   if storage.walk_last_arrived then storage.walk_last_arrived[id] = nil end
   storage.walking_queues[id] = {target = {x = x, y = y}, giveup_enabled = true}
+  -- (open until it ends: a walk of the mod's own that replaces it sends its end event,
+  -- status "taken" -- control.lua process_walking_queues)
+  storage.controller_walk_open = storage.controller_walk_open or {}
+  storage.controller_walk_open[id] = true
   return {id = id, walking_to = {x = x, y = y}}
 end
 
@@ -91,6 +95,8 @@ commands.add_command("fac_move_stop", nil, function(cmd)
     end
     if requests.pending(id, "move") then requests.cancel(id) end
     storage.walking_queues[id] = nil
+    -- (her walk stopped, not taken: no later walk of the mod's may read as its end)
+    if storage.controller_walk_open then storage.controller_walk_open[id] = nil end
     c.entity.walking_state = {walking = false}
     u.json_response({id = id, stopped = true})
   end)

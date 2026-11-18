@@ -129,6 +129,7 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
     storage.context_clear_requests[id] = game.tick
     storage.companions[id] = nil
     storage.walking_queues[id] = nil
+    if storage.controller_walk_open then storage.controller_walk_open[id] = nil end
     -- (her hand-craft count goes with her: a new companion under the id starts at 0)
     if storage.hand_crafts then storage.hand_crafts[id] = nil end
     -- (her walk's books too: a new companion under the id inherits no hold, no arrival)
@@ -395,6 +396,7 @@ commands.add_command("fac_companion_stop_all", nil, function(cmd)
       storage.walking_queues[id] = nil
       stopped[#stopped + 1] = "walk"
     end
+    if storage.controller_walk_open then storage.controller_walk_open[id] = nil end
     c.entity.walking_state = {walking = false}
     u.json_response({id = id, stopped = stopped})
   end)

@@ -99,6 +99,7 @@ local function init_storage()
   -- her walking elsewhere as stuck (factorio-ai smoke_no_give_up11: 18 "give-up
   -- (stuck)" walks, the visits skipped).
   storage.controller_walk_end = storage.controller_walk_end or {}
+  storage.controller_walk_open = storage.controller_walk_open or {}
   -- (0.16.164: a controller command is queued, never refused -- the refusal's upkeep
   -- yield is gone)
   storage.busy_refused = nil
@@ -449,6 +450,14 @@ local function process_walking_queues()
   for cid, q in pairs(storage.walking_queues) do
     local c = u.get_companion(cid)
     if not c then storage.walking_queues[cid] = nil; goto skip end
+    -- the controller's walk replaced by one of the mod's own (a task-pool step, upkeep,
+    -- a build's approach): its end as a job-end event, status "taken" -- its waiter
+    -- otherwise saw it only by its next position poll (factorio-ai docs/mod_events.md)
+    if storage.controller_walk_open and storage.controller_walk_open[cid]
+        and not q.giveup_enabled then
+      storage.controller_walk_open[cid] = nil
+      events.emit({kind = "walk", id = cid, cid = cid, status = "taken"})
+    end
     if q.follow_player then
       local p = game.players[q.follow_player]
       if p and p.valid then q.target = {x = p.position.x, y = p.position.y}
@@ -582,6 +591,7 @@ local function process_walking_queues()
           storage.walk_last_arrived[cid] = {x = q.target.x, y = q.target.y, tick = game.tick}
           -- (the controller walk's end as a job-end event: kind "walk", her id)
           events.emit({kind = "walk", id = cid, cid = cid, status = "arrived"})
+          if storage.controller_walk_open then storage.controller_walk_open[cid] = nil end
           -- (made here too: a save loaded without a version change never ran init)
           storage.controller_walk_end = storage.controller_walk_end or {}
           storage.controller_walk_end[cid] = game.tick
@@ -661,6 +671,7 @@ local function process_walking_queues()
             }
             events.emit({kind = "walk", id = cid, cid = cid,
                          status = storage.walk_last_outcome[cid].result})
+            if storage.controller_walk_open then storage.controller_walk_open[cid] = nil end
             storage.controller_walk_end = storage.controller_walk_end or {}
             storage.controller_walk_end[cid] = game.tick
             storage.walking_queues[cid] = nil

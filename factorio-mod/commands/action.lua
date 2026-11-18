@@ -11,6 +11,7 @@ commands.add_command("fac_action_attack", nil, function(cmd)
 
     -- STOP WALKING - Clear walking queue so attack can take priority
     storage.walking_queues[id] = nil
+    if storage.controller_walk_open then storage.controller_walk_open[id] = nil end
     c.entity.walking_state = {walking = false}
 
     local target_pos = {x = x, y = y}

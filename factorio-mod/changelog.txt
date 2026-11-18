@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.211
+  Features:
+    - The controller's walk replaced by a walk of the mod's own (a task-pool step, upkeep,
+      a build's approach) sends its end as a job-end event: kind "walk", status "taken".
+      A walk stopped (fac_move_stop, fac_companion_stop, an attack, her disappearing)
+      is closed, so no later walk reads as its end.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.210
   Bugfixes:
     - /fac_research_set makes its tech the current research: it goes to the research
