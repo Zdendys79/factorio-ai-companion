@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.204
+  Features:
+    - Job-end events: every task-pool task's end (done / failed / cancelled, with its
+      reason) is appended as one JSON line to script-output/ai-companion/events.jsonl
+      (helpers.write_file, the server's own output) and kept in a ring of the last 200
+      (storage.events, read by /fac_events <since_seq>). factorio-ai waits on that file
+      instead of polling the task's status until a real-time timeout.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.203
   Bugfixes:
     - A walk's path waypoint beside a cliff (within 2.5 tiles) counts as reached only

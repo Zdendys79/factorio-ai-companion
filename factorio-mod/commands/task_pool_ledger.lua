@@ -9,6 +9,7 @@
 local u = require("commands.init")
 local priority = require("commands.priority")
 local build_plan = require("commands.build_plan")
+local events = require("commands.events")
 
 local M = {}
 
@@ -130,6 +131,8 @@ local function fail_task(task_id, reason)
   -- created_tick) alongside the finer per-step breakdown in step_ticks.
   t.done_tick = game.tick
   u.log_error(string.format("task %d failed: %s", task_id, tostring(reason)), "task_pool")
+  events.emit({kind = "task", id = task_id, cid = t.cid, status = "failed",
+               error = tostring(reason)})
 end
 
 -- A task withdrawn by its own submitter (the mod's upkeep, commands/upkeep.lua: the need
@@ -143,6 +146,8 @@ local function cancel_task(task_id, reason)
   t.status = "cancelled"
   t.error = reason
   t.done_tick = game.tick
+  events.emit({kind = "task", id = task_id, cid = t.cid, status = "cancelled",
+               error = reason and tostring(reason) or nil})
 end
 
 local function complete_task(task_id)
@@ -151,6 +156,7 @@ local function complete_task(task_id)
   release_reservations(t)
   t.status = "done"
   t.done_tick = game.tick
+  events.emit({kind = "task", id = task_id, cid = t.cid, status = "done"})
 end
 
 -- Submit a new task_list under a fresh task_id (2026-07-07 design). `steps` is a
