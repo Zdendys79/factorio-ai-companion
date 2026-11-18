@@ -3,6 +3,7 @@
 
 local u = require("commands.init")
 local core = require("commands.queues_core")
+local inv_watch = require("commands.inventory_watch")
 
 local TICK_INTERVAL = core.TICK_INTERVAL
 local MINE_ADJACENT_RANGE = core.MINE_ADJACENT_RANGE
@@ -210,6 +211,7 @@ function M.tick_harvest_queues()
     local gained = now_count - q.last_inv_count
     if gained > 0 then
       q.harvested = q.harvested + gained
+      inv_watch.gained(c.entity)
     end
     -- ALWAYS refresh the baseline (not just when gained > 0): otherwise any net inventory
     -- DECREASE (a concurrent queue consuming items) leaves last_inv_count stale/too-high, and

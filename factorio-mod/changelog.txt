@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.213
+  Changes:
+    - The ground pickup takes everything that fits, over any limit and kinds she does
+      not hold (Zdendys: a full inventory makes new requests to free it).
+  Features:
+    - Her inventory is checked when she gains material (a chest, the ground, a building
+      taken down, mining, a tree): with 3 or fewer empty slots a job-end event
+      {kind "inventory", status "tight"} is sent (commands/inventory_watch.lua).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.212
   Features:
     - Items on the ground within 2 tiles of her are picked up as she walks (like the

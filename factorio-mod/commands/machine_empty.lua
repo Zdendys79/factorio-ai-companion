@@ -1,6 +1,8 @@
 -- Taking items out of a machine or a chest into the companion's inventory -- shared by
 -- building.lua's fac_building_empty and the task pool's "take_out" step (the mod walks to
 -- it; factorio-ai CompanionAPI.collect / collect_many).
+local inv_watch = require("commands.inventory_watch")
+
 local M = {}
 
 -- the target: the entity nearest the requested position within this radius
@@ -47,6 +49,7 @@ function M.empty(c, pos, item, count)
       if ext >= count then break end
     end
   end
+  if ext > 0 then inv_watch.gained(c.entity) end
   return {extracted = ext, item = item}
 end
 

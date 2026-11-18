@@ -1,5 +1,7 @@
 -- The entity a command or a task step means at a position, and its pick-up (shared by
 -- building.lua's fac_building_remove and the task pool's "remove" step).
+local inv_watch = require("commands.inventory_watch")
+
 local M = {}
 
 -- how far off an entity's selection box a requested position may lie: callers pass a
@@ -37,8 +39,10 @@ end
 function M.mine_into(c, t)
   local mined = t.mine{inventory = c.entity.get_main_inventory()}
   if not mined or t.valid then
+    inv_watch.gained(c.entity)          -- (its contents may have moved)
     return false, "Cannot remove (inventory full?)"
   end
+  inv_watch.gained(c.entity)
   return true
 end
 

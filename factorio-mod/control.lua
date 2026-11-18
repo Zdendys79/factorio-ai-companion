@@ -9,6 +9,7 @@ local crash_site_start = require("commands.crash_site_start")
 local pole_route = require("commands.pole_route")
 local events = require("commands.events")
 local ground_pick = require("commands.ground_pick")
+local inv_watch = require("commands.inventory_watch")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -468,7 +469,7 @@ local function process_walking_queues()
     local e = c.entity
     -- (items on the ground she passes are picked up, like the trees in her way --
     -- commands/ground_pick.lua)
-    ground_pick.pick_near(e)
+    if ground_pick.pick_near(e) > 0 then inv_watch.gained(e) end
     -- TARGET-WALKABILITY FIX (2026-07-24, Zdendys, live discussion: confirmed real gap --
     -- fac_move_to()/go_to() pass a requested (x,y) through completely unvalidated; a
     -- target genuinely on water or under a building footprint gets a flat, permanent
@@ -540,6 +541,7 @@ local function process_walking_queues()
     -- tick_gather_queues, 2026-07-03).
     if q.clearing_target and not q.clearing_target.valid then
       q.clearing_target = nil  -- previous target is gone (fully mined, or otherwise removed)
+      inv_watch.gained(e)      -- (its wood or stone came into her inventory)
     end
     -- Stale-but-still-valid target guard (cubic-dev-ai bot, 2026-07-05): a target only
     -- ever got cleared above when the ENTITY itself became invalid -- not when the

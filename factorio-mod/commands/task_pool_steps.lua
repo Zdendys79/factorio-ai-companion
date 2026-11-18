@@ -8,6 +8,7 @@ local u = require("commands.init")
 local targeting = require("commands.task_pool_targeting")
 local ledger = require("commands.task_pool_ledger")
 local feeds = require("commands.upkeep_feeds")
+local inv_watch = require("commands.inventory_watch")
 
 local step_target_pos = targeting.step_target_pos
 local WALK_REACH = targeting.WALK_REACH
@@ -116,6 +117,7 @@ function M.swap_at_target(c, step, target, pos, have)
     if stack.valid_for_read and stack.name ~= step.item then
       local name, n = stack.name, stack.count
       local got = c.entity.insert(stack)
+      if got > 0 then inv_watch.gained(c.entity) end
       if got >= n then
         stack.clear()
       else
@@ -168,6 +170,7 @@ function M.run_set_recipe(c, t, step)
   -- the script, not back -- review); what does not fit her inventory is spilled there
   for _, it in pairs(removed or {}) do
     local got = c.entity.insert(it)
+    if got > 0 then inv_watch.gained(c.entity) end
     if got < it.count then
       -- (no force: spilled items marked for deconstruction would call robots -- review)
       c.entity.surface.spill_item_stack{position = target.position,
@@ -229,6 +232,7 @@ function M.run_take(c, t, step)
   local got = c.entity.insert{name = step.item, count = n}
   if got < n then inv.insert{name = step.item, count = n - got} end
   if got <= 0 then return false, "take: no room in her inventory for " .. step.item end
+  inv_watch.gained(c.entity)
   return true, nil
 end
 

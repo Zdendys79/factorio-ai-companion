@@ -4,6 +4,7 @@
 local u = require("commands.init")
 local inserter_filter = require("commands.inserter_filter")
 local core = require("commands.queues_core")
+local inv_watch = require("commands.inventory_watch")
 
 local valid_companion = core.valid_companion
 local process_queue = core.process_queue
@@ -392,6 +393,7 @@ function M.tick_build_queues()
     -- CLEARING: remove trees/rocks from build footprint
     if q.state == "clearing" then
       clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory(), q.direction)
+      inv_watch.gained(c.entity)
       q.state = "building"
       q.tick_start = game.tick
       -- Fresh collision-retry window for THIS building attempt (2026-07-13): without
@@ -465,6 +467,7 @@ function M.tick_build_queues()
           -- excess right back where it was picked up), and a passive wait alone
           -- would never clear it before the 60-tick budget runs out.
           clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory(), q.direction)
+          inv_watch.gained(c.entity)
           return false
         end
         -- SELF-COLLISION STEP-AWAY (2026-07-13, universal own-body-blocks-own-build

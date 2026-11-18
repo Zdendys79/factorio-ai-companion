@@ -21,6 +21,7 @@ local u = require("commands.init")
 local F = require("commands.upkeep_feeds")
 local Regs = require("commands.upkeep_feed_regs")
 local Stock = require("commands.upkeep_stock")
+local inv_watch = require("commands.inventory_watch")
 
 local M = {}
 
@@ -105,6 +106,7 @@ local function take(c, e, item, want)
   if removed <= 0 then return 0 end
   local put = c.entity.insert{name = item, count = removed}
   if put < removed then inv.insert{name = item, count = removed - put} end
+  if put > 0 then inv_watch.gained(c.entity) end
   return put
 end
 

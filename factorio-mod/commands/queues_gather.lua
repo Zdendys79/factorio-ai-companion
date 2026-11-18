@@ -14,6 +14,7 @@
 local u = require("commands.init")
 local core = require("commands.queues_core")
 local requests = require("commands.controller_requests")
+local inv_watch = require("commands.inventory_watch")
 
 local _tile_key = core.tile_key
 local valid_companion = core.valid_companion
@@ -508,6 +509,10 @@ function M.tick_gather_queues()
 
     if q.state == "mine" then
       local gathered = inv.get_item_count(q.product) - (q.start_count or 0)
+      if gathered > (q.watch_gathered or 0) then
+        q.watch_gathered = gathered
+        inv_watch.gained(c.entity)
+      end
       if gathered >= q.target then
         c.entity.mining_state = {mining = false}
         q.run_end_tick = game.tick
@@ -711,6 +716,7 @@ function M.tick_gather_queues()
             -- 2026-08-01 WOOD_STOCK_CAP attempt.
             if obs.valid then
               obs.mine{inventory = c.entity.get_main_inventory()}
+              inv_watch.gained(c.entity)
               cleared = cleared + 1
             end
           end

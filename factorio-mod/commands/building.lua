@@ -6,6 +6,7 @@ local entity_at = require("commands.entity_at")
 local machine_fill = require("commands.machine_fill")
 local ledger = require("commands.task_pool_ledger")
 local machine_empty = require("commands.machine_empty")
+local inv_watch = require("commands.inventory_watch")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
 requests.register("place", function(cid, a)
@@ -101,6 +102,7 @@ commands.add_command("fac_building_place", nil, function(cmd)
           if o.valid then o.mine{inventory = c.entity.get_main_inventory()} end
         end
       end
+      inv_watch.gained(c.entity)
     end
     if not surf.can_place_entity{name = name, position = {x=x, y=y}, direction = dir, force = c.entity.force} then
       u.json_response({id = id, error = "Cannot place"}); return
@@ -337,6 +339,7 @@ commands.add_command("fac_building_clear_wrong_output", nil, function(cmd)
           local ins = c.entity.insert{name = stack.name, count = rm, quality = stack.quality}
           if ins < rm then inv.insert{name = stack.name, count = rm - ins, quality = stack.quality} end
           if ins > 0 then
+            inv_watch.gained(c.entity)
             u.json_response({id = id, cleared = true, item = stack.name, count = ins})
             return
           end
@@ -446,6 +449,7 @@ commands.add_command("fac_mine_entity", nil, function(cmd)
     -- fitting her inventory moved them and left the chest standing (independent review)
     local mined = target.mine{inventory = inv}
     local gained = inv.get_item_count() - before
+    if gained > 0 then inv_watch.gained(c.entity) end
     if not mined or target.valid then
       u.json_response({id = id, error = "Could not mine (inventory full?)", entity = entity_name})
       return

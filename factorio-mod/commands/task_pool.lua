@@ -207,6 +207,7 @@ local run_pick_orientation = steps.run_pick_orientation
 local run_insert = steps.run_insert
 local run_set_recipe = steps.run_set_recipe
 local run_replace = require("commands.task_pool_replace").run_replace
+local inv_watch = require("commands.inventory_watch")
 local run_take = steps.run_take
 
 -- ensure_item step (2026-07-17, Zdendys's own architecture correction -- see
@@ -1197,6 +1198,7 @@ function M.tick()
           -- mine{inventory=...} exactly as before the 2026-08-01 WOOD_STOCK_CAP
           -- attempt.
           trees[1].mine{inventory = inv}
+          inv_watch.gained(c.entity)
           if inv.get_item_count("wood") > before then
             t.ctx.wood_chop_count = (t.ctx.wood_chop_count or 0) + 1
           else

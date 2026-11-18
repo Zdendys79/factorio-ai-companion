@@ -1,6 +1,7 @@
 -- AI Companion v0.9.0 - Item commands
 local u = require("commands.init")
 local queues = require("commands.queues")
+local inv_watch = require("commands.inventory_watch")
 
 commands.add_command("fac_item_craft", nil, function(cmd)
   u.safe_command(function()
@@ -60,6 +61,7 @@ commands.add_command("fac_item_pick", nil, function(cmd)
           if ins >= item.stack.count then item.destroy() else item.stack.count = item.stack.count - ins end
         end
       end
+      inv_watch.gained(c.entity)
     end
     u.json_response({id = id, picked = picked})
   end)
