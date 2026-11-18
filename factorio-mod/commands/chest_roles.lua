@@ -4,10 +4,13 @@
 --
 -- storage.chest_roles[unit_number] = {entity, role, item}: role one of ROLES, item the
 -- item it is for. A chest with a role is judged by it, not by the inserters round it:
---   store, surplus, central -- give everything (even with an inserter taking from it to a
---     belt: the old rule read such a chest as giving nothing) and are stores;
---   buffer -- belongs to its consumer: gives only what lies above BUFFER_KEEP, and is no
---     store (its consumer's supply, not a source of supply).
+--   store, central -- give everything (even with an inserter taking from it to a belt:
+--     the old rule read such a chest as giving nothing) and are stores;
+--   buffer -- belongs to its consumer: gives nothing (a fuel chest, the plastic plant's
+--     coal chest -- review: her coal fetches drained them; once her surplus routing fills
+--     buffers, stage 2, what lies above BUFFER_KEEP may be given), and is no store;
+--   surplus -- a belt's, at its start: gives nothing (what is in it goes onto the belt
+--     first -- a plate row's head coal chest), and is no store.
 -- An entry goes with its chest (script.register_on_object_destroyed -> M.on_destroyed);
 -- a read of an entry whose entity is gone drops it too.
 --
@@ -19,8 +22,7 @@ local u = require("commands.init")
 local M = {}
 
 M.ROLES = {store = true, buffer = true, surplus = true, central = true}
-M.GIVING = {store = true, surplus = true, central = true}
-M.BUFFER_KEEP = 20          -- items a buffer keeps for its consumer when she fetches
+M.GIVING = {store = true, central = true}
 
 local function book()
   storage.chest_roles = storage.chest_roles or {}     -- (lazily: no init without a version change)
@@ -73,7 +75,7 @@ function M.share(chest, item, n)
   local r = M.get(chest)
   if not r or r.item ~= item then return nil end
   if M.GIVING[r.role] then return n end
-  return math.max(0, n - M.BUFFER_KEEP)          -- (a buffer)
+  return 0                                       -- (a buffer, a surplus chest)
 end
 
 -- Whether `chest` is a store of `item` by its role (true / false), or nil when it has

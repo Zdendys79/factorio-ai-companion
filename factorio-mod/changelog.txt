@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.215
+  Features:
+    - A plan piece's chest_role / chest_item registers the chest's role as it is placed.
+  Changes:
+    - A surplus chest (a belt's, at its start) and a buffer (a consumer's: a fuel chest)
+      give nothing when she fetches; only a store or a central chest gives.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.214
   Features:
     - Chest roles (store, buffer, surplus, central): /fac_chest_role, /fac_chests; a chest

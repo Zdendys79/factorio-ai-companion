@@ -796,7 +796,7 @@ function M.tick()
           pos, place_dir = {x = chosen.x, y = chosen.y}, chosen.dir
         end
         local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror, step.filter,
-                                       step.ug)
+                                       step.ug, step.chest)
         if r.error then
           ledger.step_failed(active.task_id, r.error, active.step_start_tick)
           storage.active_step[cid] = nil

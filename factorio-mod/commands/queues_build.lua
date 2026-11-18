@@ -3,6 +3,7 @@
 
 local u = require("commands.init")
 local inserter_filter = require("commands.inserter_filter")
+local chest_roles = require("commands.chest_roles")
 local core = require("commands.queues_core")
 local inv_watch = require("commands.inventory_watch")
 
@@ -241,7 +242,7 @@ M.clear_build_area = clear_build_area
 -- `filter` (0.16.186, optional): an inserter's one item filter, set as it is placed.
 -- `ug` (0.16.191, optional): an underground belt's side, "input" or "output" (a raw
 -- place step can carry it too, so it is checked here, not only by build_plan.lua).
-function M.start_build(cid, entity_name, position, direction, mirror, filter, ug)
+function M.start_build(cid, entity_name, position, direction, mirror, filter, ug, chest)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
   if ug ~= nil then
@@ -281,6 +282,8 @@ function M.start_build(cid, entity_name, position, direction, mirror, filter, ug
     -- so this is a no-op for all pre-existing build_queues use.
     mirror = mirror or nil,
     filter = filter,
+    -- chest: {role, item} -- a chest's role, registered as it is placed (chest_roles)
+    chest = chest,
     -- ug: an underground belt's side ("input" | "output" | nil) -- create_entity's
     -- type only (can_place_entity takes none); nil for every other build
     ug = ug,
@@ -595,6 +598,14 @@ function M.tick_build_queues()
           q.run_end_tick = game.tick
           q.state = "failed"
           return false
+        end
+      end
+      -- a chest's role (factorio-ai docs/stores_and_buffers.md stage 1b)
+      if q.chest then
+        local _, err = chest_roles.set(placed, q.chest.role, q.chest.item)
+        if err then
+          u.log_error("build queue: chest role not set on " .. placed.name .. ": " .. err,
+                      "build_queue")
         end
       end
       q.run_end_tick = game.tick

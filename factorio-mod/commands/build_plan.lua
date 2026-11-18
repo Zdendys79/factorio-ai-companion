@@ -32,6 +32,8 @@
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
 --               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil,
 --               "filter": ITEM | nil, "ug": "input" | "output" | nil,
+--               "chest_role": "store" | "buffer" | "surplus" | "central" | nil,
+--               "chest_item": ITEM (with chest_role),
 --               "replaces": OLD | nil}, ...],
 --   ("replaces": an upgrade in place -- the OLD building standing there is
 --    fast-replaced by the piece, a replace step instead of a place step:
@@ -42,6 +44,7 @@
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
 local belt_runs = require("commands.belt_runs")
+local chest_roles = require("commands.chest_roles")
 local replace_check = require("commands.replace_check")
 
 local M = {}
@@ -134,6 +137,23 @@ local function check(plan, force)
       local e = prototypes.entity[p.entity]
       if e.type ~= "inserter" or (e.filter_count or 0) < 1 then
         return "piece " .. i .. ": " .. p.entity .. " takes no filter"
+      end
+    end
+    -- a chest's role, registered as it is placed (commands/chest_roles.lua); a replace
+    -- step carries none (review)
+    if p.chest_role ~= nil and p.replaces ~= nil then
+      return "piece " .. i .. ": a replaced piece takes no chest_role"
+    end
+    if p.chest_role ~= nil then
+      if not chest_roles.ROLES[p.chest_role] then
+        return "piece " .. i .. ": unknown chest_role " .. tostring(p.chest_role)
+      end
+      if type(p.chest_item) ~= "string" or not prototypes.item[p.chest_item] then
+        return "piece " .. i .. ": chest_role needs a known chest_item"
+      end
+      local e = prototypes.entity[p.entity]
+      if e.type ~= "container" and e.type ~= "logistic-container" then
+        return "piece " .. i .. ": " .. p.entity .. " is no chest"
       end
     end
     if p.recipe ~= nil then
@@ -244,7 +264,8 @@ function M.expand(plan, force)
       local p = g.piece
       steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
                            dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
-                           filter = p.filter, ug = p.ug}
+                           filter = p.filter, ug = p.ug,
+                           chest = p.chest_role and {role = p.chest_role, item = p.chest_item}}
       -- (an assembler's recipe right after it stands -- 0.16.174)
       if p.recipe then
         steps[#steps + 1] = {type = "set_recipe", x = p.x, y = p.y, entity = p.entity,
