@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.202
+  Bugfixes:
+    - The queues' no-progress backstop ends a pipeline route as FAILED with its reason
+      ("no progress for N ticks: she stands at (x,y), k of n pieces laid") instead of
+      deleting it: factorio-ai's caller only read "dropped by the mod without a result"
+      when she stood stuck at a cliff laying a far crude pipeline leg. Her walk stops
+      with it.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.201
   Bugfixes:
     - A pipeline route (pipe_connect, pipe plan) keeps off the keep-off register's

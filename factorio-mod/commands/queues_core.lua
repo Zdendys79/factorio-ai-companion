@@ -137,7 +137,8 @@ function M.process_queue(queue_name, processor)
         q._stale_pos = {x = pos.x, y = pos.y}
         q._stale_ticks = 0
       end
-      if q._stale_ticks > UNIVERSAL_STALE_TICKS and q.state == "done" then
+      if q._stale_ticks > UNIVERSAL_STALE_TICKS
+          and (q.state == "done" or (queue_name == "belt_queues" and q.state == "failed")) then
         -- TERMINAL re-entry guard (2026-07-12, closing the follow-up flagged in
         -- 6d00d54): gather_queues/fuel_queues can now sit HERE, frozen in q.state=
         -- "done", waiting for get_gather_status/get_fuel_status to consume+clear them
@@ -350,6 +351,17 @@ function M.process_queue(queue_name, processor)
           -- from HERE, so they keep the original immediate-delete behavior.
           if queue_name == "gather_queues" or queue_name == "fuel_queues" then
             q.state = "done"
+          elseif queue_name == "belt_queues" then
+            -- a pipeline route ends FAILED with the reason, its status poll reads it
+            -- (factorio-ai live: a leg past a cliff was deleted here and its caller
+            -- only learned "dropped without a result"); its walk stops with it
+            -- (only its own walk: a piece's approach or its step-off -- review)
+            if q.walking or q.step_off_deadline then storage.walking_queues[cid] = nil end
+            q.failed = string.format("no progress for %d ticks: she stands at (%.1f,%.1f), "
+              .. "%d of %d pieces laid", q._stale_ticks, pos.x, pos.y,
+              q.tiles_placed or 0, q.path and #q.path or 0)
+            u.log_error(q.failed .. " (the queues' backstop)", "belt_queue")
+            q.state = "failed"
           else
             to_remove[#to_remove + 1] = cid
           end
