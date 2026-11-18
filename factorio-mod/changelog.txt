@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.206
+  Features:
+    - Job-end events for hand gathering, fuelling and single builds too (kinds gather /
+      fuel / build, the companion's id): sent once by the queue core when the queue's
+      job ends, also when the no-progress backstop ends it.
+  Bugfixes:
+    - A failed build waits frozen for its status poll like a finished one: the
+      no-progress backstop deleted it after 600 still ticks, its reason lost.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.205
   Features:
     - Job-end events for pipeline routes too: a route's end (done / failed, its reason

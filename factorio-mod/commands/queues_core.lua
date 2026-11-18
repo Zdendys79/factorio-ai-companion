@@ -65,6 +65,20 @@ function M.valid_companion(id)
 end
 
 -- Generic queue processor - eliminates repetition across all tick functions
+-- the queues whose job ends are job-end events (commands/events.lua; the pipe routes
+-- emit their own, queues_belt.lua), by their event kind -- id: the companion's
+local EVENT_KINDS = {gather_queues = "gather", fuel_queues = "fuel", build_queues = "build"}
+
+-- A queue job's end as its job-end event, once (q.event_sent); `why` when the
+-- backstop ended it.
+function M.emit_end(queue_name, cid, q, why)
+  local kind = EVENT_KINDS[queue_name]
+  if not kind or q.event_sent then return end
+  q.event_sent = true
+  events.emit({kind = kind, id = cid, cid = cid, status = q.state,
+               error = why or (q.failed and tostring(q.failed)) or nil})
+end
+
 function M.process_queue(queue_name, processor)
   local queues = storage[queue_name]
   if not queues then return end
@@ -139,7 +153,8 @@ function M.process_queue(queue_name, processor)
         q._stale_ticks = 0
       end
       if q._stale_ticks > UNIVERSAL_STALE_TICKS
-          and (q.state == "done" or (queue_name == "belt_queues" and q.state == "failed")) then
+          and (q.state == "done" or (q.state == "failed" and (queue_name == "belt_queues"
+                                                              or queue_name == "build_queues"))) then
         -- (a route its processor ended while she stood still: its end event here, the
         -- processor no longer runs for it -- review)
         if queue_name == "belt_queues" and not q.event_sent then
@@ -359,6 +374,7 @@ function M.process_queue(queue_name, processor)
           -- from HERE, so they keep the original immediate-delete behavior.
           if queue_name == "gather_queues" or queue_name == "fuel_queues" then
             q.state = "done"
+            M.emit_end(queue_name, cid, q, "the queues' no-progress backstop")
           elseif queue_name == "belt_queues" then
             -- a pipeline route ends FAILED with the reason, its status poll reads it
             -- (factorio-ai live: a leg past a cliff was deleted here and its caller
@@ -376,11 +392,13 @@ function M.process_queue(queue_name, processor)
             events.emit({kind = "pipe", id = cid, cid = cid,
               status = "failed", error = q.failed, tiles = q.tiles_placed})
           else
+            M.emit_end(queue_name, cid, {state = "failed"}, "the queues' no-progress backstop")
             to_remove[#to_remove + 1] = cid
           end
         end
       else
         local should_remove = processor(cid, q, c)
+        if q.state == "done" or q.state == "failed" then M.emit_end(queue_name, cid, q) end
         if should_remove then to_remove[#to_remove + 1] = cid end
       end
     end
