@@ -229,8 +229,9 @@ end
 -- beside a foreign fluid entity (start and destination exempt: they touch the source
 -- and the sink -- an end touching two fluid entities fails as "start-fluid-mixed" /
 -- "dest-fluid-mixed"; an end with no usable neighbour as "start-enclosed" /
--- "dest-enclosed"; the node budget is PIPE_MAX_NODES). Entries carry the same
--- underground = "entrance" / "exit" marks.
+-- "dest-enclosed"; the node budget is PIPE_MAX_NODES). Reserved tiles and the keep-off
+-- register's rectangles are no ground for it (its own start and end excepted). Entries
+-- carry the same underground = "entrance" / "exit" marks.
 function M.find_path(surf, from, to, force, opts)
   M.last_expansions = 0          -- diagnostic: the last search's expansions (plan replies)
   if not (opts and opts.pipe) then return nil, "pipe-only" end
@@ -252,6 +253,33 @@ function M.find_path(surf, from, to, force, opts)
         return true
       end
       return placeable(x, y)
+    end
+  end
+  -- the keep-off register (commands/pole_route.lua /fac_keep_off: the tiles Python plans
+  -- for later parts -- the base oil block's B2 and B3) is no ground for a pipeline
+  -- either, unless a tile is the route's own start or end (factorio-ai live: a crude
+  -- pipeline laid beside the sulfur plant's water port target made every water line
+  -- "dest-fluid-mixed"); its rectangles hold tile centres, inclusive
+  -- (only the rectangles the search box can meet: the check runs on every tile test --
+  -- independent review)
+  local ko = {}
+  for _, rects in pairs(storage.keep_off or {}) do
+    for _, r in ipairs(rects) do
+      if r[3] >= minx and r[1] <= maxx + 1 and r[4] >= miny and r[2] <= maxy + 1 then
+        ko[#ko + 1] = r
+      end
+    end
+  end
+  if #ko > 0 then
+    local inner = is_blocked
+    is_blocked = function(x, y)
+      if not (x == fx and y == fy) and not (x == tx and y == ty) then
+        local cx, cy = x + 0.5, y + 0.5
+        for _, r in ipairs(ko) do
+          if cx >= r[1] and cx <= r[3] and cy >= r[2] and cy <= r[4] then return true end
+        end
+      end
+      return inner(x, y)
     end
   end
   local near_water = make_near_water(surf)

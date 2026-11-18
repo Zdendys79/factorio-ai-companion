@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.201
+  Bugfixes:
+    - A pipeline route (pipe_connect, pipe plan) keeps off the keep-off register's
+      rectangles (/fac_keep_off -- the tiles planned for later parts), except its own
+      start and end tile, as the pole routes do: a crude pipeline laid beside the sulfur
+      plant's water port target made every water line "dest-fluid-mixed". Undergrounds
+      may pass under a rectangle (no piece on it, no fluid contact).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.200
   Bugfixes:
     - A crude pipeline's pieces clear their tile before they are placed (items on the
