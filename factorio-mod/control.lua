@@ -8,6 +8,7 @@ local upkeep = require("commands.upkeep")
 local crash_site_start = require("commands.crash_site_start")
 local pole_route = require("commands.pole_route")
 local events = require("commands.events")
+local ground_pick = require("commands.ground_pick")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -465,6 +466,9 @@ local function process_walking_queues()
     end
     if not q.target then storage.walking_queues[cid] = nil; goto skip end
     local e = c.entity
+    -- (items on the ground she passes are picked up, like the trees in her way --
+    -- commands/ground_pick.lua)
+    ground_pick.pick_near(e)
     -- TARGET-WALKABILITY FIX (2026-07-24, Zdendys, live discussion: confirmed real gap --
     -- fac_move_to()/go_to() pass a requested (x,y) through completely unvalidated; a
     -- target genuinely on water or under a building footprint gets a flat, permanent

@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.212
+  Features:
+    - Items on the ground within 2 tiles of her are picked up as she walks (like the
+      trees in her way): into stacks she holds, or while more than 3 slots stay empty;
+      a part that does not fit stays on the ground.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.211
   Features:
     - The controller's walk replaced by a walk of the mod's own (a task-pool step, upkeep,
