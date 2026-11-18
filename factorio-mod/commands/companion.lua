@@ -202,6 +202,10 @@ commands.add_command("fac_debug_walk_state", nil, function(cmd)
       bypass_side = q.bypass_side,
       waypoint_stall_ticks = q.waypoint_stall_ticks or 0,
       active_ticks = q.active_ticks,
+      -- the current and the next waypoint (a stall's diagnosis)
+      waypoint = q.path and q.path_idx and q.path[q.path_idx] and q.path[q.path_idx].position,
+      next_waypoint = q.path and q.path_idx and q.path[q.path_idx + 1]
+        and q.path[q.path_idx + 1].position,
     })
   end)
 end)

@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.203
+  Bugfixes:
+    - A walk's path waypoint beside a cliff (within 2.5 tiles) counts as reached only
+      within 0.6 tiles, not 2: from 2 tiles off she cut the corner of a cliff's end and
+      walked into it, stalled on the next waypoint, and every re-path gave the same
+      route until the route she was laying was ended (factorio-ai: a far crude pipeline
+      leg past a cliff line, 12 of 70 pieces; now 70 of 70 in three runs out of three).
+  Changes:
+    - fac_debug_walk_state also reports the current and the next waypoint.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.202
   Bugfixes:
     - The queues' no-progress backstop ends a pipeline route as FAILED with its reason

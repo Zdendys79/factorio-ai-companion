@@ -42,6 +42,10 @@ local WALK_TARGET_WALKABLE_RADIUS = 3
 -- first, short enough that a persistently-blocked companion escalates to a
 -- full re-path within a few real seconds, not tens of seconds.
 local WAYPOINT_STALL_REPATH_TICKS = 150
+-- a path waypoint within WAYPOINT_CLIFF_R of a cliff counts as reached only within
+-- WAYPOINT_CLIFF_REACH (the others within 2): no corner cut into a cliff's end
+local WAYPOINT_CLIFF_R = 2.5
+local WAYPOINT_CLIFF_REACH = 0.6
 
 local function init_storage()
   storage.companion_messages = storage.companion_messages or {}
@@ -719,7 +723,20 @@ local function process_walking_queues()
             q.start_prev_dist = sd
             if sd >= 0.3 and not stalled
                and u.char_spot_blocked(e.surface, e.position, 0.2) then break end
-          elseif u.distance(e.position, wp) >= 2 then break end
+          else
+            -- a waypoint beside a cliff is reached only close by: from 2 tiles off she
+            -- cut its corner and walked into the cliff's end (factorio-ai live: a far
+            -- pipeline leg past a cliff line -- every re-path gave the same waypoints, she
+            -- stalled until the queues' backstop ended the route). Computed once each.
+            local wpe = q.path[q.path_idx]
+            if wpe.near_cliff == nil then
+              wpe.near_cliff = e.surface.count_entities_filtered{type = "cliff",
+                position = wp, radius = WAYPOINT_CLIFF_R} > 0
+            end
+            if u.distance(e.position, wp) >= (wpe.near_cliff and WAYPOINT_CLIFF_REACH or 2) then
+              break
+            end
+          end
           q.path_idx = q.path_idx + 1
         end
         if q.path[q.path_idx] then
