@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.207
+  Features:
+    - Job-end events for the controller's walks (kind "walk", her id): arrived, or the
+      fast give-up's approx_arrived / unreachable. factorio-ai's walk wait polls her
+      position a few times a second instead of twenty and sees the end at once.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.206
   Features:
     - Job-end events for hand gathering, fuelling and single builds too (kinds gather /

@@ -7,6 +7,7 @@ local activity = require("commands.activity")
 local upkeep = require("commands.upkeep")
 local crash_site_start = require("commands.crash_site_start")
 local pole_route = require("commands.pole_route")
+local events = require("commands.events")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -579,6 +580,8 @@ local function process_walking_queues()
           -- controller's let its wait accept "arrived" 50 tiles off -- factorio-ai
           -- probe_service_walk_6)
           storage.walk_last_arrived[cid] = {x = q.target.x, y = q.target.y, tick = game.tick}
+          -- (the controller walk's end as a job-end event: kind "walk", her id)
+          events.emit({kind = "walk", id = cid, cid = cid, status = "arrived"})
           -- (made here too: a save loaded without a version change never ran init)
           storage.controller_walk_end = storage.controller_walk_end or {}
           storage.controller_walk_end[cid] = game.tick
@@ -656,6 +659,8 @@ local function process_walking_queues()
               result = (dist < 4) and "approx_arrived" or "unreachable",
               tick = game.tick,
             }
+            events.emit({kind = "walk", id = cid, cid = cid,
+                         status = storage.walk_last_outcome[cid].result})
             storage.controller_walk_end = storage.controller_walk_end or {}
             storage.controller_walk_end[cid] = game.tick
             storage.walking_queues[cid] = nil
