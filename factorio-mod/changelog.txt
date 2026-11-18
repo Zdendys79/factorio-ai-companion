@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.218
+  Features:
+    - The pole route search takes a 2x2 pole too (a big pole for long lines: its spots the
+      2x2's top-left tiles, every tile checked, the route its centres).
+      Its spots lie on a 4-tile lattice (the 32-tile wire needs no tile-exact spot; the
+      whole-tile search round a lake ran out of nodes).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.217
   Bugfixes:
     - A "surplus" request is sent at most once per item every 18000 ticks (a smoke sent

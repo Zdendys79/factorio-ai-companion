@@ -22,7 +22,9 @@
 -- /fac_pole_route_start <json> -- {goal = {pole = {x, y}} (its spot never taken) |
 --   {supply = {x, y}, reach = r > 0}, from = {pole = {x, y}} | {plant = true} (the
 --   default: the plant's poles), avoid = {{x, y}, ...}, max_poles >= 1,
---   pole = name (a 1x1 pole; default small-electric-pole), resource_cost = c >= 0
+--   pole = name (a 1x1 pole, or a 2x2 one on a STRIDE_BIG lattice for a pole goal;
+--   default small-electric-pole), goal.wire = the goal pole's wire reach (default a small
+--   pole's: the last hop spans the shorter of the two), resource_cost = c >= 0
 --   (default RESOURCE_COST; 0 to plan as if no deposit lay there), units_max >= 1 (a
 --   shorter deadline, at most DEADLINE_UNITS)} -> {id} or {error}
 -- /fac_pole_route_status <id> -> {id, status = "running"|"done", worked (passes),
@@ -42,6 +44,7 @@ local M = {}
 
 local EXPAND_PER_PASS = 24     -- expansions a pass, shared in turn by the searches
 local NODE_CAP = 40000         -- expansions of one search at most ("node_cap")
+local STRIDE_BIG = 4           -- a 2x2 pole's spots: every STRIDE_BIG-th tile each way
 local DEADLINE_UNITS = 80000   -- budget units a search itself got at most ("deadline";
                                -- a start seeded, a node expanded or a dead label popped)
 local MAX_POLES = 120          -- poles of a route at most unless the caller says
@@ -89,19 +92,22 @@ end
 -- The tile offsets of one hop (within `hop`), computed once per reach (not in storage:
 -- the same on every peer).
 local HOPS = {}
-local function hops_of(hop)
-  local out = HOPS[hop]
+local function hops_of(hop, stride)
+  stride = stride or 1
+  local hk = hop .. "/" .. stride
+  local out = HOPS[hk]
   if out then return out end
   out = {}
   local r = math.ceil(hop)
   for dx = -r, r do
     for dy = -r, r do
-      if (dx ~= 0 or dy ~= 0) and dx * dx + dy * dy <= hop * hop then
+      if (dx ~= 0 or dy ~= 0) and dx * dx + dy * dy <= hop * hop
+         and dx % stride == 0 and dy % stride == 0 then
         out[#out + 1] = {dx, dy}
       end
     end
   end
-  HOPS[hop] = out
+  HOPS[hk] = out
   return out
 end
 
@@ -171,12 +177,20 @@ local function new_search(p)
   if not proto or proto.type ~= "electric-pole" then
     return nil, "not a pole: " .. tostring(name)
   end
-  -- a route's spots are single tiles (centres, each checked alone)
-  if proto.tile_width ~= 1 or proto.tile_height ~= 1 then
-    return nil, "not a 1x1 pole: " .. name
+  -- a route's spots: a 1x1 pole's tile, or a 2x2 pole's top-left tile (its centre on
+  -- the tile corner: +1) -- every tile of it checked (a big pole for long lines:
+  -- factorio-ai docs/iron_outpost.md, 32-tile wire)
+  local size = proto.tile_width
+  if proto.tile_height ~= size or (size ~= 1 and size ~= 2) then
+    return nil, "not a 1x1 or 2x2 pole: " .. name
   end
   local wire = proto.get_max_wire_distance()
-  local reach = wire - HOP_MARGIN
+  -- (a wire spans the shorter of its two poles' reaches: a big pole's last hop to a
+  -- small goal pole is the goal's reach -- review; goal.wire for a goal of another kind,
+  -- else a small pole's)
+  local goal_wire = tonumber(p.goal.wire)
+                    or prototypes.entity["small-electric-pole"].get_max_wire_distance()
+  local reach = math.min(wire, goal_wire) - HOP_MARGIN
   if kind == "supply" then
     reach = tonumber(p.goal.reach)
     if not reach or reach <= 0 then return nil, "a supply goal needs reach > 0" end
@@ -198,6 +212,13 @@ local function new_search(p)
   local units_max = num_param(p.units_max, 1)
   if units_max == false then return nil, "units_max must be a number >= 1" end
   local s = {goal = {gx, gy}, kind = kind, name = name, wire = wire, hop = wire - HOP_MARGIN,
+             size = size, off = size / 2,
+             -- (a big pole's spots on a lattice of STRIDE_BIG tiles: its 32-tile wire
+             -- needs no tile-exact spot, and the whole-tile search round a lake ran out
+             -- of nodes -- factorio-ai probe_pole_line_2026_11_18)
+             -- (a supply goal: whole tiles -- its point may lie between lattice centres,
+             -- review)
+             stride = (size == 2 and kind == "pole") and STRIDE_BIG or 1,
              reach = reach, from = from, max_poles = math.floor(max_poles or MAX_POLES),
              rcost = rcost or RESOURCE_COST, avoid = {}, heap = {}, nodes = {}, labels = {},
              dead = {}, free = {}, seeded = 0, worked = 0, units = 0, expanded = 0,
@@ -221,19 +242,28 @@ local function placeable(surf, s, tx, ty, ctx)
   local k = key(tx, ty)
   local v = s.free[k]
   if v ~= nil then return v end
-  v = not s.avoid[k] and not reserved.reserved_at(tx, ty)
-  local cx, cy = tx + 0.5, ty + 0.5
-  if v then
-    for _, r in ipairs(ctx.keep_off) do
-      if cx >= r[1] and cx <= r[3] and cy >= r[2] and cy <= r[4] then v = false break end
+  local size, off = s.size or 1, s.off or 0.5
+  v = true
+  for ix = 0, size - 1 do
+    for iy = 0, size - 1 do
+      if v and (s.avoid[key(tx + ix, ty + iy)] or reserved.reserved_at(tx + ix, ty + iy)) then
+        v = false
+      end
+      local cx, cy = tx + ix + 0.5, ty + iy + 0.5
+      if v then
+        for _, r in ipairs(ctx.keep_off) do
+          if cx >= r[1] and cx <= r[3] and cy >= r[2] and cy <= r[4] then v = false break end
+        end
+      end
     end
   end
+  local cx, cy = tx + off, ty + off
   if v then
     v = surf.can_place_entity{name = s.name, position = {cx, cy}, force = "player"}
   end
   if v then
     v = surf.count_entities_filtered{type = "resource", position = {cx, cy},
-                                     radius = 0.5} > 0 and 2 or 1
+                                     radius = off} > 0 and 2 or 1
   end
   s.free[k] = v
   return v
@@ -256,7 +286,8 @@ local function add_label(s, tx, ty, g, p, par)
   -- the same f and the tie goes to the one nearest the goal (n.h, the distance left)
   -- -- a fractional h opened a band ~80 tiles wide round a 424-tile line (21864
   -- expansions, live)
-  local hn = math.max(0, dist(tx + 0.5, ty + 0.5, s.goal[1], s.goal[2]) - s.reach)
+  local off = s.off or 0.5
+  local hn = math.max(0, dist(tx + off, ty + off, s.goal[1], s.goal[2]) - s.reach)
   local need = math.ceil(hn / s.hop - 1e-9)
   -- a label that cannot reach the goal within max_poles is never kept (live: a pole
   -- limit at the shortest count expanded 7763 nodes against 1265 without it)
@@ -289,8 +320,11 @@ local function seed(surf, s, i, ctx)
   local r = math.min(st[3], s.wire) - HOP_MARGIN
   for dx = -math.ceil(r), math.ceil(r) do
     for dy = -math.ceil(r), math.ceil(r) do
-      local tx, ty = math.floor(st[1] + dx), math.floor(st[2] + dy)
-      if dist(tx + 0.5, ty + 0.5, st[1], st[2]) <= r then
+      local off = s.off or 0.5
+      local tx, ty = math.floor(st[1] + dx - off + 0.5), math.floor(st[2] + dy - off + 0.5)
+      local stride = s.stride or 1
+      if tx % stride == 0 and ty % stride == 0
+         and dist(tx + off, ty + off, st[1], st[2]) <= r then
         local v = placeable(surf, s, tx, ty, ctx)
         if v then add_label(s, tx, ty, v == 2 and 1 + s.rcost or 1, 1, -i) end
       end
@@ -351,7 +385,7 @@ local function work(surf, s, budget, ctx)
     end
     if #s.starts == 0 then finish(s, "no_start") return end
   end
-  local hops = hops_of(s.hop)
+  local hops = hops_of(s.hop, s.stride)
   for _ = 1, budget do
     s.units = (s.units or 0) + 1
     if s.units > (s.units_max or DEADLINE_UNITS) then finish(s, "deadline") return end
@@ -367,7 +401,7 @@ local function work(surf, s, budget, ctx)
           local route, i = {}, n.i
           while i > 0 do
             local m = s.nodes[i]
-            table.insert(route, 1, {m.x + 0.5, m.y + 0.5})
+            table.insert(route, 1, {m.x + (s.off or 0.5), m.y + (s.off or 0.5)})
             i = m.par
           end
           local st = s.starts[-i]
