@@ -16,6 +16,7 @@ local pathfind = require("commands.pathfind")
 local core = require("commands.queues_core")
 local requests = require("commands.controller_requests")
 local build = require("commands.queues_build")
+local clearing = require("commands.clearing")
 local events = require("commands.events")
 
 local M = {}
@@ -286,8 +287,13 @@ function M.tick_belt_queues()
     -- route planner counts them passable (live: an item on the ground failed a planned
     -- crude pipeline "Cannot place pipe-to-ground" 47 pieces in)
     -- (the tile's centre: node x / y is its corner -- the padded area then stays on it)
-    build.clear_build_area(surf, item, {x = node.x + 0.5, y = node.y + 0.5},
-                           c.entity.get_main_inventory(), node.dir)
+    -- (she clears it herself, in real time -- commands/clearing.lua; not from afar)
+    q.clear = q.clear or {}
+    if clearing.step(cid, c, q.clear, item, {x = node.x + 0.5, y = node.y + 0.5},
+                     node.dir) == "busy" then
+      return false
+    end
+    q.clear = nil
     -- `type` (input/output) is a create_entity-only field for underground belts, not a
     -- valid can_place_entity param -- keep the collision check's args separate so an
     -- unrecognized key can't make the check itself error or behave unexpectedly.

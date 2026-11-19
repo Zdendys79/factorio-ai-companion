@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.224
+  Bugfixes:
+    - A build's footprint (a building's, a belt or pipe route's tiles, a candidate spot's) is
+      cleared by her own hands: she walks to each tree, rock or loose item and mines it in
+      real time from within 2.5 tiles (new commands/clearing.lua). Before, every obstacle of
+      the footprint was removed at once from wherever she stood -- trees vanished beyond
+      5 tiles without her moving (cheating, seen live).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.223
   Changes:
     - The walk grace for obstacles mined on the way (0.16.221, pool steps) now holds for

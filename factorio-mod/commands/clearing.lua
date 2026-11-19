@@ -1,0 +1,250 @@
+-- Clearing a build footprint the way a player does (Zdendys: "Nyara stood on the north
+-- side, trees stood where the generator was to go -- farther than 5 tiles -- and were
+-- removed without her moving and clearing the area herself" -- the mod's instant
+-- obs.mine{} from any distance was cheating, no mining time, no walking):
+-- she WALKS to each tree / rock / loose item of the footprint until it is within REACH
+-- tiles, STANDS there and mines it with the engine's own mining (mining_state: the
+-- real mining time, her own mining speed), one after another, nearest first.
+--
+-- The caller keeps one state table per footprint (`st`, a fresh {} for each) and calls
+-- M.step every cycle while it answers "busy"; "done" means nothing is left that can be
+-- cleared (an obstacle she cannot reach or cannot mine -- a full inventory -- is
+-- skipped after a bound, so the build then fails its collision check as before).
+local u = require("commands.init")
+local inv_watch = require("commands.inventory_watch")
+local Surplus = require("commands.upkeep_surplus")
+
+local M = {}
+
+M.REACH = 2.5               -- she mines / picks an obstacle from this near (the engine's own mining reach is ~2.7: a tree 3.3 off never came down)
+-- the walker stops within 2 tiles of its target (control.lua): aimed this near the
+-- obstacle she ends at most 2.3 tiles from it, inside REACH
+local AIM_NEAR = 0.3
+M.STEER_FROM = 6.0          -- nearer than this she steers straight at the obstacle
+M.MINE_TICKS = 900          -- the longest she mines one obstacle before she leaves it
+M.WALK_TICKS = 1200         -- the longest she walks toward one obstacle
+local OBSTACLE_TYPES = {"tree", "simple-entity"}
+
+local function key(e)
+  return e.unit_number or string.format("%.2f,%.2f", e.position.x, e.position.y)
+end
+
+-- The entity's collision box on the build's direction, padded by half a tile (the area
+-- queues_build.clear_build_area always used).
+local function footprint(entity_name, position, direction)
+  local proto = prototypes.entity[entity_name]
+  if not proto or not proto.collision_box then return nil end
+  local bb = proto.collision_box
+  local x1, y1, x2, y2 = bb.left_top.x, bb.left_top.y, bb.right_bottom.x, bb.right_bottom.y
+  for _ = 1, math.floor((direction or 0) / 4 + 0.5) % 4 do
+    x1, y1, x2, y2 = -y1, x1, -y2, x2
+  end
+  return {
+    {x = position.x + math.min(x1, x2) - 0.5, y = position.y + math.min(y1, y2) - 0.5},
+    {x = position.x + math.max(x1, x2) + 0.5, y = position.y + math.max(y1, y2) + 0.5}}
+end
+
+-- Items she may put away to make room (never what a build or a craft needs: plates,
+-- parts, tools stay) -- raw material and surplus only.
+local RELIEF_ITEMS = {"wood", "stone", "iron-ore", "copper-ore", "coal", "stone-brick"}
+M.ROOM_TICKS = 3600        -- the longest she waits for a chest or a walk to one
+
+-- Whether her inventory takes what mining `o` yields.
+local function room_for(inv, o)
+  local products = o.prototype.mineable_properties.products
+  for _, p in ipairs(products or {}) do
+    local n = p.amount or p.amount_max or 1
+    if not inv.can_insert{name = p.name, count = n} then return false end
+  end
+  return true
+end
+
+-- Her inventory is full: she frees it herself, the mod's own business (Zdendys: Python
+-- is only told she has nowhere to put things). The item she holds most of (of
+-- RELIEF_ITEMS) goes, all but half a stack, into the nearest role chest of it
+-- (upkeep_surplus: the item's store, else a surplus chest) -- inserted from where she
+-- stands within her reach, else she walks to it; with no such chest within
+-- upkeep_surplus.RADIUS Python is asked for a surplus chest (the "surplus" event) and she
+-- waits, bounded by ROOM_TICKS.
+-- @return string "done" (room made), "busy" (walking / waiting), "none" (gave up)
+local function make_room(cid, c, st)
+  local e = c.entity
+  local inv = e.get_main_inventory()
+  st.room_since = st.room_since or game.tick
+  if game.tick - st.room_since >= M.ROOM_TICKS then
+    u.log_error("clearing: her inventory is full and nothing took her surplus in "
+                .. M.ROOM_TICKS .. " ticks -- the obstacle is left", "clearing")
+    return "none"
+  end
+  local best, best_n = nil, 0
+  for _, name in ipairs(RELIEF_ITEMS) do
+    local n = inv.get_item_count(name)
+    if n > best_n then best, best_n = name, n end
+  end
+  if not best then return "none" end
+  local half = math.floor((prototypes.item[best].stack_size or 50) / 2)
+  local move = math.max(1, best_n - half)
+  local chest = Surplus.relief_chest(cid, c, best, move)
+  if not chest then return "busy" end              -- (Python asked: she waits)
+  if u.distance(e.position, chest.position) > 8 then
+    -- walks to it (the walker ends within 2 tiles of the target)
+    storage.walking_queues[cid] = storage.walking_queues[cid]
+      or {target = {x = chest.position.x, y = chest.position.y + 1.5}}
+    st.walking = true
+    return "busy"
+  end
+  if st.walking then
+    storage.walking_queues[cid] = nil
+    e.walking_state = {walking = false}
+    st.walking = false
+  end
+  local put = chest.insert{name = best, count = move}
+  if put > 0 then e.remove_item{name = best, count = put} end
+  inv_watch.gained(e)
+  u.log_error(string.format("clearing: her inventory was full -- %d %s put into the chest at "
+                            .. "(%.1f,%.1f)", put, best, chest.position.x, chest.position.y),
+              "clearing")
+  st.room_since = nil
+  return put > 0 and "done" or "busy"
+end
+
+-- Stand down: her mining and the walk toward an obstacle stop.
+local function stand_down(cid, c, st)
+  if st.mining or c.entity.mining_state.mining then
+    c.entity.mining_state = {mining = false}
+    st.mining = nil
+  end
+  if st.walking then
+    storage.walking_queues[cid] = nil
+    c.entity.walking_state = {walking = false}
+    st.walking = false
+  end
+end
+
+-- One cycle of the clearing of the footprint of `entity_name` at `position`.
+-- @param cid number the companion's id
+-- @param c table the companion record
+-- @param st table the caller's state for this footprint
+-- @return string "busy" (call again next cycle) or "done"
+function M.step(cid, c, st, entity_name, position, direction)
+  local e = c.entity
+  local surf = e.surface
+  local area = footprint(entity_name, position, direction)
+  if not area then return "done" end
+  st.skip = st.skip or {}
+  if st.relief then
+    -- her inventory is being relieved (a walk to a chest, or a wait for one): nothing
+    -- else runs meanwhile
+    local r = make_room(cid, c, st)
+    if r == "busy" then return "busy" end
+    if r == "none" then st.skip[st.relief] = true end
+    st.relief, st.room_since = nil, nil
+    return "busy"
+  end
+  if st.target and not st.target.valid then
+    -- (it came down: its wood or stone is in her inventory)
+    inv_watch.gained(e)
+    st.target = nil
+  end
+  local best, best_d, kind = nil, math.huge, nil
+  for _, o in ipairs(surf.find_entities_filtered{area = area, type = OBSTACLE_TYPES}) do
+    if o.valid and not st.skip[key(o)] then
+      local d = u.distance(e.position, o.position)
+      if d < best_d then best, best_d, kind = o, d, "obstacle" end
+    end
+  end
+  for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
+    if it.valid and it.stack and it.stack.valid_for_read and not st.skip[key(it)] then
+      local d = u.distance(e.position, it.position)
+      if d < best_d then best, best_d, kind = it, d, "item" end
+    end
+  end
+  if not best then
+    stand_down(cid, c, st)
+    return "done"
+  end
+  if st.target ~= best then
+    st.target, st.mining, st.mine_started = best, nil, nil
+    st.started = game.tick
+  end
+  local waited = game.tick - (st.started or game.tick)
+  if best_d > M.REACH then
+    -- walk closer: to a point AIM_NEAR from it, on her side
+    if waited >= M.WALK_TICKS then
+      st.skip[key(best)] = true
+      stand_down(cid, c, st)
+      u.log_error(string.format("clearing: %s at (%.1f,%.1f) not reached in %d ticks -- left",
+                                best.name, best.position.x, best.position.y, waited), "clearing")
+      return "busy"
+    end
+    if best_d > M.STEER_FROM then
+      -- far: the walker's pathfinding brings her near
+      if not storage.walking_queues[cid] then
+        local p = e.position
+        storage.walking_queues[cid] = {
+          target = {x = best.position.x + (p.x - best.position.x) / best_d * AIM_NEAR,
+                    y = best.position.y + (p.y - best.position.y) / best_d * AIM_NEAR}}
+      end
+    else
+      -- near: her last steps straight at it (the walker ends a walk within 2 tiles of its
+      -- target -- too coarse: she stood 3 tiles off a tree, out of mining reach)
+      storage.walking_queues[cid] = nil
+      e.walking_state = {walking = true, direction = u.get_direction(e.position, best.position)}
+    end
+    st.walking = true
+    return "busy"
+  end
+  if st.walking then
+    storage.walking_queues[cid] = nil
+    e.walking_state = {walking = false}
+    st.walking = false
+  end
+  if kind == "item" then
+    -- a loose item within reach: picked up (instant in the game too)
+    local moved = e.get_main_inventory().insert(best.stack)
+    if moved >= best.stack.count then
+      best.destroy()
+      inv_watch.gained(e)
+    else
+      if moved > 0 then best.stack.count = best.stack.count - moved end
+      st.skip[key(best)] = true          -- (her inventory is full)
+    end
+    return "busy"
+  end
+  if not room_for(e.get_main_inventory(), best) then
+    -- the inventory is full: she makes room (a relief chest) and goes on -- a build
+    -- planned right does not fail for want of a slot (Zdendys)
+    stand_down(cid, c, st)
+    st.relief = key(best)
+    return "busy"
+  end
+  st.mine_started = st.mine_started or game.tick       -- (the mining time counts from here)
+  if game.tick - st.mine_started >= M.MINE_TICKS then
+    -- it does not come down (a full inventory): left, the build fails its check
+    st.skip[key(best)] = true
+    stand_down(cid, c, st)
+    u.log_error(string.format("clearing: %s at (%.1f,%.1f) not down after %d ticks -- left",
+                              best.name, best.position.x, best.position.y,
+                              game.tick - st.mine_started), "clearing")
+    return "busy"
+  end
+  if not st.mining then
+    e.selected = best
+    e.mining_state = {mining = true, position = best.position}
+    st.mining = true
+  elseif not e.mining_state.mining then
+    e.selected = best
+    e.mining_state = {mining = true, position = best.position}
+  end
+  return "busy"
+end
+
+-- Her mining and her walk stop at once (a task, a build or a lay that ends or is
+-- cancelled mid-clearing: nothing else resets them).
+function M.release(cid, c)
+  if c.entity.mining_state.mining then c.entity.mining_state = {mining = false} end
+  c.entity.walking_state = {walking = false}
+  storage.walking_queues[cid] = nil
+end
+
+return M

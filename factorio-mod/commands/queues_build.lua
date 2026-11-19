@@ -6,6 +6,7 @@ local inserter_filter = require("commands.inserter_filter")
 local chest_roles = require("commands.chest_roles")
 local core = require("commands.queues_core")
 local inv_watch = require("commands.inventory_watch")
+local clearing = require("commands.clearing")
 
 local valid_companion = core.valid_companion
 local process_queue = core.process_queue
@@ -111,69 +112,12 @@ local function step_away_spot(surf, build_pos, d, her_pos)
   return nil
 end
 
--- Remove trees, small rocks, and loose items from the entity's collision footprint
---
--- CORRECTION (2026-07-27, discard-investigation-pause, coal-row seed extension):
--- the 2026-07-17 note below (now removed) concluded a lying item-entity does NOT
--- block placement, based on a single live test with a freshly create_entity'd item
--- at an otherwise-clear tile. That conclusion was directly DISPROVEN this pause by
--- a live A/B test at an actual failing coordinate ((-60,25), burner-mining-drill,
--- "Cannot place (collision)"): `can_place_entity` returned false with a real
--- item-on-ground present, then TRUE after teleporting that exact item away (and,
--- separately, teleporting the companion's own body away made no difference --
--- ruling out self-collision). Matches this same session's independent
--- collision_mask finding (item-entity shares the "item"/"is_lower_object" layers
--- with a normal solid entity) already applied to fac_building_place (building.lua,
--- commit c2c47db) and to _build_iron_output_inserter's proactive furnace-output
--- drain (belt_connect_ops.py, commit 5c73768) -- this was the third, still-unfixed
--- code path for the identical bug class: task_pool.lua's "place" step routes
--- through queues.start_build, whose clearing state only cleared trees/rocks.
---
--- direction (2026-11-05, independent review): the prototype's collision_box is the
--- NORTH-facing one; for a non-square entity turned east/west (a 3x5 steam engine) or
--- an off-centre box, both corners are turned by the build direction's quarter turns
--- (clockwise, y down: (x,y) -> (-y,x)) so the cleared area matches the real footprint.
--- nil direction = north (unchanged behaviour for any caller that does not pass it).
-local function clear_build_area(surf, entity_name, position, inv, direction)
-  local proto = prototypes.entity[entity_name]
-  if not proto or not proto.collision_box then return end
-  local bb = proto.collision_box
-  local x1, y1, x2, y2 = bb.left_top.x, bb.left_top.y, bb.right_bottom.x, bb.right_bottom.y
-  for _ = 1, math.floor((direction or 0) / 4 + 0.5) % 4 do
-    x1, y1, x2, y2 = -y1, x1, -y2, x2
-  end
-  local lx, rx = math.min(x1, x2), math.max(x1, x2)
-  local ty, by = math.min(y1, y2), math.max(y1, y2)
-  local area = {
-    {x = position.x + lx - 0.5, y = position.y + ty - 0.5},
-    {x = position.x + rx + 0.5, y = position.y + by + 0.5}
-  }
-  local obstacles = surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}
-  for _, obs in ipairs(obstacles) do
-    -- REVERTED (2026-08-02, task #82 course-correction -- Zdendys, direct: "Companion
-    -- nemuze prestat sbirat drevo! To by nam prekazelo pri stavbach pasu budov a
-    -- cestovani!" -- the companion must NEVER refuse to collect wood, since clearing
-    -- obstacles is required for construction/movement to work at all. The 2026-08-01
-    -- WOOD_STOCK_CAP "discard via bare mine{}" attempt (this same function, since
-    -- reverted) solved the SYMPTOM (uncapped inventory growth) by discarding material
-    -- outright -- wrong fix. The real design: wood is ALWAYS collected here exactly
-    -- like before any of today's fixes; managing a wood SURPLUS happens entirely on
-    -- the Python side instead -- burning it preferentially as fuel once abundant, and
-    -- (a separate, larger follow-up) depositing overflow into a per-building fuel
-    -- chest+inserter once truly excessive. See [[project_wood_surplus_management_
-    -- 2026_08_02]] (Claude memory) for the full redesign.
-    if obs.valid then obs.mine{inventory = inv} end   -- MINE (wood/stone into inventory), not free-destroy
-  end
-  for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
-    if it.valid and it.stack and it.stack.valid_for_read then
-      local moved = inv.insert(it.stack)
-      -- PARTIAL PICKUP (2026-10-23): shrink the lying stack by what was moved -- see
-      -- building.lua's fac_building_place for the duplication this closes.
-      if moved >= it.stack.count then it.destroy()
-      elseif moved > 0 then it.stack.count = it.stack.count - moved end
-    end
-  end
-end
+-- (The footprint's trees, rocks and loose items are cleared by her own hands, in real
+-- time: commands/clearing.lua. The instant obs.mine{} of every obstacle from afar that
+-- stood here was cheating -- Zdendys saw trees vanish from beyond 5 tiles without her
+-- moving. The history of the clearing's rules -- items on the ground block placement
+-- (live A/B 2026-07-27), the footprint turned by the build direction (2026-11-05), wood
+-- never refused (2026-08-02) -- lives on in that file's footprint and step.)
 
 -- Self-collision step-away distance (2026-07-13, universal own-body-blocks-own-build
 -- fix): how far to physically walk the companion away from a build target whose
@@ -235,9 +179,6 @@ end
 
 -- Start a smart build: auto-approach + auto-clear + place
 -- State machine: approaching -> clearing -> building -> done
--- Exported (2026-11-05) for task_pool.lua's "place" candidates pre-check, which must
--- clear a candidate's footprint the same way before deciding it is blocked.
-M.clear_build_area = clear_build_area
 
 -- `filter` (0.16.186, optional): an inserter's one item filter, set as it is placed.
 -- `ug` (0.16.191, optional): an underground belt's side, "input" or "output" (a raw
@@ -395,7 +336,15 @@ function M.tick_build_queues()
 
     -- CLEARING: remove trees/rocks from build footprint
     if q.state == "clearing" then
-      clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory(), q.direction)
+      -- she clears the footprint herself (commands/clearing.lua: walks to each tree, rock
+      -- or loose item, stands within reach and mines it in real time -- Zdendys: the
+      -- trees were removed from afar without her moving: cheating)
+      q.clear_skip = q.clear_skip or {}          -- (what she gave up on stays given up)
+      q.clear = q.clear or {skip = q.clear_skip}
+      if clearing.step(cid, c, q.clear, q.entity, q.position, q.direction) == "busy" then
+        return false
+      end
+      q.clear = nil
       inv_watch.gained(c.entity)
       q.state = "building"
       q.tick_start = game.tick
@@ -469,7 +418,13 @@ function M.tick_build_queues()
           -- same tile between retries (e.g. a full-inventory mine dropping the
           -- excess right back where it was picked up), and a passive wait alone
           -- would never clear it before the 60-tick budget runs out.
-          clear_build_area(surf, q.entity, q.position, c.entity.get_main_inventory(), q.direction)
+          q.clear_skip = q.clear_skip or {}
+          q.clear = q.clear or {skip = q.clear_skip}
+          if clearing.step(cid, c, q.clear, q.entity, q.position, q.direction) == "busy" then
+            q.collision_retry_deadline = game.tick + 60     -- (she is still clearing)
+            return false
+          end
+          q.clear = nil
           inv_watch.gained(c.entity)
           return false
         end

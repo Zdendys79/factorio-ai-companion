@@ -174,6 +174,7 @@
 
 local u = require("commands.init")
 local queues = require("commands.queues")
+local clearing = require("commands.clearing")
 local ledger = require("commands.task_pool_ledger")
 local ensure_item = require("commands.task_pool_ensure_item")
 local targeting = require("commands.task_pool_targeting")
@@ -259,6 +260,10 @@ function M.cancel_task(task_id)
       or (active.state == "ensuring" and (active.ensuring_kind == "chop_walk"
                                           or active.ensuring_kind == "fetch_walk"))
     if active.state == "building" then storage.build_queues[t.cid] = nil end
+    if active.state == "building" or (active.state == "acting" and active.cand_clear) then
+      local c = u.get_companion(t.cid)
+      if c then clearing.release(t.cid, c) end       -- (mid-clearing: her mining and steps stop)
+    end
     if own_walk then
       storage.walking_queues[t.cid] = nil
       local c = u.get_companion(t.cid)
@@ -613,6 +618,9 @@ function M.tick()
     if not t or t.status ~= "active" then
       -- (a walk of the step's own stops with it -- review: a task failed or cancelled
       -- through the ledger left her walking to its target, the idle pick blocked)
+      if active.state == "building" or (active.state == "acting" and active.cand_clear) then
+        clearing.release(cid, c)         -- (mid-clearing: her mining and steps stop)
+      end
       if active.state == "walking" or active.state == "laying" or (active.state == "ensuring"
           and (active.ensuring_kind == "chop_walk" or active.ensuring_kind == "fetch_walk")) then
         storage.walking_queues[cid] = nil
@@ -772,15 +780,21 @@ function M.tick()
             -- got the chance. Clear each candidate's footprint once (mined into the
             -- companion's inventory, never destroyed) when it is within build reach,
             -- then re-check on the next tick.
-            active.candidates_cleared = true
-            local inv = c.entity.get_main_inventory()
+            -- (she clears them herself, one candidate after another: commands/clearing.lua
+            -- walks to each tree and mines it in real time -- no removal from afar)
             local reach = c.entity.build_distance or 10
-            for _, cand in ipairs(step.candidates) do
-              if u.distance(c.entity.position, cand) <= reach then
-                queues.clear_build_area(surf, step.entity, {x = cand.x, y = cand.y}, inv,
-                                        u.dir_map[cand.dir or 0])
+            active.cand_clear = active.cand_clear or {idx = 1, st = {}}
+            local cc = active.cand_clear
+            while cc.idx <= #step.candidates do
+              local cand = step.candidates[cc.idx]
+              if u.distance(c.entity.position, cand) <= reach
+                 and clearing.step(cid, c, cc.st, step.entity, {x = cand.x, y = cand.y},
+                                   u.dir_map[cand.dir or 0]) == "busy" then
+                goto continue
               end
+              cc.idx, cc.st = cc.idx + 1, {}
             end
+            active.candidates_cleared = true
             goto continue
           end
           if not chosen then

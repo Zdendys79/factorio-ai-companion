@@ -16,6 +16,10 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local ledger = require("commands.task_pool_ledger")
+local clearing = require("commands.clearing")
+
+-- place()'s answer while she is still clearing the piece's tile herself (not a failure)
+local CLEARING = {}
 
 local M = {}
 
@@ -26,6 +30,7 @@ M.LOOKAHEAD = 8              -- pieces ahead she walks toward while laying (walk
 
 -- Stop a walk of the lay's own (the step ends or is cancelled, a deadline ran out).
 function M.stop_walk(cid, c, active)
+  if c and active.clear_state then clearing.release(cid, c) end   -- (mid-clearing)
   if active.walking then
     storage.walking_queues[cid] = nil
     if c then c.entity.walking_state = {walking = false} end
@@ -89,12 +94,13 @@ end
 
 -- Place the piece `p` where she stands within reach. Returns nil when it stands (its
 -- item used, its reservation consumed, recorded in t.placed), or the failure reason.
-local function place(c, t, p, done, total)
+local function place(cid, c, t, p, done, total, st)
   local surf = c.entity.surface
   local inv = c.entity.get_main_inventory()
   local pos = {x = p.x, y = p.y}
   local dir = u.dir_map[p.dir or 0] or defines.direction.north
-  queues.clear_build_area(surf, p.entity, pos, inv, dir)
+  -- (the tile cleared by her, in real time: commands/clearing.lua -- not from afar)
+  if clearing.step(cid, c, st, p.entity, pos, dir) == "busy" then return CLEARING end
   if inv.get_item_count(p.entity) < 1 then
     return string.format("Out of %s mid-build (%d/%d placed)", p.entity, done, total)
   end
@@ -166,11 +172,17 @@ function M.tick(cid, c, t, step, active)
     if why then return nil, why end
     return "running"
   end
-  local why = place(c, t, p, done, total)
+  active.clear_state = active.clear_state or {}
+  local why = place(cid, c, t, p, done, total, active.clear_state)
+  if why == CLEARING then
+    active.lay_since = nil            -- (mining a tree is progress: no stall meanwhile)
+    return "running"
+  end
   if why then
     M.stop_walk(cid, c, active)
     return nil, why
   end
+  active.clear_state = nil
   step.laid = done + 1
   active.approach_tries, active.approach_deadline = nil, nil
   if step.laid >= total then

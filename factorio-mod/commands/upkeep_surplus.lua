@@ -100,6 +100,22 @@ local function store_for(c, item, off)
   return best
 end
 
+-- The store for `item` (store_for, no back-offs) -- for commands/clearing.lua: her
+-- inventory is full mid-clearing, she relieves it into the nearest role chest of the item;
+-- with none within M.RADIUS Python is asked for a surplus chest (the "surplus" event, at
+-- most one an item every NOSTORE_LOG_TICKS) and nil returned.
+function M.relief_chest(cid, c, item, count)
+  local chest = store_for(c, item, {})
+  if chest then return chest end
+  local asked = per(M.init().asked, cid)
+  if not asked[item] or game.tick - asked[item] >= NOSTORE_LOG_TICKS then
+    asked[item] = game.tick
+    events.emit({kind = "surplus", id = cid .. ":" .. item, cid = cid,
+                 status = "nostore", item = item, count = count})
+  end
+  return nil
+end
+
 -- The items above a stack she may put away: M.ITEMS and every other kind she holds but
 -- the upkeep's own fuels.
 local function surplus_items(inv)
