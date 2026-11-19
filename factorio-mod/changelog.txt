@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.223
+  Changes:
+    - The walk grace for obstacles mined on the way (0.16.221, pool steps) now holds for
+      every approach walk too: builds, belt and pipe routes, fetches, gathers.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.222
   Bugfixes:
     - A build the queues' no-progress backstop stops ends failed with its reason

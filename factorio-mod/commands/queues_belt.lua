@@ -196,7 +196,8 @@ function M.tick_belt_queues()
           }
           q.walking = true
         end
-      elseif game.tick >= q.approach_deadline and (q.approach_tries or 0) < APPROACH_RETRIES then
+      elseif game.tick >= q.approach_deadline + u.clearing_grace(cid)
+             and (q.approach_tries or 0) < APPROACH_RETRIES then
         -- live 2026-11-06: a 118-piece pipeline through dense forest (65 trees within 8
         -- tiles) failed at piece 24 with the deadline run out while she was still
         -- clearing her way (another run passed the same tile). A fresh walk -- a new
@@ -210,7 +211,7 @@ function M.tick_belt_queues()
         c.entity.walking_state = {walking = false}
         q.walking = false
         q.approach_deadline = nil
-      elseif game.tick >= q.approach_deadline then
+      elseif game.tick >= q.approach_deadline + u.clearing_grace(cid) then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.failed = "cannot reach route tile (" .. node.x .. "," .. node.y .. ") -- " ..

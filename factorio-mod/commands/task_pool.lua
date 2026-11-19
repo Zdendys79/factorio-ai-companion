@@ -380,14 +380,6 @@ local WAIT_YIELD_TICKS = 600
 -- a step with a position of its own (review: a position-less step counts as distance 0,
 -- its full priority -- an ensure_item / the coal fetch's mining, whose gather walks far
 -- itself, would drop every walk; it waits for her to be free, as before).
--- The ticks a pool step's walk deadline moves on by: the time she spent mining
--- obstacles on the way that came down (control.lua's walker, q.clearing_ticks --
--- progress, not a stall; an obstacle that never comes down counts nothing, so it cannot
--- hold the walk forever).
-local function clearing_grace(cid)
-  return (storage.walking_queues[cid] or {}).clearing_ticks or 0
-end
-
 local function walk_preempted(cid, c, active, t)
   local best_id, best_eff, best_pos = pick_next(cid, c)
   if not best_id or best_id == active.task_id or not best_pos then return false end
@@ -658,7 +650,7 @@ function M.tick()
         c.entity.walking_state = {walking = false}
         active.state = "acting"
       elseif active.approach_deadline and game.tick >= active.approach_deadline
-             + clearing_grace(cid) then
+             + u.clearing_grace(cid) then
         -- Bounded give-up (2026-07-08/09, task-pool's OWN walking phase previously had
         -- NO deadline at all -- see the dispatch site's own comment for the live
         -- symptom this caused). Mirrors queues.lua's identical "cannot reach -> fail

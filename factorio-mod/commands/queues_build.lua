@@ -383,7 +383,7 @@ function M.tick_build_queues()
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.state = "clearing"
-      elseif game.tick >= q.approach_deadline then
+      elseif game.tick >= q.approach_deadline + u.clearing_grace(cid) then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         q.failed = "cannot reach build target (" .. q.position.x .. "," .. q.position.y .. ")"

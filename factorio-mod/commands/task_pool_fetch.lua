@@ -171,7 +171,8 @@ end
 function M.poll(c, cid, active, t)
   local f = t.ctx.fetch
   local near = f and u.distance(c.entity.position, f) <= M.FETCH_REACH
-  local timed_out = active.fetch_deadline and game.tick >= active.fetch_deadline
+  local timed_out = active.fetch_deadline
+                    and game.tick >= active.fetch_deadline + u.clearing_grace(cid)
   if storage.walking_queues[cid] and not near and not timed_out then return true end
   if storage.walking_queues[cid] then
     storage.walking_queues[cid] = nil

@@ -462,7 +462,7 @@ function M.tick_gather_queues()
         -- above -- 2026-07-11 extension -- so it is deliberately NOT reset again here;
         -- this keeps the walking-phase trace attached to the mine-phase trace that
         -- follows, for the SAME candidate, in one continuous buffer.)
-      elseif game.tick >= (q.approach_deadline or 0) then   -- cannot reach this patch -> blacklist + try next
+      elseif game.tick >= (q.approach_deadline or 0) + u.clearing_grace(cid) then   -- cannot reach this patch -> blacklist + try next
         -- APPROACH-STALL-RESPAWN (2026-07-13): mirrors the identical guard added to
         -- process_queue's generic UNIVERSAL_STALE_TICKS backstop above (see its own much
         -- longer comment for the full root-cause analysis -- the "667 coal tiles

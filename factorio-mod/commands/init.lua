@@ -325,6 +325,15 @@ function M.approach_deadline(from_pos, to_pos)
   return game.tick + math.max(1800, math.floor(M.distance(from_pos, to_pos) * 25))
 end
 
+-- The ticks a walk's approach deadline moves on by: the time she spent mining obstacles
+-- on the way that came down (control.lua's walker, walking_queues[cid].clearing_ticks --
+-- progress, not a stall; one that never comes down counts nothing). For every approach
+-- whose walk is her walking queue (factorio-ai live_verify_forest_walk_2026_11_19).
+function M.clearing_grace(cid)
+  local q = storage.walking_queues and storage.walking_queues[cid]
+  return (q and q.clearing_ticks) or 0
+end
+
 -- The 8-way walking direction from `from` toward `to`, or nil when `to` lies within
 -- `dead` (default 0.5) on both axes. A walker steering onto a precise spot passes a
 -- smaller `dead` (control.lua: the shifted walk start, which can lie under 0.5 away).
