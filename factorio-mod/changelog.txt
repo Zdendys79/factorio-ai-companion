@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.222
+  Bugfixes:
+    - A build the queues' no-progress backstop stops ends failed with its reason
+      ("cannot reach build target ..." while approaching), not deleted without one -- a
+      place into a closed ring of walls read "no result" and was tried again.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.221
   Bugfixes:
     - Walking through a forest: she clears only the tree or rock in her way (the one

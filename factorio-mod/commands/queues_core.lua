@@ -391,6 +391,27 @@ function M.process_queue(queue_name, processor)
             q.event_sent = true
             events.emit({kind = "pipe", id = cid, cid = cid,
               status = "failed", error = q.failed, tiles = q.tiles_placed})
+          elseif queue_name == "build_queues" then
+            -- a build ends FAILED with the reason, its status poll reads it (factorio-ai
+            -- live_verify_place_walks_2026_11_08 B: a chest inside a ring of walls --
+            -- she stood at the wall, this backstop deleted the queue, the status read a
+            -- bare {active=false}, "no result", and the place was tried again). Stuck on
+            -- its approach (her walk to it stops with it), the reason starts as the
+            -- approach deadline's, so the caller reads it as unreachable and does not
+            -- retry; stuck in another state (stepping_away holds this clock at 0 above),
+            -- a plain "no progress" (review: a build wait is no unreachable target).
+            local tp = q.position or {}
+            local head = "build at (%s,%s) made no progress"
+            if q.state == "approaching" then
+              storage.walking_queues[cid] = nil
+              head = "cannot reach build target (%s,%s)"
+            end
+            q.failed = string.format(head .. " (no progress for %d ticks: she stands at "
+              .. "(%.1f,%.1f), state %s)", tostring(tp.x), tostring(tp.y), q._stale_ticks,
+              pos.x, pos.y, tostring(q.state))
+            u.log_error(q.failed .. " (the queues' backstop)", "build_queue")
+            q.state = "failed"
+            M.emit_end(queue_name, cid, q)
           else
             M.emit_end(queue_name, cid, {state = "failed"}, "the queues' no-progress backstop")
             to_remove[#to_remove + 1] = cid
