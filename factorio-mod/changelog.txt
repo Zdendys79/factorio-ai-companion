@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.219
+  Bugfixes:
+    - An insert step whose target's inventory for the item (a fuel's: the fuel slot) is
+      full of it already is met, no failure; a refusal otherwise names what that
+      inventory holds.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.218
   Features:
     - The pole route search takes a 2x2 pole too (a big pole for long lines: its spots the

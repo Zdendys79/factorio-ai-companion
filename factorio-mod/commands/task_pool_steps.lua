@@ -64,7 +64,25 @@ function M.run_insert(c, t, step)
     u.log_error("insert: " .. target.name .. ".insert failed: " .. tostring(n), "task_pool")
     return false, "insert: the " .. target.name .. " refused " .. step.item
   end
-  if n <= 0 then return false, "insert: the " .. target.name .. " took no " .. step.item end
+  if n <= 0 then
+    -- the inventory the item belongs in (a fuel's: the fuel slot) full of it already:
+    -- the fill's aim is met, no failure; else a failure naming what that inventory
+    -- holds (factorio-ai smokes 1118zc, 1119d: "the stone-furnace took no coal" -- not
+    -- a full slot: a script insert keeps no inserter limit, probe_furnace_insert_limit)
+    local fi = target.get_fuel_inventory and target.get_fuel_inventory()
+    local is_fuel = fi ~= nil and (prototypes.item[step.item].fuel_value or 0) > 0
+    local held = is_fuel and fi.get_item_count(step.item) or target.get_item_count(step.item)
+    local room = is_fuel and fi.get_insertable_count(step.item) or 0
+    if held > 0 and room == 0 then return true, nil end
+    local inside = {}
+    for _, it in pairs(((is_fuel and fi) or target.get_output_inventory()
+                        or {get_contents = function() return {} end}).get_contents()) do
+      inside[#inside + 1] = it.count .. " " .. it.name
+    end
+    return false, "insert: the " .. target.name .. " took no " .. step.item
+                  .. " (" .. (is_fuel and "its fuel slot" or "it") .. " holds "
+                  .. (#inside > 0 and table.concat(inside, ", ") or "nothing") .. ")"
+  end
   local removed = inv.remove{name = step.item, count = n}
   if removed < n then
     -- (her inventory held less than it said: what is missing goes back out of the target)
