@@ -191,7 +191,18 @@ commands.add_command("fac_debug_walk_state", nil, function(cmd)
     local id = tonumber(cmd.parameter)
     if not id then u.error_response("Usage: fac_debug_walk_state <id>"); return end
     local q = storage.walking_queues and storage.walking_queues[id]
-    if not q then u.json_response({id = id, active = false}); return end
+    if not q then
+      -- no queue: how her last walk ended (arrived / approx / unreachable) and when, and the
+      -- tick of the last controller-walk end -- a queue another mod job cleared shows as
+      -- an old outcome here, a walk that never ended as none
+      u.json_response({id = id, active = false,
+                       last_outcome = storage.walk_last_outcome and storage.walk_last_outcome[id],
+                       last_arrived = storage.walk_last_arrived and storage.walk_last_arrived[id],
+                       controller_walk_end = storage.controller_walk_end
+                         and storage.controller_walk_end[id],
+                       tick = game.tick})
+      return
+    end
     u.json_response({
       id = id, active = true,
       target = q.target, has_path = q.path ~= nil,

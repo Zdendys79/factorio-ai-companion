@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.225
+  Changes:
+    - fac_debug_walk_state with no walk queue also answers how her last walk ended (outcome and
+      tick, arrival, the controller walk's end tick, the current tick): a walk another mod job
+      cleared shows as an old outcome, so a "walk ended N tiles short" can be told from a
+      pathfinding failure.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.224
   Bugfixes:
     - A build's footprint (a building's, a belt or pipe route's tiles, a candidate spot's) is
