@@ -664,15 +664,24 @@ function M.tick()
         local q = storage.walking_queues[cid] or {}
         local pos = c.entity.position
         local left = walk_pos and string.format("%.1f", u.distance(pos, walk_pos)) or "?"
+        -- (what held her besides the path: an obstacle she was mining on the way -- a
+        -- tree or rock, the stuck count does not run meanwhile -- and her free slots:
+        -- a full inventory cannot take its wood; factorio-ai smoke_full_1119h, 9 walks
+        -- timed out that walk fine on the end save)
+        local inv = c.entity.get_main_inventory()
+        local clearing = q.clearing_target
         local why = string.format(
           "could not reach step target (walking timed out: %s tiles left, she at %.1f,%.1f, "
           .. "path %s/%s%s, stuck %d samples, bypass round %d left, %d tries, waypoint "
-          .. "stall %d ticks, after %d ticks)",
+          .. "stall %d ticks, after %d ticks; mining %s, clearing %s, %s free slots)",
           left, pos.x, pos.y, tostring(q.path_idx or "-"), tostring(q.path and #q.path or "-"),
           q.path_pending and " pending" or "", math.floor(q.stuck_ticks or 0),
           math.floor(q.bypass_ticks or 0), math.floor(q.bypass_attempts or 0),
           math.floor(q.waypoint_stall_ticks or 0),
-          game.tick - (active.step_start_tick or game.tick))
+          game.tick - (active.step_start_tick or game.tick),
+          tostring(c.entity.mining_state and c.entity.mining_state.mining or false),
+          (clearing and clearing.valid) and clearing.name or "-",
+          inv and tostring(inv.count_empty_stacks()) or "?")
         u.log_error(why, "task_pool")
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}

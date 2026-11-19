@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.220
+  Changes:
+    - A walk that times out names what held her besides the path: whether she was
+      mining, the obstacle she was clearing and her free inventory slots.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.219
   Bugfixes:
     - An insert step whose target's inventory for the item (a fuel's: the fuel slot) is
