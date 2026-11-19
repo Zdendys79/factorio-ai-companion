@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.221
+  Bugfixes:
+    - Walking through a forest: she clears only the tree or rock in her way (the one
+      nearest her way on, not the first found beside or behind her), stands still while
+      she mines it within reach (no sidestep, no re-path, no stall count meanwhile), and
+      leaves one that is not down after 900 ticks for the rest of the walk.
+    - A pool step's walk deadline moves on by the time spent on obstacles that came
+      down (a 45% forest: done in 2855 ticks, 35 trees, where it timed out before).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.220
   Changes:
     - A walk that times out names what held her besides the path: whether she was

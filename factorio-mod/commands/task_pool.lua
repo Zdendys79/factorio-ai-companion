@@ -380,6 +380,14 @@ local WAIT_YIELD_TICKS = 600
 -- a step with a position of its own (review: a position-less step counts as distance 0,
 -- its full priority -- an ensure_item / the coal fetch's mining, whose gather walks far
 -- itself, would drop every walk; it waits for her to be free, as before).
+-- The ticks a pool step's walk deadline moves on by: the time she spent mining
+-- obstacles on the way that came down (control.lua's walker, q.clearing_ticks --
+-- progress, not a stall; an obstacle that never comes down counts nothing, so it cannot
+-- hold the walk forever).
+local function clearing_grace(cid)
+  return (storage.walking_queues[cid] or {}).clearing_ticks or 0
+end
+
 local function walk_preempted(cid, c, active, t)
   local best_id, best_eff, best_pos = pick_next(cid, c)
   if not best_id or best_id == active.task_id or not best_pos then return false end
@@ -649,7 +657,8 @@ function M.tick()
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
         active.state = "acting"
-      elseif active.approach_deadline and game.tick >= active.approach_deadline then
+      elseif active.approach_deadline and game.tick >= active.approach_deadline
+             + clearing_grace(cid) then
         -- Bounded give-up (2026-07-08/09, task-pool's OWN walking phase previously had
         -- NO deadline at all -- see the dispatch site's own comment for the live
         -- symptom this caused). Mirrors queues.lua's identical "cannot reach -> fail
@@ -673,7 +682,8 @@ function M.tick()
         local why = string.format(
           "could not reach step target (walking timed out: %s tiles left, she at %.1f,%.1f, "
           .. "path %s/%s%s, stuck %d samples, bypass round %d left, %d tries, waypoint "
-          .. "stall %d ticks, after %d ticks; mining %s, clearing %s, %s free slots)",
+          .. "stall %d ticks, after %d ticks; mining %s, clearing %s, %d ticks cleared, %s "
+          .. "free slots)",
           left, pos.x, pos.y, tostring(q.path_idx or "-"), tostring(q.path and #q.path or "-"),
           q.path_pending and " pending" or "", math.floor(q.stuck_ticks or 0),
           math.floor(q.bypass_ticks or 0), math.floor(q.bypass_attempts or 0),
@@ -681,6 +691,7 @@ function M.tick()
           game.tick - (active.step_start_tick or game.tick),
           tostring(c.entity.mining_state and c.entity.mining_state.mining or false),
           (clearing and clearing.valid) and clearing.name or "-",
+          math.floor(q.clearing_ticks or 0),
           inv and tostring(inv.count_empty_stacks()) or "?")
         u.log_error(why, "task_pool")
         storage.walking_queues[cid] = nil

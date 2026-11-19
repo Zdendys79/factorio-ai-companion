@@ -11,6 +11,7 @@ local events = require("commands.events")
 local ground_pick = require("commands.ground_pick")
 local inv_watch = require("commands.inventory_watch")
 local chest_roles = require("commands.chest_roles")
+local queues_core = require("commands.queues_core")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -297,6 +298,14 @@ end
 -- NOT matched this same broad way) + the exact named rocks worth clearing. Two separate
 -- find_entities_filtered calls (Factorio's filter ANDs type/name together within one
 -- call, it can't OR a type against a name list) merged into one result list.
+-- how far from the point a tile ahead of her an obstacle counts as in her way (a
+-- big rock's centre lies ~1.5 tiles from where she stops at it)
+local IN_WAY_R = 1.5
+-- the longest she mines one obstacle on the way before she leaves it for this walk (a
+-- tree takes ~66 ticks, a huge rock a few hundred; one that never comes down -- her
+-- inventory full -- must not hold her: review)
+local CLEAR_TARGET_MAX_TICKS = 900
+
 local function find_clearable_obstacles(surf, pos, radius)
   local trees = surf.find_entities_filtered{position = pos, radius = radius, type = "tree"}
   local rocks = surf.find_entities_filtered{position = pos, radius = radius, name = CLEARABLE_ROCK_NAMES}
@@ -304,6 +313,37 @@ local function find_clearable_obstacles(surf, pos, radius)
   for _, e in ipairs(trees) do out[#out + 1] = e end
   for _, e in ipairs(rocks) do out[#out + 1] = e end
   return out
+end
+
+-- The obstacle of `list` to clear first: the nearest to the point one tile from `from`
+-- toward `toward` (her way on -- the next waypoint or the target), or to `from` itself
+-- without a heading; with `within`, only one at most that far from that point (in her
+-- way). (The first match cut trees beside and behind her: a solid forest walk took 70
+-- ticks a tree for one tile in seven, and a path along a forest's edge stopped at every
+-- tree beside it -- factorio-ai live_verify_forest_walk_2026_11_19.) `skip`: tile keys
+-- of obstacles given up on for this walk (CLEAR_TARGET_MAX_TICKS). nil for none.
+local function obstacle_ahead(list, from, toward, within, skip)
+  local p = from
+  if toward then
+    local d = u.distance(from, toward)
+    if d > 0 then
+      p = {x = from.x + (toward.x - from.x) / d, y = from.y + (toward.y - from.y) / d}
+    end
+  end
+  local best, bd = nil, within or math.huge
+  for _, e in ipairs(list) do
+    if e.valid and not (skip and skip[queues_core.tile_key(e.position)]) then
+      local dd = u.distance(e.position, p)
+      if dd < bd then best, bd = e, dd end
+    end
+  end
+  return best
+end
+
+-- Her way on for obstacle_ahead: the walk's next waypoint, else its target.
+local function walk_heading(q)
+  local wp = q.path and q.path_idx and q.path[q.path_idx]
+  return (wp and wp.position) or q.target
 end
 
 -- Ask the game pathfinder for a route to q.target that goes AROUND large obstacles
@@ -547,6 +587,9 @@ local function process_walking_queues()
     -- tick_gather_queues, 2026-07-03).
     if q.clearing_target and not q.clearing_target.valid then
       q.clearing_target = nil  -- previous target is gone (fully mined, or otherwise removed)
+      -- (the time spent on an obstacle that came down: the pool step's walk grace)
+      q.clearing_ticks = (q.clearing_ticks or 0) + (q.clearing_pending or 0)
+      q.clearing_pending = nil
       inv_watch.gained(e)      -- (its wood or stone came into her inventory)
     end
     -- Stale-but-still-valid target guard (cubic-dev-ai bot, 2026-07-05): a target only
@@ -563,6 +606,7 @@ local function process_walking_queues()
     -- companion has clearly moved on, not from ordinary approach jitter at the boundary.
     if q.clearing_target and u.distance(e.position, q.clearing_target.position) > 6 then
       q.clearing_target = nil
+      q.clearing_pending = nil     -- (left standing: no progress, no grace)
     end
     if not q.clearing_target then
       -- radius=2, not a literal 1 (2026-07-05, live-tested): collision keeps the
@@ -574,9 +618,32 @@ local function process_walking_queues()
       -- SAME threshold this function already uses elsewhere for "arrived" (dist<2), and
       -- still only ever catches things genuinely adjacent (trees have a much smaller
       -- ~0.4-tile collision box and stop even closer).
-      local adjacent = find_clearable_obstacles(e.surface, e.position, 2)
-      if adjacent[1] then
-        q.clearing_target = adjacent[1]
+      -- (only one in her way: a tree beside the path is passed -- Zdendys: she clears
+      -- what is in her way; stuck, the radius-4 scan below takes any near one)
+      local ahead = obstacle_ahead(find_clearable_obstacles(e.surface, e.position, 2),
+                                   e.position, walk_heading(q), IN_WAY_R, q.clear_skip)
+      if ahead then
+        q.clearing_target = ahead
+      end
+    end
+    if q.clearing_target then
+      -- (the time she mines an obstacle on the way is progress, not a stall: a pool
+      -- step's walk deadline is moved on by it once the obstacle is down -- an
+      -- obstacle that never comes down gives no grace; task_pool.lua; factorio-ai
+      -- smoke_full_1119i: a 130-tile walk through forest took 2763 ticks, past its
+      -- 25 ticks a tile)
+      q.clearing_pending = (q.clearing_pending or 0) + 5
+      if q.clearing_pending > CLEAR_TARGET_MAX_TICKS then
+        -- it does not come down: left for this walk, no grace for it (logged)
+        q.clear_skip = q.clear_skip or {}
+        q.clear_skip[queues_core.tile_key(q.clearing_target.position)] = true
+        u.log_error(string.format("walk: %s at (%.1f,%.1f) not down after %d ticks of "
+                                  .. "mining -- left, the walk goes on",
+                                  q.clearing_target.name, q.clearing_target.position.x,
+                                  q.clearing_target.position.y, q.clearing_pending),
+                    "walk_clearing")
+        q.clearing_target, q.clearing_pending = nil, nil
+        e.mining_state = {mining = false}
       end
     end
     if q.clearing_target then
@@ -650,7 +717,11 @@ local function process_walking_queues()
       -- handler (commands/companion.lua) the next time companion.py polls position
       -- -- no new RCON round-trip needed on either side.
       if q.giveup_enabled then
-        if not q.path_pending then
+        -- (no stall while she stands mining the obstacle in her way)
+        if not q.path_pending and not (q.clearing_target and q.clearing_target.valid
+                                       and e.mining_state.mining
+                                       and e.selected == q.clearing_target
+                                       and e.can_reach_entity(q.clearing_target)) then
           q.active_ticks = (q.active_ticks or 0) + 5
         end
         if not q.checkpoint_active_ticks then
@@ -779,11 +850,12 @@ local function process_walking_queues()
           -- right at the WAYPOINT instead, so a mineable tree/rock blocking it gets
           -- targeted before the character ever walks into it.
           if q.path[q.path_idx].needs_destroy_to_reach and not q.clearing_target then
-            local blockers = find_clearable_obstacles(e.surface, goal, 2)
-            if blockers[1] then
-              q.clearing_target = blockers[1]
-              e.selected = blockers[1]
-              e.mining_state = {mining = true, position = blockers[1].position}
+            local blocker = obstacle_ahead(find_clearable_obstacles(e.surface, goal, 2), goal,
+                                           nil, nil, q.clear_skip)
+            if blocker then
+              q.clearing_target = blocker
+              e.selected = blocker
+              e.mining_state = {mining = true, position = blocker.position}
               -- Positive-path diagnostic (task #49, 2026-07-09): without this, a run
               -- where the flag fires AND gets successfully cleared looks IDENTICAL to a
               -- run where it never fired at all (both show 0 walk_path_* log entries) --
@@ -791,7 +863,7 @@ local function process_walking_queues()
               -- from "triggered and this fix handled it".
               u.log_error(string.format(
                 "walking path for companion %d needs_destroy_to_reach at (%.1f,%.1f) -- "
-                .. "found %s, clearing it now", cid, goal.x, goal.y, blockers[1].name),
+                .. "found %s, clearing it now", cid, goal.x, goal.y, blocker.name),
                 "walk_path_clearing")
             else
               -- Flagged but no mineable tree/rock found there -- most likely a cliff,
@@ -848,10 +920,11 @@ local function process_walking_queues()
       -- -- same reasoning as above: mining_time is real, one-shot calls fail silently).
       if moved < 0.3 and not q.clearing_target then
         local nearby = find_clearable_obstacles(e.surface, e.position, 4)
-        if nearby[1] then
-          q.clearing_target = nearby[1]
-          e.selected = nearby[1]
-          e.mining_state = {mining = true, position = nearby[1].position}
+        local near = obstacle_ahead(nearby, e.position, walk_heading(q), nil, q.clear_skip)
+        if near then
+          q.clearing_target = near
+          e.selected = near
+          e.mining_state = {mining = true, position = near.position}
         end
       end
 
@@ -892,7 +965,21 @@ local function process_walking_queues()
       local onto_start = q.start_shifted and q.path and q.path_idx == 1
       local dir_to_target = u.get_direction(e.position, goal, onto_start and 0.05 or nil)
 
-      if (q.waypoint_stall_ticks or 0) >= WAYPOINT_STALL_REPATH_TICKS and q.path then
+      if q.clearing_target and q.clearing_target.valid and e.mining_state.mining
+         and e.selected == q.clearing_target and e.can_reach_entity(q.clearing_target) then
+        -- she mines the obstacle in her way, within her reach: she stands until it is
+        -- down (one out of reach: she walks on toward it -- a first try stood 3400
+        -- ticks by a tree she could not mine from there) (walking
+        -- cancels the mining; the bypass walked her off sideways and the re-path led her
+        -- along the forest's edge -- factorio-ai live_verify_forest_walk_2026_11_19:
+        -- 37 trees cut, one tile gained in 3600 ticks); a mined obstacle is no stall
+        e.walking_state = {walking = false}
+        q.stuck_ticks = 0
+        q.waypoint_stall_ticks = 0
+        -- (the cycle after it falls is no stuck one: the stuck scan would take a tree
+        -- beside her -- review: she cleared a ring round her at every stop)
+        q.prev_pos = nil
+      elseif (q.waypoint_stall_ticks or 0) >= WAYPOINT_STALL_REPATH_TICKS and q.path then
         -- RE-PATH AFTER PROLONGED WAYPOINT STALL (2026-07-25, Zdendys: 2nd of 3
         -- confirmed walking-obstacle gaps -- a NEW obstacle appearing mid-route,
         -- after a path was already computed, was never re-routed around; only
