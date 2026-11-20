@@ -609,7 +609,20 @@ local function busy_elsewhere(cid)
       or controller_walk_held(cid)
 end
 
+-- A task whose helper is gone (died, disappeared) ends FAILED at once ("its helper is gone"): its
+-- reservations are released and the submitter, told by the status, submits it again -- to the
+-- team, so it lands on a helper that stands (the helpers are interchangeable). Before, such a task
+-- stayed active for good.
+local function fail_orphans()
+  for task_id, t in pairs(storage.tasks) do
+    if t.status == "active" and t.cid and not u.get_companion(t.cid) then
+      ledger.fail_task(task_id, "its helper is gone (companion #" .. t.cid .. ")")
+    end
+  end
+end
+
 function M.tick()
+  fail_orphans()
   refresh_needs()
   for cid, active in pairs(storage.active_step) do
     local c = u.get_companion(cid)

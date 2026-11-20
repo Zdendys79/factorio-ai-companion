@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.236
+  Bugfixes:
+    - A task whose helper is gone (died, disappeared) ends failed at once ("its helper is gone"),
+      its reservations released, so the submitter submits it again -- to the team, where it
+      lands on a helper that stands. Before, it stayed active for good.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.235
   Changes:
     - The team submit may carry "primary": true -- the task stays with the primary body (the lowest
