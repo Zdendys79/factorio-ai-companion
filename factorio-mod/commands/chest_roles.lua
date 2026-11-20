@@ -28,6 +28,7 @@ local u = require("commands.init")
 local M = {}
 
 M.ROLES = {store = true, surplus = true}
+M.BUFFER_SLOTS = 4          -- the slots of a store (buffer) chest
 M.AT = {consumer = true, belt = true, central = true}
 
 local function book()
@@ -84,6 +85,14 @@ function M.set(chest, role, item, at)
   end
   roles[chest.unit_number] = {entity = chest, role = role, item = item,
                               at = role == "surplus" and at or nil}
+  if role == "store" then
+    -- a store is a BUFFER between a production and its consumption (Zdendys: furnace >
+    -- chest > belt, where she takes what her production needs), not a warehouse: its
+    -- slots limited, so a surplus nobody consumes backs the production up (a signal)
+    -- instead of piling up tons
+    local inv = chest.get_inventory(defines.inventory.chest)
+    if inv and #inv > M.BUFFER_SLOTS then inv.set_bar(M.BUFFER_SLOTS + 1) end
+  end
   script.register_on_object_destroyed(chest)
   return roles[chest.unit_number]
 end

@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.230
+  Changes:
+    - A store chest (chest_roles role "store") is a BUFFER of BUFFER_SLOTS = 4 slots (the chest's
+      bar), not a warehouse: a surplus nobody consumes backs the production up, which is the
+      signal, instead of piling up (Zdendys: furnace > chest > belt, where she takes what her
+      production needs; no tons of stock without a reasonable consumption).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.229
   Features:
     - Her stock items (plates, steel, bricks) above two stacks are a surplus too and go into
