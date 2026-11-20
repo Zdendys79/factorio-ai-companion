@@ -73,12 +73,13 @@ end
 
 -- The chest for her surplus of `item`: a store or a surplus chest of it by role
 -- (chest_roles.target_rank) within RADIUS with room for some, not the controller's own
--- and not held off; the best rank, the nearest within it -- or nil.
-local function store_for(c, item, off)
+-- and not held off; the best rank, the nearest within it -- or nil. `near`: the point the
+-- radius and the distances are taken from (the furnace being emptied), default her.
+local function store_for(c, item, off, near)
   -- (by role, docs/stores_and_buffers.md stage 2: the item's store, else a surplus chest
   -- of it at a consumer or a belt's start, else a central one; the nearest of the first
   -- kind found -- a chest without a role is none of Zdendys's two kinds: no target)
-  local pos = c.entity.position
+  local pos = near or c.entity.position      -- (`near`: a point to search round, else her)
   local best, best_d, best_rank = nil, math.huge, math.huge
   for _, e in pairs(c.entity.surface.find_entities_filtered{
       type = {"container", "logistic-container"}, force = c.entity.force, position = pos,
@@ -99,6 +100,8 @@ local function store_for(c, item, off)
   end
   return best
 end
+
+M.store_for = store_for
 
 -- The store for `item` (store_for, no back-offs) -- for commands/clearing.lua: her
 -- inventory is full mid-clearing, she relieves it into the nearest role chest of the item;

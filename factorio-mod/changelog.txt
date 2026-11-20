@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.226
+  Features:
+    - Furnace relief (commands/upkeep_relief.lua): a furnace whose output holds 80 % of a stack
+      of a stock item (plates, steel, bricks), that no inserter works with and the controller
+      did not mark its own, is emptied by the upkeep itself -- one task, take_out there and
+      insert into the nearest store / surplus chest of the item by role; with no such chest
+      the "surplus" event asks the planner for one. Before, only the controller's visit
+      emptied a full furnace (it stops, and its drill with it).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.225
   Changes:
     - fac_debug_walk_state with no walk queue also answers how her last walk ended (outcome and

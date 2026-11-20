@@ -69,6 +69,7 @@ local B = require("commands.upkeep_batch")
 local Feed = require("commands.upkeep_feed")
 local Stock = require("commands.upkeep_stock")
 local Surplus = require("commands.upkeep_surplus")
+local Relief = require("commands.upkeep_relief")
 local Regs = require("commands.upkeep_feed_regs")
 local Chests = require("commands.upkeep_chests")
 local Logs = require("commands.upkeep_logs")
@@ -145,6 +146,7 @@ function M.init()
   Feed.init()
   Stock.init()
   Surplus.init()
+  Relief.init()
   Regs.init()
 end
 
@@ -183,7 +185,7 @@ end
 local log_once = Logs.log_once
 local LOG_BOOKS = {underfed = UNDERFED_LOG_TICKS, short = SHORT_LOG_TICKS,
                    blocked = SHORT_LOG_TICKS, noroom = SHORT_LOG_TICKS}
-for _, part in pairs({Feed, Stock, Surplus, Fetch}) do
+for _, part in pairs({Feed, Stock, Surplus, Relief, Fetch}) do
   for name, every in pairs(part.LOG_BOOKS) do LOG_BOOKS[name] = every end
 end
 
@@ -524,10 +526,11 @@ local function scan(cid, c)
   Feed.scan(cid, c, acting, log_once)
   Stock.scan(cid, c, acting, log_once)
   Surplus.scan(cid, c, acting, log_once)
+  Relief.scan(cid, c, acting, log_once)
 end
 
 -- the upkeep's parts with task records of their own, by their storage.upkeep book
-local PARTS = {feed = Feed, stock = Stock, surplus = Surplus}
+local PARTS = {feed = Feed, stock = Stock, surplus = Surplus, relief = Relief}
 
 -- The tick handler (control.lua's on_nth_tick(5), after the task pool's own tick so
 -- its reservations come first): each enabled companion's scan every SCAN_TICKS.
@@ -587,6 +590,7 @@ function M.set_enabled(cid, on)
     Feed.stop(cid, function(task_id) return active and active.task_id == task_id end)
     Stock.stop(cid, function(task_id) return active and active.task_id == task_id end)
     Surplus.stop(cid, function(task_id) return active and active.task_id == task_id end)
+    Relief.stop(cid, function(task_id) return active and active.task_id == task_id end)
     for key, task_id in pairs(storage.upkeep.tasks[cid] or {}) do
       local t = storage.tasks[task_id]
       if t and t.status == "active" and not (active and active.task_id == task_id) then
