@@ -48,7 +48,11 @@ end
 -- output unless the controller loads it itself, a stock task is about to take it from
 -- it, or an inserter picks from it.
 local function share_of(e, item, n)
-  if not MACHINE_TYPES[e.type] then return F.store_share(e, item) end
+  if not MACHINE_TYPES[e.type] then
+    -- (a store chest the stock upkeep is about to take from is not a source for a fetch)
+    if Stock.claimed(pos_key(e), item) then return 0 end
+    return F.store_share(e, item)
+  end
   if e.type == "furnace" and (Regs.own(e) or Stock.claimed(pos_key(e), item)) then
     return 0
   end

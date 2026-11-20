@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.228
+  Features:
+    - The stock upkeep (her plates, steel, bricks below half a stack) also takes from the
+      STORE chests of the item (chest_roles: the store of a material at its production, e.g.
+      the iron unit's output chest), not only from furnace outputs -- so the controller no
+      longer walks to such a chest for her plates.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.227
   Bugfixes:
     - Clearing a footprint: when walking straight at an obstacle does not bring her nearer

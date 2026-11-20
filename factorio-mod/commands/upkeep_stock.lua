@@ -1,6 +1,6 @@
 -- Her stock (factorio-ai docs/mod_upkeep_supply.md B; game rules 11 and 33 -- Zdendys:
 -- keeping her inventory is purely Nyara's while she is not building). Stage 1: the
--- furnaces' plates. Called by the upkeep's scan (commands/upkeep.lua) every SCAN_TICKS
+-- plates, taken from furnace outputs and from the STORE chests of the item (chest_roles). Called by the upkeep's scan (commands/upkeep.lua) every SCAN_TICKS
 -- for a companion with upkeep on.
 --
 -- For each item of STOCK_ITEMS: below half a stack in her inventory, a stock need --
@@ -24,6 +24,7 @@ local targeting = require("commands.task_pool_targeting")
 local F = require("commands.upkeep_feeds")
 local N = require("commands.upkeep_need")
 local Regs = require("commands.upkeep_feed_regs")
+local roles = require("commands.chest_roles")
 
 local M = {}
 
@@ -89,20 +90,28 @@ end
 local function source_for(c, furnaces, off, item, want)
   local pos = c.entity.position
   local least = math.min(M.MIN_TAKE, want)
-  local whole, whole_d, some, some_d, some_n = nil, math.huge, nil, math.huge, 0
+  local whole, whole_d, whole_n, some, some_d, some_n = nil, math.huge, 0, nil, math.huge, 0
   for _, e in pairs(furnaces) do
-    local inv = e.valid and e.get_inventory(defines.inventory.crafter_output)
+    -- (a furnace's output, or the plate STORE chest of its production -- chest_roles: the
+    -- output inserter fills it, nothing else takes from it for her: Zdendys's store)
+    local inv = nil
+    if e.valid and e.type == "furnace" then
+      inv = e.get_inventory(defines.inventory.crafter_output)
+    elseif e.valid and roles.store(e, item) then
+      inv = e.get_inventory(defines.inventory.chest)
+    end
     local n = inv and inv.get_item_count(item) or 0
     local held_off = n >= least and off[pos_key(e) .. "|" .. item]
     held_off = held_off and game.tick < held_off[1]
-    if n >= least and not held_off and not Regs.own(e) and not F.picked_from(e) then
+    if n >= least and not held_off and not Regs.own(e)
+       and (e.type ~= "furnace" or not F.picked_from(e)) then
       local d = u.distance(pos, e.position)
-      if n >= want and d < whole_d then whole, whole_d = e, d end
+      if n >= want and d < whole_d then whole, whole_d, whole_n = e, d, n end
       if d < some_d then some, some_d, some_n = e, d, n end
     end
   end
   if whole then
-    return whole, whole.get_inventory(defines.inventory.crafter_output).get_item_count(item)
+    return whole, whole_n
   end
   return some, some_n
 end
@@ -157,13 +166,23 @@ function M.scan(cid, c, acting, log_once)
       if have < M.LOW_SHARE * stack and want >= 1 then
         wanted[item] = want
         if not mine[item] and open < M.MAX_TASKS then
-          furnaces = furnaces or c.entity.surface.find_entities_filtered{
-            type = "furnace", force = c.entity.force}
+          if not furnaces then
+            furnaces = c.entity.surface.find_entities_filtered{
+              type = "furnace", force = c.entity.force}
+            -- (the chests with a role, from the role book itself -- no area search)
+            for _, r in pairs(storage.chest_roles or {}) do
+              local ch = r.entity
+              if ch and ch.valid and ch.surface == c.entity.surface
+                 and ch.force == c.entity.force then
+                furnaces[#furnaces + 1] = ch
+              end
+            end
+          end
           local src, n = source_for(c, furnaces, off, item, want)
           if not src then
             log_once("nosource", cid, item, NOSOURCE_LOG_TICKS, string.format(
               "upkeep stock: %d %s on hand (under half a stack) and no furnace output "
-              .. "to take it from", have, item))
+              .. "or store chest to take it from", have, item))
           else
             local r = ledger.submit_task(cid, {{type = "take_out", x = src.position.x,
                                                 y = src.position.y, item = item,
