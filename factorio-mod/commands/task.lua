@@ -88,6 +88,7 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     -- (commands/build_plan.lua); the plan's name names the task.
     local kind, name, anchor = nil, nil, nil
     local surface = type(steps) == "table" and type(steps.surface) == "string" and steps.surface or nil
+    local primary = type(steps) == "table" and steps.primary == true
     if type(steps) == "table" and type(steps.plan) == "table" then
       kind, name = steps.kind, steps.plan.name
       local expanded, err = build_plan.expand(steps.plan, c.entity.force)
@@ -104,7 +105,7 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       -- the helper by where the task works (the same area -> the same helper: they must not
       -- get in each other's way); the anchor kept on the task for the next pick
       anchor = team.anchor_of(steps)
-      id, c = team.find(args[1], anchor, surface)
+      id, c = team.find(args[1], anchor, surface, primary)
       if not id then
         u.error_response("no helper" .. (surface and (" on " .. surface) or ""), "task_submit")
         return

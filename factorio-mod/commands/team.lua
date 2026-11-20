@@ -65,7 +65,7 @@ end
 
 -- The helper for a new task anchored at `anchor` (or nil): its id and record, or nil when no
 -- companion stands.
-function M.pick(anchor, surface)
+function M.pick(anchor, surface, primary)
   local open, anchors = open_tasks()
   local best, best_id, best_key = nil, nil, nil
   local near_id, near_c, near_d = nil, nil, math.huge
@@ -82,14 +82,28 @@ function M.pick(anchor, surface)
       if best_key == nil or key < best_key then best, best_id, best_key = c, cid, key end
     end
   end
+  if primary then
+    -- a task whose result the controller uses with its own direct commands (items fetched or
+    -- crafted for it): it stays with the PRIMARY body -- the lowest id that stands on the
+    -- surface -- until the controller's direct sequences are tasks of their own
+    -- (docs/second_helper_serine.md, S2b)
+    local low, low_c = nil, nil
+    for cid, c in pairs(storage.companions or {}) do
+      if c.entity and c.entity.valid and (not surface or c.entity.surface.name == surface)
+         and (low == nil or cid < low) then
+        low, low_c = cid, c
+      end
+    end
+    return low, low_c
+  end
   if near_id then return near_id, near_c end
   return best_id, best
 end
 
 -- u.find_companion that also understands "team" (anchor: where the task works first, or nil;
--- surface: the planet's name the task is for, or nil = any).
-function M.find(identifier, anchor, surface)
-  if identifier == M.WORD then return M.pick(anchor, surface) end
+-- surface: the planet's name the task is for, or nil = any; primary: stay with the primary body).
+function M.find(identifier, anchor, surface, primary)
+  if identifier == M.WORD then return M.pick(anchor, surface, primary) end
   return u.find_companion(identifier)
 end
 

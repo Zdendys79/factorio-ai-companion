@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.235
+  Changes:
+    - The team submit may carry "primary": true -- the task stays with the primary body (the lowest
+      id standing on the surface) instead of any helper. For step lists whose fetched / crafted
+      items the controller then uses with its own direct commands; whole build plans are shared.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.234
   Features:
     - /fac_team_status: the helpers that stand with id, name, colour (#rrggbb), position, planet
