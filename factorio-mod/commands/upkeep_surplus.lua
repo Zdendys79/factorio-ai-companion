@@ -3,9 +3,9 @@
 -- huge stocks). Called by the upkeep's scan (commands/upkeep.lua) every SCAN_TICKS for a
 -- companion with upkeep on.
 --
--- Every item she holds but coal and wood (the upkeep's own fuels) and her stock items
--- (upkeep_stock: plates, steel, bricks -- their band; Python holds them for its next
--- craft or build): above KEEP_SHARE of a stack (a placeable item: PLACEABLE_KEEP stacks)
+-- Every item she holds but coal and wood (the upkeep's own fuels) -- her stock items
+-- (upkeep_stock: plates, steel, bricks) only above STOCK_KEEP stacks, their own band lies
+-- below -- : above KEEP_SHARE of a stack (a placeable item: PLACEABLE_KEEP stacks)
 -- in her inventory, less what open tasks reserved, the surplus down to TARGET_SHARE of a
 -- stack below that keep goes -- by chest role, Zdendys's two kinds (chest_roles.lua) --
 -- into the item's store while it has room; only with every store of it full (or none)
@@ -37,6 +37,10 @@ M.NOT_SURPLUS = {coal = true, wood = true}
 -- a placeable item (belts, poles, pipes...) Python crafts ahead for its builds: a
 -- surplus only above this many stacks (its next routes take it from her hand)
 M.PLACEABLE_KEEP = 2
+-- her stock items (plates, steel, bricks: upkeep_stock keeps them between half a stack and
+-- 70 %) are a surplus too only above this many stacks -- what Python collected beyond (smoke:
+-- 596 iron plates while the mod's stock band wants 50-70) goes into the store of the item
+M.STOCK_KEEP = 2
 M.KEEP_SHARE = 1.0       -- above this share of a stack: a surplus
 M.TARGET_SHARE = 0.7     -- what she keeps after a deposit
 M.RADIUS = 300           -- the stores looked for within this many tiles of her
@@ -128,8 +132,9 @@ local function surplus_items(inv)
     -- (not her stock items either -- plates, steel, bricks: the stock upkeep keeps their
     -- band, and Python holds them for its next craft or build -- review: a craft's plates
     -- fetched, then put away before it ran)
-    if not seen[it.name] and not M.NOT_SURPLUS[it.name] and not Stock.is_stock_item(it.name)
-       and prototypes.item[it.name] then
+    if not seen[it.name] and not M.NOT_SURPLUS[it.name] and prototypes.item[it.name]
+       and (not Stock.is_stock_item(it.name)
+            or it.count > M.STOCK_KEEP * prototypes.item[it.name].stack_size) then
       out[#out + 1] = it.name
       seen[it.name] = true
     end
@@ -184,6 +189,7 @@ function M.scan(cid, c, acting, log_once)
       end
       local have = inv.get_item_count(item) - ((storage.reserved or {})[item] or 0) + own
       local keep = prototypes.item[item].place_result and M.PLACEABLE_KEEP or M.KEEP_SHARE
+      if Stock.is_stock_item(item) then keep = M.STOCK_KEEP end
       if have > keep * stack then
         -- (down to TARGET_SHARE of a stack below its keep: 0.7 a stack, 1.7 for a
         -- placeable item)

@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.229
+  Features:
+    - Her stock items (plates, steel, bricks) above two stacks are a surplus too and go into
+      the item's store chest (upkeep_surplus STOCK_KEEP) -- smoke: she held 596 iron plates
+      while the stock band keeps 50-70, which also left no room for the furnace relief.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.228
   Features:
     - The stock upkeep (her plates, steel, bricks below half a stack) also takes from the
