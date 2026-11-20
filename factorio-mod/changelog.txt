@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.237
+  Changes:
+    - A pick-up ("remove" step, /fac_building_remove) also finds entities of the neutral force:
+      the crash site's wrecks belong to it, so the whole salvage is one pick-up task (12 wrecks,
+      ~17 s live) instead of the controller walking to each.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.236
   Bugfixes:
     - A task whose helper is gone (died, disappeared) ends failed at once ("its helper is gone"),

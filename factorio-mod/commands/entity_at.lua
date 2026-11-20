@@ -15,8 +15,11 @@ local BOX_MARGIN = 0.25
 -- box): when nothing of that name is there, the nearest match is a neighbour, which a
 -- pick-up must not mine. Returns the entity or nil.
 function M.find(surface, name, pos, force)
+  -- (her own force; the neutral one only for the crash site's wrecks, which belong to it --
+  -- never a tree, a rock or any other neutral thing)
+  local forces = name:find("^crash%-site") and {force, "neutral"} or force
   local es = surface.find_entities_filtered{name = name, position = pos, radius = 1,
-                                            force = force}
+                                            force = forces}
   local t, td = nil, nil
   for _, e in ipairs(es) do
     local d = (e.position.x - pos.x) ^ 2 + (e.position.y - pos.y) ^ 2
