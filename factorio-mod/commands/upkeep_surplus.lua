@@ -21,6 +21,7 @@
 -- acted on is cancelled then, or when no longer wanted. A failed task holds its chest
 -- off FAIL_BACKOFF_TICKS for that item.
 local u = require("commands.init")
+local R = require("commands.reservations")
 local ledger = require("commands.task_pool_ledger")
 local Regs = require("commands.upkeep_feed_regs")
 local Stock = require("commands.upkeep_stock")
@@ -187,7 +188,7 @@ function M.scan(cid, c, acting, log_once)
       if t and t.reserved then
         own = (t.reserved[item] or 0) - ((t.consumed and t.consumed[item]) or 0)
       end
-      local have = inv.get_item_count(item) - ((storage.reserved or {})[item] or 0) + own
+      local have = inv.get_item_count(item) - R.get(cid, item) + own
       local keep = prototypes.item[item].place_result and M.PLACEABLE_KEEP or M.KEEP_SHARE
       if Stock.is_stock_item(item) then keep = M.STOCK_KEEP end
       if have > keep * stack then

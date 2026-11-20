@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.233
+  Changes:
+    - The task pool's reservation ledger is per companion (commands/reservations.lua,
+      storage.reserved_by[cid][item]): what a helper's open tasks hold of an item is taken out of
+      that helper's free count and no other's -- a second helper no longer eats the first's stock.
+      A save from before is migrated from its open tasks. fac_building_fuel / fac_building_fill
+      and the fuel upkeep ask for their own companion's reservation.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.232
   Features:
     - /fac_task_submit team: the submit wrapper may carry "surface" (a planet's name): the task

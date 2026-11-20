@@ -3,6 +3,7 @@
 -- its input's seconds left and their priority, the reasons it stands out of the feed,
 -- the line that feeds it, a wrong item jamming its output.
 local u = require("commands.init")
+local R = require("commands.reservations")
 local lines = require("commands.upkeep_lines")
 local N = require("commands.upkeep_need")
 local Regs = require("commands.upkeep_feed_regs")
@@ -90,7 +91,7 @@ end
 
 -- Her unreserved count of `item`.
 function M.free_of(c, item)
-  return c.entity.get_main_inventory().get_item_count(item) - (storage.reserved[item] or 0)
+  return c.entity.get_main_inventory().get_item_count(item) - R.get_of(c.entity, item)
 end
 
 -- A furnace recipe's seconds per craft in `e` and its target seconds of input:

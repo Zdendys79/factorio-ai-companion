@@ -173,6 +173,7 @@
 -- pick_orientation step at all.
 
 local u = require("commands.init")
+local R = require("commands.reservations")
 local queues = require("commands.queues")
 local clearing = require("commands.clearing")
 local ledger = require("commands.task_pool_ledger")
@@ -224,7 +225,6 @@ local WOOD_CHOP_REACH = 3           -- mirrors fac_mine_entity's own distance<=1
 function M.init()
   storage.tasks = storage.tasks or {}
   storage.next_task_id = storage.next_task_id or 1
-  storage.reserved = storage.reserved or {}
   -- storage.active_step[cid] = {task_id=, state="walking"|"acting"} -- at most ONE step
   -- in flight per companion at a time (single physical entity, can only do one thing).
   storage.active_step = storage.active_step or {}
@@ -523,11 +523,11 @@ local function refresh_needs()
       if changed[t.cid] or epoch_changed then
         for item, deficit in pairs(t.needs) do
           local have = inv.get_item_count(item)
-          local already_reserved = storage.reserved[item] or 0
+          local already_reserved = R.get(t.cid, item)
           local available = math.max(0, have - already_reserved)
           local take = math.min(available, deficit)
           if take > 0 then
-            storage.reserved[item] = already_reserved + take
+            R.add(t.cid, item, take)
             t.reserved[item] = (t.reserved[item] or 0) + take
             if take >= deficit then
               t.needs[item] = nil

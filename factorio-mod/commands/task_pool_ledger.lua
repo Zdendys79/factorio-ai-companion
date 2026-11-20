@@ -7,6 +7,7 @@
 -- and calls into it for the functions below.
 
 local u = require("commands.init")
+local R = require("commands.reservations")
 local priority = require("commands.priority")
 local build_plan = require("commands.build_plan")
 local events = require("commands.events")
@@ -88,7 +89,7 @@ function M.consume(t, item, n)
   local still = (t.reserved and t.reserved[item] or 0) - (t.consumed[item] or 0)
   local take = math.min(n, math.max(0, still))
   if take > 0 then
-    storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - take)
+    R.add(t.cid, item, -take)
     t.consumed[item] = (t.consumed[item] or 0) + take
   end
 end
@@ -96,7 +97,7 @@ end
 local function release_reservations(t)
   for item, count in pairs(t.reserved or {}) do
     local left = count - ((t.consumed or {})[item] or 0)
-    storage.reserved[item] = math.max(0, (storage.reserved[item] or 0) - left)
+    R.add(t.cid, item, -left)
   end
   t.reserved = {}
   t.consumed = {}
@@ -184,14 +185,14 @@ function M.submit_task(cid, steps, kind, p)
   local remaining_needs = {}
   for item, count in pairs(needs) do
     local have = inv.get_item_count(item)
-    local already_reserved = storage.reserved[item] or 0
+    local already_reserved = R.get(cid, item)
     -- Only what's genuinely UNCLAIMED by another active task can be reserved here
     -- (Zdendys: "it calculates what it needs... it must not count amounts already
     -- reserved").
     local available = math.max(0, have - already_reserved)
     local take = math.min(available, count)
     if take > 0 then
-      storage.reserved[item] = already_reserved + take
+      R.add(cid, item, take)
       task_reserved[item] = take
     end
     if take < count then
@@ -325,7 +326,7 @@ end
 -- go first.
 local function free_count(t, item, held)
   local own = math.max(0, ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0))
-  local others = math.max(0, (storage.reserved[item] or 0) - own)
+  local others = math.max(0, R.get(t.cid, item) - own)
   return held - others, others
 end
 

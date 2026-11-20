@@ -6,6 +6,7 @@
 -- which requires this module and calls into it for start_ensure_item_action below.
 
 local u = require("commands.init")
+local R = require("commands.reservations")
 local queues = require("commands.queues")
 local fetch = require("commands.task_pool_fetch")
 local Stores = require("commands.supply_stores")
@@ -134,7 +135,7 @@ function M.start_ensure_item_action(c, cid, t)
     -- this task's own part of storage.reserved: its reservation less what its steps
     -- used up already (ledger.consume took that out of storage.reserved)
     local own = ((t.reserved or {})[item] or 0) - ((t.consumed or {})[item] or 0)
-    local others = (storage.reserved[item] or 0) - math.max(0, own)
+    local others = R.get(t.cid, item) - math.max(0, own)
     return inv.get_item_count(item) - math.max(0, others)
   end
   if held(need.item) >= need.count then

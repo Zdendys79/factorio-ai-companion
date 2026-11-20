@@ -61,6 +61,7 @@
 -- getting the coal is an action of its own (commands/upkeep_fetch.lua: a coal store --
 -- a coal drill's chest too -- or, while no drill with a chest can be had, mining).
 local u = require("commands.init")
+local R = require("commands.reservations")
 local ledger = require("commands.task_pool_ledger")
 local F = require("commands.upkeep_feeds")
 local Fetch = require("commands.upkeep_fetch")
@@ -409,7 +410,7 @@ local function scan(cid, c)
   local function acting(task_id) return active and active.task_id == task_id end
   local inv = c.entity.get_main_inventory()
   local function free_coal()
-    return inv.get_item_count(M.FUEL) - (storage.reserved[M.FUEL] or 0) - M.COAL_FLOOR
+    return inv.get_item_count(M.FUEL) - R.get(cid, M.FUEL) - M.COAL_FLOOR
   end
   -- another task waiting for coal comes first: no new upkeep task with coal (logged
   -- once; review: wood takes it no coal)
@@ -421,7 +422,7 @@ local function scan(cid, c)
   -- the fuel an upkeep task for need n takes (upkeep_batch.choose; `extra`: what a task
   -- about to be replaced would release, by item)
   local function choose(n, extra)
-    return B.choose(M, n, extra or {}, inv, blocked, free_coal())
+    return B.choose(M, n, extra or {}, inv, blocked, free_coal(), cid)
   end
   local function open_count()
     local k = 0

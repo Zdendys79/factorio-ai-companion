@@ -218,7 +218,7 @@ commands.add_command("fac_building_fuel", nil, function(cmd)
     if held == 0 then u.json_response({id = id, error = "No " .. fuel}); return end
     -- only what no task of hers reserved (the upkeep's coal, a feed's fuel -- as
     -- fac_building_fill and the task pool's fuel step)
-    local have, others = ledger.free_count({}, fuel, held)
+    local have, others = ledger.free_count({cid = id}, fuel, held)
     if have <= 0 then
       u.json_response({id = id, error = string.format(
         "No %s free (%d held, %d reserved by tasks)", fuel, held, others)}); return
@@ -364,7 +364,7 @@ commands.add_command("fac_building_fill", nil, function(cmd)
     -- "Known": a fill from Python took plates a steel-furnace feed had reserved, whose
     -- insert then came up short) -- as the task pool's own fill and insert steps
     local held = c.entity.get_main_inventory().get_item_count(item)
-    local free, others = ledger.free_count({}, item, held)
+    local free, others = ledger.free_count({cid = id}, item, held)
     if held > 0 and free <= 0 then
       u.json_response({id = id, error = string.format(
         "No %s free (%d held, %d reserved by tasks)", item, held, others)}); return

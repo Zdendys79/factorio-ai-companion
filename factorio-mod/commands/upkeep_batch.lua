@@ -3,6 +3,7 @@
 -- WOOD, WOOD_KEEP); a need n is
 -- {e = the burner, into = its fuel chest or nil, t, target, usage, full = true for a
 -- burner filled to full, missing_j = the joules a fuel chest lacks} (upkeep_need).
+local R = require("commands.reservations")
 local M = {}
 
 -- The inventory an upkeep task fills: the fuel chest (need.into) or the burner's slot.
@@ -157,8 +158,8 @@ end
 -- What she may give of a fuel other than coal (`inv` her main inventory): wood above
 -- cfg.WOOD_KEEP (`keep` false: the keep too), any other all she holds unreserved;
 -- `extra` as in choose.
-local function free_other(cfg, inv, item, extra, keep)
-  local free = inv.get_item_count(item) - (storage.reserved[item] or 0) + (extra[item] or 0)
+local function free_other(cfg, inv, item, extra, keep, cid)
+  local free = inv.get_item_count(item) - R.get(cid, item) + (extra[item] or 0)
   if item == cfg.WOOD and keep then free = free - cfg.WOOD_KEEP end
   return free
 end
@@ -177,10 +178,10 @@ end
 -- slot's whole room of wood, 100, was more than her surplus mostly, so it was never
 -- burned; the fill goes on); else coal, unless another task waits for it.
 -- (item, amount, whether free coal is what limits it, swap)
-function M.choose(cfg, n, extra, inv, blocked, free_coal)
+function M.choose(cfg, n, extra, inv, blocked, free_coal, cid)
   local held = M.held_fuel(cfg, n)
   if held then
-    local amount = M.other(cfg, n, held, free_other(cfg, inv, held, extra, true), true)
+    local amount = M.other(cfg, n, held, free_other(cfg, inv, held, extra, true, cid), true)
     if amount >= 1 or n.into then return held, amount, false, false end
     -- (a swap only when her inventory has room for what comes out -- review: else the
     -- step failed at every scan)
@@ -189,10 +190,10 @@ function M.choose(cfg, n, extra, inv, blocked, free_coal)
       coal_n, coal_short = M.coal(cfg, n, free_coal, extra[cfg.FUEL], true)
     end
     if coal_n >= 1 then return cfg.FUEL, coal_n, false, true end
-    amount = M.other(cfg, n, held, free_other(cfg, inv, held, extra, false), true)
+    amount = M.other(cfg, n, held, free_other(cfg, inv, held, extra, false, cid), true)
     return held, amount, amount < 1 and coal_short, false
   end
-  local wood_n = M.other(cfg, n, cfg.WOOD, free_other(cfg, inv, cfg.WOOD, extra, true), true)
+  local wood_n = M.other(cfg, n, cfg.WOOD, free_other(cfg, inv, cfg.WOOD, extra, true, cid), true)
   if wood_n >= 1 or blocked then return cfg.WOOD, wood_n, false, false end
   local amount, coal_short = M.coal(cfg, n, free_coal, extra[cfg.FUEL])
   return cfg.FUEL, amount, coal_short, false
