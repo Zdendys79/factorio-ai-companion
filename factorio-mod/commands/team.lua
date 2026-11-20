@@ -9,6 +9,12 @@
 --      reserved tiles in one spot are what makes them pluck at each other;
 --   2. else the helper with the fewest open tasks (an active step counts), the nearest to the
 --      anchor on a tie, the lowest id after that.
+-- The helpers are INTERCHANGEABLE (Zdendys): any of them can do any task, so nothing is bound to
+-- a named one -- a helper that is gone (dead, unavailable) is simply not picked, a task of it
+-- that failed is submitted again and lands on another. Only two things tie a task to a helper:
+-- its own inventory (its reservations) and its SURFACE: later each helper works on another
+-- planet, so a task naming a surface ("surface": "nauvis" in the submit wrapper) goes only to a
+-- helper standing on that surface (none: an error, never a helper on another planet).
 -- With one companion it is that one: nothing changes for a single helper.
 local u = require("commands.init")
 
@@ -59,12 +65,12 @@ end
 
 -- The helper for a new task anchored at `anchor` (or nil): its id and record, or nil when no
 -- companion stands.
-function M.pick(anchor)
+function M.pick(anchor, surface)
   local open, anchors = open_tasks()
   local best, best_id, best_key = nil, nil, nil
   local near_id, near_c, near_d = nil, nil, math.huge
   for cid, c in pairs(storage.companions or {}) do
-    if c.entity and c.entity.valid then
+    if c.entity and c.entity.valid and (not surface or c.entity.surface.name == surface) then
       local n = (open[cid] or 0) + ((storage.active_step and storage.active_step[cid]) and 1 or 0)
       local d = anchor and u.distance(c.entity.position, anchor) or 0
       -- 1. already working in that area (with something open): it keeps the area
@@ -80,9 +86,10 @@ function M.pick(anchor)
   return best_id, best
 end
 
--- u.find_companion that also understands "team" (anchor: where the task works first, or nil).
-function M.find(identifier, anchor)
-  if identifier == M.WORD then return M.pick(anchor) end
+-- u.find_companion that also understands "team" (anchor: where the task works first, or nil;
+-- surface: the planet's name the task is for, or nil = any).
+function M.find(identifier, anchor, surface)
+  if identifier == M.WORD then return M.pick(anchor, surface) end
   return u.find_companion(identifier)
 end
 

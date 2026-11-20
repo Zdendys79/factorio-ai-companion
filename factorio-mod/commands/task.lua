@@ -87,6 +87,7 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     -- {...}}: a whole build plan, split into the task's steps by the mod itself
     -- (commands/build_plan.lua); the plan's name names the task.
     local kind, name, anchor = nil, nil, nil
+    local surface = type(steps) == "table" and type(steps.surface) == "string" and steps.surface or nil
     if type(steps) == "table" and type(steps.plan) == "table" then
       kind, name = steps.kind, steps.plan.name
       local expanded, err = build_plan.expand(steps.plan, c.entity.force)
@@ -103,8 +104,11 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       -- the helper by where the task works (the same area -> the same helper: they must not
       -- get in each other's way); the anchor kept on the task for the next pick
       anchor = team.anchor_of(steps)
-      id, c = team.find(args[1], anchor)
-      if not id then u.not_found(); return end
+      id, c = team.find(args[1], anchor, surface)
+      if not id then
+        u.error_response("no helper" .. (surface and (" on " .. surface) or ""), "task_submit")
+        return
+      end
     end
     if kind == priority.UPKEEP_KIND then
       u.error_response("kind \"upkeep\" is the mod's own (commands/upkeep.lua)", "task_submit")

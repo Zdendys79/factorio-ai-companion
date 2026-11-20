@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.232
+  Features:
+    - /fac_task_submit team: the submit wrapper may carry "surface" (a planet's name): the task
+      goes only to a helper standing on that surface, none -> the error "no helper on <planet>".
+      The helpers are interchangeable; Python divides the work by planets (territories), the mod
+      gives each task to a helper there.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.231
   Features:
     - The team (commands/team.lua): /fac_task_submit accepts the word "team" instead of a
