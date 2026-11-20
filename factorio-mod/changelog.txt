@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.234
+  Features:
+    - /fac_team_status: the helpers that stand with id, name, colour (#rrggbb), position, planet
+      and open tasks -- one light read for the dashboard (a surroundings map per helper, a
+      coloured circle each on the world map).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.233
   Changes:
     - The task pool's reservation ledger is per companion (commands/reservations.lua,

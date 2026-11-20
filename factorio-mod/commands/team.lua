@@ -93,4 +93,26 @@ function M.find(identifier, anchor, surface)
   return u.find_companion(identifier)
 end
 
+-- /fac_team_status -- the helpers for the dashboard (one light read): {helpers = [{id, name,
+-- color "#rrggbb", x, y, surface, open_tasks}]} -- one entry per companion that stands.
+commands.add_command("fac_team_status", nil, function()
+  u.safe_command(function()
+    local open = open_tasks()
+    local out = {}
+    for cid, c in pairs(storage.companions or {}) do
+      if c.entity and c.entity.valid then
+        local col = c.color or u.get_companion_color(cid)
+        out[#out + 1] = {
+          id = cid, name = c.name or ("#" .. cid),
+          color = string.format("#%02x%02x%02x", math.floor((col.r or 1) * 255),
+                                math.floor((col.g or 1) * 255), math.floor((col.b or 1) * 255)),
+          x = c.entity.position.x, y = c.entity.position.y,
+          surface = c.entity.surface.name, open_tasks = open[cid] or 0}
+      end
+    end
+    table.sort(out, function(a, b) return a.id < b.id end)
+    u.json_response({helpers = out})
+  end)
+end)
+
 return M
