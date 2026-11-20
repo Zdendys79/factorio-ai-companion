@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.231
+  Features:
+    - The team (commands/team.lua): /fac_task_submit accepts the word "team" instead of a
+      companion id -- the mod picks the helper, Python names none. A helper that already works
+      within 14 tiles of the task's first place (standing there, or an open task anchored there)
+      keeps the area, so two helpers do not get in each other's way; else the one with the fewest
+      open tasks, the nearest on a tie. With one companion it is that one.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.230
   Changes:
     - A store chest (chest_roles role "store") is a BUFFER of BUFFER_SLOTS = 4 slots (the chest's

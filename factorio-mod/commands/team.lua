@@ -1,0 +1,89 @@
+-- The team: Python names no helper (Zdendys: "Python need not know how many helpers solve its
+-- tasks" -- the mod distributes, so that the helpers do not get in each other's way). A command
+-- taking a companion id accepts the word "team" where the work is submitted
+-- (/fac_task_submit team ...): the mod picks the helper at submit time, the task stays with
+-- that helper (its reservations, its inventory). The pick, by the task's ANCHOR (the first
+-- place it works at):
+--   1. a helper that already works within AREA_R tiles of the anchor (standing there, or an
+--      open task anchored there) takes it -- two bodies, two walk queues and two sets of
+--      reserved tiles in one spot are what makes them pluck at each other;
+--   2. else the helper with the fewest open tasks (an active step counts), the nearest to the
+--      anchor on a tie, the lowest id after that.
+-- With one companion it is that one: nothing changes for a single helper.
+local u = require("commands.init")
+
+local M = {}
+
+M.WORD = "team"
+M.AREA_R = 14           -- tiles: the same area (their reach, a build's footprint and routes)
+
+-- The first place a step list works at ({x, y}), or nil: the first step with a position, the
+-- first piece of an expanded plan.
+function M.anchor_of(steps)
+  if type(steps) ~= "table" then return nil end
+  for _, s in ipairs(steps) do
+    if type(s) == "table" and type(s.x) == "number" and type(s.y) == "number" then
+      return {x = s.x, y = s.y}
+    end
+    if type(s) == "table" and type(s.pieces) == "table" and s.pieces[1]
+       and type(s.pieces[1].x) == "number" then
+      return {x = s.pieces[1].x, y = s.pieces[1].y}
+    end
+  end
+  return nil
+end
+
+-- Open (active) tasks of each companion: {[cid] = n}, and the anchors of those tasks.
+local function open_tasks()
+  local n, anchors = {}, {}
+  for _, t in pairs(storage.tasks or {}) do
+    if t.status == "active" and t.cid then
+      n[t.cid] = (n[t.cid] or 0) + 1
+      if t.anchor then
+        anchors[t.cid] = anchors[t.cid] or {}
+        anchors[t.cid][#anchors[t.cid] + 1] = t.anchor
+      end
+    end
+  end
+  return n, anchors
+end
+
+-- Whether companion `cid` works within AREA_R of `anchor` (stands there or has a task there).
+local function works_near(cid, c, anchor, anchors)
+  if u.distance(c.entity.position, anchor) <= M.AREA_R then return true end
+  for _, a in ipairs(anchors[cid] or {}) do
+    if u.distance(a, anchor) <= M.AREA_R then return true end
+  end
+  return false
+end
+
+-- The helper for a new task anchored at `anchor` (or nil): its id and record, or nil when no
+-- companion stands.
+function M.pick(anchor)
+  local open, anchors = open_tasks()
+  local best, best_id, best_key = nil, nil, nil
+  local near_id, near_c, near_d = nil, nil, math.huge
+  for cid, c in pairs(storage.companions or {}) do
+    if c.entity and c.entity.valid then
+      local n = (open[cid] or 0) + ((storage.active_step and storage.active_step[cid]) and 1 or 0)
+      local d = anchor and u.distance(c.entity.position, anchor) or 0
+      -- 1. already working in that area (with something open): it keeps the area
+      if anchor and n > 0 and works_near(cid, c, anchor, anchors) and d < near_d then
+        near_id, near_c, near_d = cid, c, d
+      end
+      -- 2. the fewest open tasks, then the nearest, then the lowest id
+      local key = n * 1e9 + d * 1e3 + cid
+      if best_key == nil or key < best_key then best, best_id, best_key = c, cid, key end
+    end
+  end
+  if near_id then return near_id, near_c end
+  return best_id, best
+end
+
+-- u.find_companion that also understands "team" (anchor: where the task works first, or nil).
+function M.find(identifier, anchor)
+  if identifier == M.WORD then return M.pick(anchor) end
+  return u.find_companion(identifier)
+end
+
+return M

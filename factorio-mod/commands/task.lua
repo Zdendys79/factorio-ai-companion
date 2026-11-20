@@ -6,6 +6,7 @@ local build_plan = require("commands.build_plan")
 local upkeep = require("commands.upkeep")
 local feed_regs = require("commands.upkeep_feed_regs")
 local upkeep_status = require("commands.upkeep_status")
+local team = require("commands.team")
 
 -- Usage: /fac_upkeep <id> [on|off] -- the mod's own upkeep for the companion
 -- (commands/upkeep.lua: fuel, feed, stock): switched on / off, or (no argument) its
@@ -51,7 +52,7 @@ commands.add_command("fac_upkeep_feed", nil, function(cmd)
   end)
 end)
 
--- Usage: /fac_task_submit <id> <json_step_list | {"kind": KIND, "steps": json_step_list}
+-- Usage: /fac_task_submit <id | team> <json_step_list | {"kind": KIND, "steps": json_step_list}
 --                              | {"kind": KIND, "plan": build_plan}>
 -- build_plan: a whole build, split into steps by the mod (commands/build_plan.lua).
 -- KIND: build (the default), relocate, dismantle -- the task's base priority
@@ -68,7 +69,9 @@ end)
 commands.add_command("fac_task_submit", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(.+)$", cmd.parameter)
-    local id, c = u.find_companion(args[1])
+    -- ("team": the mod picks the helper -- commands/team.lua; Python names none. The pick needs
+    -- the task's anchor, so it is made again below once the steps are expanded.)
+    local id, c = team.find(args[1])
     if not id then u.not_found(); return end
     local ok, steps = pcall(helpers.json_to_table, args[2])
     if not ok or not steps then
@@ -83,7 +86,7 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     -- commands/priority.lua); a plain step array is a build. {"kind": ..., "plan":
     -- {...}}: a whole build plan, split into the task's steps by the mod itself
     -- (commands/build_plan.lua); the plan's name names the task.
-    local kind, name = nil, nil
+    local kind, name, anchor = nil, nil, nil
     if type(steps) == "table" and type(steps.plan) == "table" then
       kind, name = steps.kind, steps.plan.name
       local expanded, err = build_plan.expand(steps.plan, c.entity.force)
@@ -96,6 +99,13 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       kind = steps.kind
       steps = steps.steps
     end
+    if args[1] == team.WORD then
+      -- the helper by where the task works (the same area -> the same helper: they must not
+      -- get in each other's way); the anchor kept on the task for the next pick
+      anchor = team.anchor_of(steps)
+      id, c = team.find(args[1], anchor)
+      if not id then u.not_found(); return end
+    end
     if kind == priority.UPKEEP_KIND then
       u.error_response("kind \"upkeep\" is the mod's own (commands/upkeep.lua)", "task_submit")
       return
@@ -104,6 +114,9 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     if result.task_id and type(name) == "string" then
       storage.tasks[result.task_id].name = name
       result.name = name
+    end
+    if result.task_id and anchor and storage.tasks[result.task_id] then
+      storage.tasks[result.task_id].anchor = anchor
     end
     result.id = id
     u.json_response(result)
