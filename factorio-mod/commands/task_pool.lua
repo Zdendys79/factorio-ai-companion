@@ -65,6 +65,9 @@
 --                                                          run_fill) -- its result
 --                                                          {inserted, item, into} in the
 --                                                          task's step_results
+--   {type="fuel", x=, y=, item=NAME, count=N}            -> up to N into the burners round
+--                                                          (x, y), nearest first -- its result
+--                                                          {inserted, item} in step_results
 --   {type="take_out", x=, y=, item=NAME, count=N}        -> up to N out of the entity
 --                                                          closest to (x, y): chest,
 --                                                          crafter output, fuel
@@ -1060,6 +1063,7 @@ function M.tick()
               ok, err = false, "no burner nearby had room for " .. step.item
             else
               ledger.consume(t, step.item, delivered)   -- used up: out of the reservations
+              result = {inserted = delivered, item = step.item}   -- (reported in step_results)
             end
           end
         end

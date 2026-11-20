@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.238
+  Changes:
+    - The task pool's "fuel" step reports what it put in ({inserted, item} in step_results), so the
+      controller can tell a boiler that got less than asked from one that got all (the power
+      plant's start fuels its boilers as one task now).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.237
   Changes:
     - A pick-up ("remove" step, /fac_building_remove) also finds entities of the neutral force:
