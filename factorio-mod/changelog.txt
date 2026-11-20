@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.227
+  Bugfixes:
+    - Clearing a footprint: when walking straight at an obstacle does not bring her nearer
+      for 90 ticks (a boiler, a belt or a chest in the way), the walker's pathfinding takes
+      her round -- before, a build stood 605 ticks four tiles off its site and failed (the
+      same fuel chest 4 times in one smoke).
+    - A build stalled in the clearing state now names the obstacle it was after in the
+      failure reason (what, where, how far, mining, path mode).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.226
   Features:
     - Furnace relief (commands/upkeep_relief.lua): a furnace whose output holds 80 % of a stack

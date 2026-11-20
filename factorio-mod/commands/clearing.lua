@@ -23,6 +23,8 @@ local AIM_NEAR = 0.3
 M.STEER_FROM = 6.0          -- nearer than this she steers straight at the obstacle
 M.MINE_TICKS = 900          -- the longest she mines one obstacle before she leaves it
 M.WALK_TICKS = 1200         -- the longest she walks toward one obstacle
+M.STUCK_TICKS = 90          -- steering straight at it without moving this long: the pathfinder takes her
+M.STUCK_MOVE = 0.3          -- (moved less than this many tiles in STUCK_TICKS = stuck)
 local OBSTACLE_TYPES = {"tree", "simple-entity"}
 
 local function key(e)
@@ -165,6 +167,7 @@ function M.step(cid, c, st, entity_name, position, direction)
   end
   if st.target ~= best then
     st.target, st.mining, st.mine_started = best, nil, nil
+    st.steer_pos, st.steer_tick, st.path_mode = nil, nil, nil
     st.started = game.tick
   end
   local waited = game.tick - (st.started or game.tick)
@@ -188,8 +191,30 @@ function M.step(cid, c, st, entity_name, position, direction)
     else
       -- near: her last steps straight at it (the walker ends a walk within 2 tiles of its
       -- target -- too coarse: she stood 3 tiles off a tree, out of mining reach)
-      storage.walking_queues[cid] = nil
-      e.walking_state = {walking = true, direction = u.get_direction(e.position, best.position)}
+      local p = e.position
+      local function path_to()
+        if not storage.walking_queues[cid] then
+          storage.walking_queues[cid] = {
+            target = {x = best.position.x + (p.x - best.position.x) / best_d * AIM_NEAR,
+                      y = best.position.y + (p.y - best.position.y) / best_d * AIM_NEAR}}
+        end
+      end
+      if st.path_mode then
+        path_to()                 -- (kept going: the walker's pathfinding is taking her round)
+      elseif st.steer_pos and u.distance(st.steer_pos, p) < M.STUCK_MOVE
+             and game.tick - st.steer_tick >= M.STUCK_TICKS then
+        -- straight at it she does not get nearer (a boiler, a belt, a chest in the way --
+        -- smoke: 605 ticks standing 4 tiles off a build): the walker's pathfinding takes
+        -- her round, aimed AIM_NEAR from the obstacle, until it is within reach
+        st.path_mode = true
+        path_to()
+      else
+        if not st.steer_pos or u.distance(st.steer_pos, p) >= M.STUCK_MOVE then
+          st.steer_pos, st.steer_tick = {x = p.x, y = p.y}, game.tick
+        end
+        storage.walking_queues[cid] = nil
+        e.walking_state = {walking = true, direction = u.get_direction(p, best.position)}
+      end
     end
     st.walking = true
     return "busy"

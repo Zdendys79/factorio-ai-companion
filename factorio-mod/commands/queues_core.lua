@@ -406,9 +406,18 @@ function M.process_queue(queue_name, processor)
               storage.walking_queues[cid] = nil
               head = "cannot reach build target (%s,%s)"
             end
+            -- (clearing: what she was after -- the stall's diagnosis, smoke 2026-11-20: she
+            -- stood 605 ticks at the same spot, "state clearing", nothing said which obstacle)
+            local what = ""
+            local ct = q.clear and q.clear.target
+            if q.state == "clearing" and ct and ct.valid then
+              what = string.format(", clearing %s at (%.1f,%.1f) %.1f tiles off, mining=%s, path=%s",
+                ct.name, ct.position.x, ct.position.y, u.distance(pos, ct.position),
+                tostring(q.clear.mining), tostring(q.clear.path_mode))
+            end
             q.failed = string.format(head .. " (no progress for %d ticks: she stands at "
-              .. "(%.1f,%.1f), state %s)", tostring(tp.x), tostring(tp.y), q._stale_ticks,
-              pos.x, pos.y, tostring(q.state))
+              .. "(%.1f,%.1f), state %s%s)", tostring(tp.x), tostring(tp.y), q._stale_ticks,
+              pos.x, pos.y, tostring(q.state), what)
             u.log_error(q.failed .. " (the queues' backstop)", "build_queue")
             q.state = "failed"
             M.emit_end(queue_name, cid, q)
