@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# pre-push: every commit that leaves this machine carries a GitHub noreply address as
+# its author AND its committer, and a pushed annotated tag as its tagger (Zdendys's
+# personal e-mail must never be published). The pre-commit check reads only the
+# configured identity; a cherry-pick, an amend with an old author or a GIT_*_EMAIL
+# override would slip past it -- this checks what is pushed. It runs for every push,
+# the post-commit auto-push included. When the outgoing commits cannot be listed the
+# push is refused, never let through. The address itself is never printed.
+# Override (consciously): git push --no-verify.
+set -u
+
+zero="0000000000000000000000000000000000000000"
+fail=0
+
+block() {
+  echo "[pre-push][BLOCK] $1" >&2
+  fail=1
+}
+
+noreply() {
+  case "$1" in
+    *@users.noreply.github.com) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" = "$zero" ] && continue          # deleting a remote ref
+  if [ "$(git cat-file -t "$local_sha" 2>/dev/null)" = "tag" ]; then
+    tagger=$(git cat-file tag "$local_sha" | sed -n 's/^tagger .*<\([^>]*\)>.*/\1/p')
+    noreply "$tagger" || block "tag $remote_ref: its tagger address is not a noreply address."
+  fi
+  # the remote tip known here: only what is new since it; else all not on any remote
+  if [ "$remote_sha" != "$zero" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    range="$remote_sha..$local_sha"
+  else
+    range="$local_sha --not --remotes"
+  fi
+  # shellcheck disable=SC2086  # $range is two or three plain words, no user input
+  if ! commits=$(git rev-list $range); then
+    block "$remote_ref: the outgoing commits could not be listed."
+    continue
+  fi
+  [ -n "$commits" ] || continue
+  while read -r short author committer; do
+    noreply "$author" || block "commit $short ($remote_ref): its author address is not a noreply address."
+    noreply "$committer" || block "commit $short ($remote_ref): its committer address is not a noreply address."
+  done < <(printf '%s\n' "$commits" |
+           git log --no-walk=unsorted --stdin --no-show-signature --format='%h %ae %ce')
+done
+
+if [ "$fail" = "1" ]; then
+  echo "[pre-push] push refused: rewrite the author/committer to the noreply identity" \
+       "(git commit --amend --reset-author for the last commit)." >&2
+  exit 1
+fi
+exit 0

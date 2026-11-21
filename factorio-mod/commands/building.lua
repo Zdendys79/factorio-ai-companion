@@ -7,6 +7,7 @@ local machine_fill = require("commands.machine_fill")
 local ledger = require("commands.task_pool_ledger")
 local machine_empty = require("commands.machine_empty")
 local inv_watch = require("commands.inventory_watch")
+local machine_recipe = require("commands.machine_recipe")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
 requests.register("place", function(cid, a)
@@ -199,10 +200,9 @@ commands.add_command("fac_building_recipe", nil, function(cmd)
     if u.distance(c.entity.position, {x=x, y=y}) > (c.entity.reach_distance or 10) then
       u.json_response({id = id, error = "Too far"}); return   -- must be in reach to set a recipe
     end
-    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 1, type = "assembling-machine"}
-    if #es == 0 then u.json_response({id = id, error = "No machine"}); return end
-    if not c.entity.force.recipes[recipe] then u.json_response({id = id, error = "Recipe not found"}); return end
-    es[1].set_recipe(recipe)
+    -- the nearest machine; what it held for its old recipe comes back to her
+    local ok, err = machine_recipe.set(c, {x = x, y = y}, recipe, nil, "building")
+    if not ok then u.json_response({id = id, error = err}); return end
     u.json_response({id = id, set_recipe = true, recipe = recipe})
   end)
 end)

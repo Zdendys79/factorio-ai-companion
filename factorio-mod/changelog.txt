@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.242
+  Bugfixes:
+    - Changing a machine's recipe hands what the machine held for its old recipe back to her
+      inventory (what does not fit is spilled at the machine, logged; fluids are not returned)
+      -- also for /fac_building_recipe, which dropped those items (they vanished) and took the
+      first machine found. One function (commands/machine_recipe.lua) serves the command and
+      the task pool's set_recipe step: the nearest assembling machine of her force within 1
+      tile, an unknown or locked recipe refused. Live: 20 iron plates back to her for the
+      command and the step alike.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.241
   Bugfixes:
     - Clearing: a tree she cannot get within her reach of (a path walk that moves her less than
