@@ -41,15 +41,14 @@ end
 -- ---- step readiness + target position (for distance-priority scheduling) ----
 
 -- Returns the world position a given step will act at (nil if the step doesn't
--- need a specific position -- e.g. find_patch/verify_tile/pick_orientation run
--- instantly wherever the companion currently stands).
+-- need a specific position -- e.g. find_patch/verify_tile run instantly wherever the
+-- companion currently stands).
 --
 -- Absolute x/y (2026-07-07, coal_pair upgrade task): a step MAY specify its own
 -- explicit {x=, y=} instead of relying on ctx.px/py or ctx.sx/sy -- lets the
 -- PYTHON side precompute a whole multi-entity layout itself (e.g. a drill's
--- known drop_position, queried once and reused for several later steps) rather
--- than needing pick_orientation's primary/secondary/offset model extended to
--- cover more than 2 positions. Checked FIRST so it overrides which= when both
+-- known drop_position, queried once and reused for several later steps). Checked FIRST
+-- so it overrides which= when both
 -- are present (they never should be, but explicit coordinates are the more
 -- specific/intentional choice if a step somehow carries both).
 function M.step_target_pos(t, step)
@@ -62,9 +61,8 @@ function M.step_target_pos(t, step)
   -- candidates (2026-07-07): use the FIRST candidate as the nominal walking/
   -- scheduling target -- they cluster close together (fallback alternatives
   -- for the SAME intended spot), so any one of them is a fine approximation
-  -- for "is the companion roughly there yet" even though run_pick_orientation-
-  -- style candidate resolution (which one actually gets placed) only happens
-  -- once the "acting" state is reached.
+  -- for "is the companion roughly there yet" even though which candidate actually
+  -- gets placed is only resolved once the "acting" state is reached.
   if step.candidates and step.candidates[1] then
     return {x = step.candidates[1].x, y = step.candidates[1].y}
   end

@@ -12,6 +12,7 @@ local ground_pick = require("commands.ground_pick")
 local inv_watch = require("commands.inventory_watch")
 local chest_roles = require("commands.chest_roles")
 local queues_core = require("commands.queues_core")
+local carry = require("commands.inventory_carry")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -167,7 +168,10 @@ subcommands.kill = function(player, args)
         if storage.companion_markers[cid].valid then storage.companion_markers[cid].destroy() end
         storage.companion_markers[cid] = nil
       end
-      if c.entity and c.entity.valid then c.entity.destroy(); killed = killed + 1 end
+      if c.entity and c.entity.valid then
+        carry.spill_all(c.entity, cid)         -- (her belongings stay on the ground)
+        c.entity.destroy(); killed = killed + 1
+      end
       storage.companions[cid] = nil
     end
   end

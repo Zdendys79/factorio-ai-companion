@@ -1,5 +1,6 @@
 -- AI Companion v0.7.0 - World commands
 local u = require("commands.init")
+local nearest = require("commands.nearest")
 
 local normalize = {copper = "copper-ore", iron = "iron-ore", coal = "coal", stone = "stone", uranium = "uranium-ore"}
 
@@ -12,23 +13,21 @@ commands.add_command("fac_world_nearest", nil, function(cmd)
     local name = normalize[what] or what
     local pos = c.entity.position
     local surf = c.entity.surface
-    local area = {{pos.x - 200, pos.y - 200}, {pos.x + 200, pos.y + 200}}
-    local es
-    if what == "wood" or name == "tree" then es = surf.find_entities_filtered{area = area, type = "tree", limit = 100}
-    elseif what == "water" then
-      local tiles = surf.find_tiles_filtered{area = area, name = {"water", "deepwater"}, limit = 100}
-      if #tiles > 0 then
-        local closest, min = nil, math.huge
-        for _, t in ipairs(tiles) do local d = u.distance(t.position, pos); if d < min then min, closest = d, t.position end end
-        u.json_response({id = id, nearest = "water", position = closest, distance = math.floor(min)}); return
-      else u.json_response({id = id, error = "Not found"}); return end
-    else es = surf.find_entities_filtered{area = area, name = name, limit = 100} end
-    if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
-    local closest, min = nil, math.huge
-    for _, e in ipairs(es) do local d = u.distance(e.position, pos); if d < min then min, closest = d, e end end
-    u.json_response({id = id, nearest = closest.name, position = {x = math.floor(closest.position.x), y = math.floor(closest.position.y)}, distance = math.floor(min)})
+    if what == "water" then
+      local closest, dist = nearest.nearest_tile(surf, pos, {"water", "deepwater"})
+      if not closest then u.json_response({id = id, error = "Not found"}); return end
+      u.json_response({id = id, nearest = "water", position = closest, distance = math.floor(dist)}); return
+    end
+    local filter = (what == "wood" or name == "tree") and {type = "tree"} or {name = name}
+    local closest, dist = nearest.nearest_entity(surf, pos, filter)
+    if not closest then u.json_response({id = id, error = "Not found"}); return end
+    u.json_response({id = id, nearest = closest.name, position = {x = math.floor(closest.position.x), y = math.floor(closest.position.y)}, distance = math.floor(dist)})
   end)
 end)
+
+-- Entities within a radius of her, filter applied in the search; a longer list is cut to
+-- the SCAN_CAP nearest (`total` = matches before the cut).
+local SCAN_CAP = 50
 
 commands.add_command("fac_world_scan", nil, function(cmd)
   u.safe_command(function()
@@ -48,7 +47,12 @@ commands.add_command("fac_world_scan", nil, function(cmd)
         result[#result + 1] = r
       end
     end
-    if #result > 50 then local t = {}; for i = 1, 50 do t[i] = result[i] end; result = t end
-    u.json_response({id = id, entities = result, count = #result})
+    local total = #result
+    if total > SCAN_CAP then
+      local pos = c.entity.position
+      table.sort(result, function(a, b) return u.distance(a.position, pos) < u.distance(b.position, pos) end)
+      for i = total, SCAN_CAP + 1, -1 do result[i] = nil end
+    end
+    u.json_response({id = id, entities = result, count = #result, total = total})
   end)
 end)

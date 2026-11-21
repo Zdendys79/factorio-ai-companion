@@ -60,12 +60,8 @@ end)
 -- json_step_list is a JSON array of step objects, e.g.
 --   [{"type":"find_patch","resource":"iron-ore"},
 --    {"type":"verify_tile","resource":"iron-ore"},
---    {"type":"pick_orientation","primary":"burner-mining-drill","secondary":"stone-furnace",
---     "offsets":[[0,2],[0,-2],[2,0],[-2,0]]},
---    {"type":"place","which":"primary","entity":"burner-mining-drill"},
---    {"type":"place","which":"secondary","entity":"stone-furnace"},
---    {"type":"fuel","which":"primary","item":"coal","count":10},
---    {"type":"fuel","which":"secondary","item":"coal","count":10}]
+--    {"type":"place","which":"primary","entity":"burner-mining-drill","x":10.5,"y":20.5,"dir":0},
+--    {"type":"fuel","which":"primary","item":"coal","count":10}]
 commands.add_command("fac_task_submit", nil, function(cmd)
   u.safe_command(function()
     local args = u.parse_args("^(%S+)%s+(.+)$", cmd.parameter)

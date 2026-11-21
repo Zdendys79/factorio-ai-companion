@@ -1,4 +1,27 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.243
+  Bugfixes:
+    - No more mining or moving from afar. The task pool's wood chop walks to the tree and fells
+      it with real mining time (clearing.step_target, one tree at a time); the gather queue's
+      tree / rock on an ore tile is cleared by her the same way (commands/gather_obstruction.lua)
+      instead of an instant mine of everything within the area; /fac_building_place places only
+      on a free footprint (it cleared trees, rocks and items instantly from 10 tiles);
+      /fac_mine_entity (mined anything within 15 tiles at once) is removed -- wood comes from the
+      ensure_item step. The orphan-mining backstop leaves a clearing's mining alone (a huge rock,
+      6 s of mining, was stopped every 5 s).
+    - Her body is no longer teleported 10000 tiles away to probe a collision: a build whose
+      footprint her own body overlaps steps her aside by a read of the prototypes
+      (commands/body_collision.lua); the pick_orientation step, whose probes teleported her and
+      obstacles, is removed with ignore_entities_at (no live plan sent them).
+    - A walk that times out, is pre-empted, cancelled or ends within reach also stops the
+      obstacle mining it had started (it ran on until the 5-s backstop).
+    - A respawn keeps every inventory (main, guns, ammo, armor, trash), the cursor stack and the
+      ingredients of a cancelled hand-craft queue; /fac kill and /fac_companion_disappear spill
+      all of them at her feet (only the main inventory was moved or spilled).
+    - fac_world_nearest / fac_resource_nearest return the true nearest entity (a ring search;
+      it took the nearest of the first 100 found); fac_resource_list and fac_world_scan filter
+      before they cap and report the total.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.242
   Bugfixes:
     - Changing a machine's recipe hands what the machine held for its old recipe back to her

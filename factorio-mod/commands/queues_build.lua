@@ -7,6 +7,7 @@ local chest_roles = require("commands.chest_roles")
 local core = require("commands.queues_core")
 local inv_watch = require("commands.inventory_watch")
 local clearing = require("commands.clearing")
+local body_collision = require("commands.body_collision")
 
 local valid_companion = core.valid_companion
 local process_queue = core.process_queue
@@ -428,28 +429,14 @@ function M.tick_build_queues()
           inv_watch.gained(c.entity)
           return false
         end
-        -- SELF-COLLISION STEP-AWAY (2026-07-13, universal own-body-blocks-own-build
-        -- fix, Zdendys: "the companion must never block her own construction,
-        -- whatever the building is"): determine whether her own body is (one of) the actual
-        -- blocker(s) by temporarily teleporting her far away (same teleport-and-
-        -- restore technique already proven for ignore_entities_at/
-        -- clear_natural_obstacles in task_pool.lua) and re-running the SAME
-        -- can_place_entity check with her excluded:
-        --   * still blocked even without her -> some OTHER obstruction (occupied tile,
-        --     unbuildable terrain) -- fail normally below; stepping away would never
-        --     help and would just loop pointlessly on a genuinely-blocked tile.
-        --   * now placeable -> her own body WAS (one of) the blocker(s) -- physically
-        --     walk her away and back (mirrors the already-proven place_verified/
-        --     place_dir/place_pipe step-away pattern) and give the collision check a
-        --     fresh retry window, bounded to MAX_SELF_COLLISION_STEP_AWAY attempts so
-        --     a persistent OTHER obstruction that happens to also overlap her current
-        --     position still eventually fails instead of looping forever.
-        local self_pos = {x = c.entity.position.x, y = c.entity.position.y}
-        c.entity.teleport({x = self_pos.x + 10000, y = self_pos.y + 10000})
-        local clear_without_self = surf.can_place_entity{name = q.entity, position = q.position,
-                                     direction = q.direction, force = c.entity.force,
-                                     mirror = q.mirror}
-        c.entity.teleport(self_pos)
+        -- SELF-COLLISION STEP-AWAY (Zdendys: "the companion must never block her own
+        -- construction, whatever the building is"): when her own body overlaps the
+        -- footprint (commands/body_collision.lua, a read of the prototypes -- she is not
+        -- moved to find out), she walks away and back and the collision check gets a
+        -- fresh retry window, bounded to MAX_SELF_COLLISION_STEP_AWAY attempts; with
+        -- another obstruction the build fails normally below.
+        local clear_without_self = body_collision.blocks(
+          c.entity, q.entity, q.position, q.direction)
         q.self_collision_step_away_count = q.self_collision_step_away_count or 0
         local tries_left = q.self_collision_step_away_count < MAX_SELF_COLLISION_STEP_AWAY
         local step_away = clear_without_self and tries_left
@@ -473,10 +460,7 @@ function M.tick_build_queues()
         -- can_place_entity also rejects unbuildable TILES (water, out-of-map), which
         -- find_entities_filtered can never reveal since tiles aren't entities.
         -- Logging the tile name closes that blind spot.
-        -- 2026-07-12 (task #46): both the nearby-name dump and the tile check now come
-        -- from the shared u.dump_context() helper instead of duplicating this same
-        -- find_entities_filtered+get_tile logic inline (see task_pool.lua's
-        -- run_pick_orientation_checks for the OTHER caller of this same helper).
+        -- (the nearby-name dump and the tile check come from the shared u.dump_context())
         local diag = u.dump_context(surf, q.position, {radius = 1.5, companion = c.entity})
         u.log_error(string.format(
           "build queue: Cannot place %s at (%.1f,%.1f) tile=%s after %d retry ticks " ..

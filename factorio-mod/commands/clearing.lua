@@ -109,7 +109,7 @@ local function make_room(cid, c, st)
   u.log_error(string.format("clearing: her inventory was full -- %d %s put into the chest at "
                             .. "(%.1f,%.1f)", put, best, chest.position.x, chest.position.y),
               "clearing")
-  st.room_since = nil
+  if put > 0 then st.room_since = nil end   -- (a full chest keeps the ROOM_TICKS clock running)
   return put > 0 and "done" or "busy"
 end
 
@@ -126,48 +126,32 @@ local function stand_down(cid, c, st)
   end
 end
 
--- One cycle of the clearing of the footprint of `entity_name` at `position`.
--- @param cid number the companion's id
--- @param c table the companion record
--- @param st table the caller's state for this footprint
--- @return string "busy" (call again next cycle) or "done"
-function M.step(cid, c, st, entity_name, position, direction)
-  local e = c.entity
-  local surf = e.surface
-  local area = footprint(entity_name, position, direction)
-  if not area then return "done" end
+-- The relief and the came-down bookkeeping every cycle starts with.
+-- @return boolean true when this cycle is spent (her inventory is being relieved)
+local function prelude(cid, c, st)
   st.skip = st.skip or {}
   if st.relief then
     -- her inventory is being relieved (a walk to a chest, or a wait for one): nothing
     -- else runs meanwhile
     local r = make_room(cid, c, st)
-    if r == "busy" then return "busy" end
+    if r == "busy" then return true end
     if r == "none" then st.skip[st.relief] = true end
     st.relief, st.room_since = nil, nil
-    return "busy"
+    return true
   end
   if st.target and not st.target.valid then
     -- (it came down: its wood or stone is in her inventory)
-    inv_watch.gained(e)
+    inv_watch.gained(c.entity)
     st.target = nil
   end
-  local best, best_d, kind = nil, math.huge, nil
-  for _, o in ipairs(surf.find_entities_filtered{area = area, type = OBSTACLE_TYPES}) do
-    if o.valid and not st.skip[key(o)] then
-      local d = u.distance(e.position, o.position)
-      if d < best_d then best, best_d, kind = o, d, "obstacle" end
-    end
-  end
-  for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
-    if it.valid and it.stack and it.stack.valid_for_read and not st.skip[key(it)] then
-      local d = u.distance(e.position, it.position)
-      if d < best_d then best, best_d, kind = it, d, "item" end
-    end
-  end
-  if not best then
-    stand_down(cid, c, st)
-    return "done"
-  end
+  return false
+end
+
+-- One cycle of work on `best`: the walk to it, then its mining (or the pick-up of a loose
+-- item).
+-- @return string "busy"
+local function work(cid, c, st, best, best_d, kind)
+  local e = c.entity
   if st.target ~= best then
     st.target, st.mining, st.mine_started = best, nil, nil
     st.steer_pos, st.steer_tick, st.path_mode = nil, nil, nil
@@ -280,6 +264,10 @@ function M.step(cid, c, st, entity_name, position, direction)
                               game.tick - st.mine_started), "clearing")
     return "busy"
   end
+  -- (stamped every cycle she mines here: the orphan-mining backstop of queues_harvest
+  -- leaves a clearing's mining alone)
+  storage.clearing_mining = storage.clearing_mining or {}
+  storage.clearing_mining[cid] = game.tick
   if not st.mining then
     e.selected = best
     e.mining_state = {mining = true, position = best.position}
@@ -289,6 +277,51 @@ function M.step(cid, c, st, entity_name, position, direction)
     e.mining_state = {mining = true, position = best.position}
   end
   return "busy"
+end
+
+-- One cycle of the clearing of the footprint of `entity_name` at `position`.
+-- @param cid number the companion's id
+-- @param c table the companion record
+-- @param st table the caller's state for this footprint
+-- @return string "busy" (call again next cycle) or "done"
+function M.step(cid, c, st, entity_name, position, direction)
+  local e = c.entity
+  local surf = e.surface
+  local area = footprint(entity_name, position, direction)
+  if not area then return "done" end
+  if prelude(cid, c, st) then return "busy" end
+  local best, best_d, kind = nil, math.huge, nil
+  for _, o in ipairs(surf.find_entities_filtered{area = area, type = OBSTACLE_TYPES}) do
+    if o.valid and not st.skip[key(o)] then
+      local d = u.distance(e.position, o.position)
+      if d < best_d then best, best_d, kind = o, d, "obstacle" end
+    end
+  end
+  for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
+    if it.valid and it.stack and it.stack.valid_for_read and not st.skip[key(it)] then
+      local d = u.distance(e.position, it.position)
+      if d < best_d then best, best_d, kind = it, d, "item" end
+    end
+  end
+  if not best then
+    stand_down(cid, c, st)
+    return "done"
+  end
+  return work(cid, c, st, best, best_d, kind)
+end
+
+-- One cycle of felling the one tree `target`: she walks to it and mines it with the
+-- engine's mining, her own mining speed (the wood chop of the task pool's ensure_item).
+-- @param st table the caller's state for this tree (a fresh {} per tree)
+-- @return string "busy" (call again next cycle) or "done": the tree is down -- or left
+--   standing (not reached, not mined in time): the caller reads target.valid
+function M.step_target(cid, c, st, target)
+  if prelude(cid, c, st) then return "busy" end
+  if not target.valid or st.skip[key(target)] then
+    stand_down(cid, c, st)
+    return "done"
+  end
+  return work(cid, c, st, target, u.distance(c.entity.position, target.position), "obstacle")
 end
 
 -- Her mining and her walk stop at once (a task, a build or a lay that ends or is

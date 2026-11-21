@@ -236,15 +236,6 @@ export const TOOLS: Record<string, {
       y: { type: "number", required: true }
     }
   },
-  building_mine: {
-    desc: "Mine (destroy) any entity at coordinates - works on crash site wrecks, decoratives",
-    rcon: "/fac_mine_entity {companionId} {x} {y}",
-    params: {
-      companionId: { type: "number", required: true },
-      x: { type: "number", required: true },
-      y: { type: "number", required: true }
-    }
-  },
   building_can_place: {
     desc: "Check if entity can be placed at coordinates",
     rcon: "/fac_building_can_place {companionId} {entityName} {x} {y}",

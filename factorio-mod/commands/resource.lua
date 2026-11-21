@@ -2,8 +2,15 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
+local nearest = require("commands.nearest")
 
 local normalize = {copper = "copper-ore", iron = "iron-ore", coal = "coal", stone = "stone", uranium = "uranium-ore", oil = "crude-oil"}
+
+-- Resources within `radius` (<= LIST_MAX_RADIUS) of her, nearest first. The name filter is
+-- applied in the search, then the reply is capped at LIST_CAP entries; `total` is the
+-- number of matches before the cap. Arguments: <id> [filter] [radius]; a lone number is the radius.
+local LIST_CAP = 20
+local LIST_MAX_RADIUS = 200
 
 commands.add_command("fac_resource_list", nil, function(cmd)
   u.safe_command(function()
@@ -11,17 +18,21 @@ commands.add_command("fac_resource_list", nil, function(cmd)
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local filter = args[2] ~= "" and args[2] or nil
-    local radius = tonumber(args[3]) or 50
+    local radius = tonumber(args[3])
+    if filter and not radius and tonumber(filter) then radius, filter = tonumber(filter), nil end
+    radius = math.min(radius or 50, LIST_MAX_RADIUS)
     local pos = c.entity.position
-    local res = c.entity.surface.find_entities_filtered{type = "resource", position = pos, radius = radius, limit = 20}
+    local search = {type = "resource", position = pos, radius = radius}
+    if filter then search.name = normalize[filter] or filter end
+    local res = c.entity.surface.find_entities_filtered(search)
     local found = {}
     for _, r in ipairs(res) do
-      if not filter or r.name == filter then
-        found[#found + 1] = {name = r.name, position = {x = math.floor(r.position.x), y = math.floor(r.position.y)}, amount = r.amount, distance = math.floor(u.distance(pos, r.position))}
-      end
+      found[#found + 1] = {name = r.name, position = {x = math.floor(r.position.x), y = math.floor(r.position.y)}, amount = r.amount, distance = math.floor(u.distance(pos, r.position))}
     end
     table.sort(found, function(a, b) return a.distance < b.distance end)
-    u.json_response({id = id, resources = found, count = #found})
+    local total = #found
+    for i = #found, LIST_CAP + 1, -1 do found[i] = nil end
+    u.json_response({id = id, resources = found, count = #found, total = total})
   end)
 end)
 
@@ -171,12 +182,8 @@ commands.add_command("fac_resource_nearest", nil, function(cmd)
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local name = normalize[args[2]] or args[2]
-    local pos = c.entity.position
-    local area = {{pos.x - 200, pos.y - 200}, {pos.x + 200, pos.y + 200}}
-    local es = c.entity.surface.find_entities_filtered{area = area, name = name, limit = 100}
-    if #es == 0 then u.json_response({id = id, error = "Not found"}); return end
-    local closest, min = nil, math.huge
-    for _, e in ipairs(es) do local d = u.distance(e.position, pos); if d < min then min, closest = d, e end end
-    u.json_response({id = id, resource = closest.name, position = {x = math.floor(closest.position.x), y = math.floor(closest.position.y)}, distance = math.floor(min), amount = closest.amount})
+    local closest, dist = nearest.nearest_entity(c.entity.surface, c.entity.position, {name = name})
+    if not closest then u.json_response({id = id, error = "Not found"}); return end
+    u.json_response({id = id, resource = closest.name, position = {x = math.floor(closest.position.x), y = math.floor(closest.position.y)}, distance = math.floor(dist), amount = closest.amount})
   end)
 end)

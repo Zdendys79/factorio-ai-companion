@@ -8,6 +8,7 @@ local ledger = require("commands.task_pool_ledger")
 local machine_empty = require("commands.machine_empty")
 local inv_watch = require("commands.inventory_watch")
 local machine_recipe = require("commands.machine_recipe")
+local body_collision = require("commands.body_collision")
 
 -- the controller's queued build, started by the scheduler (controller_requests.lua)
 requests.register("place", function(cid, a)
@@ -44,66 +45,13 @@ commands.add_command("fac_building_place", nil, function(cmd)
     local inv = c.entity.get_inventory(defines.inventory.character_main)
     if inv.get_item_count(name) == 0 then u.json_response({id = id, error = "Not in inventory"}); return end
     local surf = c.entity.surface
-    -- Mod autonomously prepares the build site: step the companion off the footprint if it
-    -- blocks, then CLEAR obstacles (trees, rocks, lying items) ONLY IF placement is still
-    -- blocked -- so terrain isn't destroyed when placement would fail anyway (e.g. on water).
-    local function can_here()
-      return surf.can_place_entity{name = name, position = {x=x, y=y}, direction = dir, force = c.entity.force}
-    end
+    -- A direct placement builds only where the footprint is free: trees, rocks and lying
+    -- items are cleared by her own hands in real time (commands/clearing.lua, through the
+    -- task pool's place step and place_smart), never from afar here. Her own body on the
+    -- footprint is refused: the caller (which walked here) stands off it first.
     local proto = prototypes.entity[name]
-    if proto and proto.collision_box then
-      local bb = proto.collision_box
-      local area = {
-        {x = x + bb.left_top.x - 0.5, y = y + bb.left_top.y - 0.5},
-        {x = x + bb.right_bottom.x + 0.5, y = y + bb.right_bottom.y + 0.5}
-      }
-      -- companion must not block its own build. A character cannot teleport, so REFUSE rather than
-      -- warp aside: the caller (which walked here) must stand OFF the footprint before placing. The
-      -- async build path already walks the companion clear via walking_state before placing.
-      if c.entity.position.x >= area[1].x and c.entity.position.x <= area[2].x
-         and c.entity.position.y >= area[1].y and c.entity.position.y <= area[2].y then
-        u.json_response({id = id, error = "companion on build site -- move off first"}); return
-      end
-      -- CLEAR RETRY LOOP (2026-07-27, live-caught via a discard-investigation-pause:
-      -- an iron output-inserter's own chest kept failing "Cannot place" at candidates
-      -- immediately next to the SAME furnace this task is trying to give an output tap
-      -- to -- confirmed live via RCON that a lying item-entity (iron-plate x1) sat
-      -- almost exactly on the target tile every time. Root cause: this furnace's
-      -- OWN output has nowhere to go yet (that IS the output-inserter this task is
-      -- building) and has been overflowing/spilling loose plates onto the ground
-      -- around itself for a while -- a single clear-then-check pass can lose a race
-      -- against continued spillage (a new item can land in the exact same spot again
-      -- between the pick-up loop and the final can_place_entity check, since the
-      -- furnace keeps overflowing every tick it isn't collected). Retrying the whole
-      -- clear+check cycle a few times (bounded, cheap -- no sleep, just repeated
-      -- server-tick-instant checks) rides out a few ticks of continued overflow
-      -- instead of giving up after the very first attempt.
-      for _clear_attempt = 1, 3 do
-        if can_here() then break end   -- only clear when something actually blocks placement
-        -- lying items: pick up the ACTUAL stack (preserves quality/count); keep if inv full
-        for _, it in ipairs(surf.find_entities_filtered{area = area, type = "item-entity"}) do
-          if it.valid and it.stack and it.stack.valid_for_read then
-            local moved = c.entity.insert(it.stack)
-            -- PARTIAL PICKUP (2026-10-23): a partial insert must shrink the lying stack
-            -- by what was moved -- leaving it full DUPLICATED those items (in the
-            -- inventory AND still on the ground). Same as fac_item_pick (item.lua).
-            if moved >= it.stack.count then it.destroy()
-            elseif moved > 0 then it.stack.count = it.stack.count - moved end
-          end
-        end
-        -- trees / rocks (simple-entity) blocking the footprint: MINE them (wood/stone into the
-        -- companion inventory), never free-destroy. If the inventory is full, mine{} leaves the
-        -- obstacle intact -- placement then fails cleanly instead of magically clearing the map.
-        for _, o in ipairs(surf.find_entities_filtered{area = area, type = {"tree", "simple-entity"}}) do
-          -- REVERTED (2026-08-02, task #82 course-correction) -- see
-          -- queues_build.lua's clear_build_area comment for the full reasoning: the
-          -- companion must NEVER refuse to collect wood -- back to unconditional
-          -- mine{inventory=...} exactly as before the 2026-08-01 WOOD_STOCK_CAP
-          -- attempt.
-          if o.valid then o.mine{inventory = c.entity.get_main_inventory()} end
-        end
-      end
-      inv_watch.gained(c.entity)
+    if proto and proto.collision_box and body_collision.blocks(c.entity, name, {x = x, y = y}, dir) then
+      u.json_response({id = id, error = "companion on build site -- move off first"}); return
     end
     if not surf.can_place_entity{name = name, position = {x=x, y=y}, direction = dir, force = c.entity.force} then
       u.json_response({id = id, error = "Cannot place"}); return
@@ -412,49 +360,6 @@ commands.add_command("fac_building_bar", nil, function(cmd)
     -- (the bar is the first unusable slot: slots + 1; no limit is #inv + 1)
     inv.set_bar(slots > 0 and slots + 1 or nil)
     u.json_response({id = id, chest = chest.name, slots = slots})
-  end)
-end)
-
--- Realistic tick-based building placement
--- Mine (destroy) any entity at position - works on crash site wrecks, decoratives, etc.
-commands.add_command("fac_mine_entity", nil, function(cmd)
-  u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
-    local id, c = u.find_companion(args[1])
-    if not id then u.not_found(); return end
-    local x, y = tonumber(args[2]), tonumber(args[3])
-    if not x or not y then u.error_response("Invalid coordinates"); return end
-    local es = c.entity.surface.find_entities_filtered{position = {x=x, y=y}, radius = 3}
-    local target, tmin = nil, math.huge   -- mine the NEAREST entity, not the first arbitrary one
-    for _, e in ipairs(es) do
-      if e.valid and e ~= c.entity and e.type ~= "character" and e.type ~= "resource" then
-        local d = u.distance({x=x, y=y}, e.position)
-        if d < tmin then tmin, target = d, e end
-      end
-    end
-    if not target then u.json_response({id = id, error = "No entity found"}); return end
-    if u.distance(c.entity.position, target.position) > 15 then u.json_response({id = id, error = "Too far"}); return end
-    local entity_name = target.name
-    -- NATIVE mining (real game mechanic): mine{} yields the entity's products (tree->wood,
-    -- rock->stone, building->its item) AND its inventory contents into the companion inventory, then
-    -- removes the entity -- exactly like hand-mining. If the companion inventory can't hold the
-    -- result, mine{} returns false and the entity is LEFT INTACT: no silent item loss, no
-    -- destroy-without-return, no fabricating items. (Never bypass game mechanics -- no cheating.)
-    local inv = c.entity.get_main_inventory()
-    local before = inv.get_item_count()
-    -- NATIVE mining: tree->wood, rock->stone, building->its item + contents, all into the inventory,
-    -- then the game removes the entity. If the inventory can't hold the result, mine{} leaves the
-    -- entity INTACT (no item loss, no destroy-without-return). The character MINES, never "destroys".
-    -- judged by mine{}'s result and the entity, not the count: only a chest's contents
-    -- fitting her inventory moved them and left the chest standing (independent review)
-    local mined = target.mine{inventory = inv}
-    local gained = inv.get_item_count() - before
-    if gained > 0 then inv_watch.gained(c.entity) end
-    if not mined or target.valid then
-      u.json_response({id = id, error = "Could not mine (inventory full?)", entity = entity_name})
-      return
-    end
-    u.json_response({id = id, mined = true, entity = entity_name, items_gained = gained})
   end)
 end)
 

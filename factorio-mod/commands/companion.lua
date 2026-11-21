@@ -2,6 +2,7 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
+local carry = require("commands.inventory_carry")
 
 commands.add_command("fac_companion_list", nil, function(cmd)
   u.safe_command(function()
@@ -97,29 +98,8 @@ commands.add_command("fac_companion_disappear", nil, function(cmd)
   u.safe_command(function()
     local id, c = u.find_companion(cmd.parameter)
     if not id then u.not_found(); return end
-    local pos, surf = c.entity.position, c.entity.surface
-    local dropped = {}
-    local inv = c.entity.get_inventory(defines.inventory.character_main)
-    if inv then
-      -- 2026-07-11: two bugs fixed together, found live while investigating a separate
-      -- issue (see factorio-ai's memory/mode_a_select_fail_investigation_2026_07_11.md,
-      -- Phase 2). Both were masked by the first one throwing before the second could ever
-      -- surface as its own distinct symptom:
-      -- (1) inv.get_contents() returns an ARRAY of {name=,count=,quality=} in current
-      --     Factorio, not a name->count dict -- the old `for name, count in pairs(...)`
-      --     bound `name` to the array INDEX and `count` to the whole item table.
-      -- (2) spill_item_stack's signature is a single table of named fields in current
-      --     Factorio (confirmed against lua-api.factorio.com), not 5 positional args --
-      --     the old call threw "Expected 1 argument but 5 were given" live, aborting this
-      --     command before it ever reached c.entity.destroy() or cleared
-      --     storage.companions[id], so a companion with ANY inventory could never be
-      --     cleanly disappeared via this command at all.
-      for _, item in pairs(inv.get_contents()) do
-        surf.spill_item_stack{position = pos, stack = {name = item.name, count = item.count,
-                               quality = item.quality}, enable_looted = true, allow_belts = false}
-        dropped[#dropped + 1] = {name = item.name, count = item.count}
-      end
-    end
+    -- everything she carries (every inventory, the cursor) lies on the ground at her feet
+    local dropped = carry.spill_all(c.entity, id)
     if c.label and c.label.valid then c.label.destroy() end
     if storage.companion_markers and storage.companion_markers[id] then
       if storage.companion_markers[id].valid then storage.companion_markers[id].destroy() end

@@ -15,12 +15,18 @@ local u = require("commands.init")
 local core = require("commands.queues_core")
 local requests = require("commands.controller_requests")
 local inv_watch = require("commands.inventory_watch")
+local carry = require("commands.inventory_carry")
+local obstruction = require("commands.gather_obstruction")
+local clearing_release = require("commands.clearing").release
 
 local _tile_key = core.tile_key
 local valid_companion = core.valid_companion
 local process_queue = core.process_queue
 local TICK_INTERVAL = core.TICK_INTERVAL
 local MINE_ADJACENT_RANGE = core.MINE_ADJACENT_RANGE
+-- (near the ore tile, standing still this long: something may block her -- gather_obstruction)
+local APPROACH_CLEAR_RANGE = 6
+local APPROACH_STILL_TICKS = 90
 
 local M = {}
 
@@ -159,8 +165,8 @@ end
 -- built building (furnace, chest, belt, inserter, assembler, pole, ... -- see
 -- building_covers_tile below), (c) it carries a different resource than its
 -- neighboring field (only relevant to a DRILL's own 2x2+ footprint, not to
--- hand-mining a single 1x1 entity -- already handled at drill-PLACEMENT time by
--- footprint_is_exclusive_resource in task_pool_steps.lua, not here), (d)
+-- hand-mining a single 1x1 entity -- the drill's anchor is chosen by Python, not
+-- here), (d)
 -- already mined out. (a)/(d) were already correctly handled here (amount>0);
 -- state (b) closes two related gaps: the companion must not hand-mine a tile
 -- an automated drill is ALREADY covering (competing with its own automation
@@ -271,29 +277,23 @@ local SELECT_FAIL_RESPAWN_STREAK = 1
 local function respawn_companion_entity(cid, c)
   local old = c.entity
   local pos, surf, force = old.position, old.surface, old.force
-  -- Snapshot inventory BEFORE destroying -- old.get_inventory() is unusable the
-  -- instant old.destroy() runs.
-  local contents = {}
-  local inv = old.get_inventory(defines.inventory.character_main)
-  if inv then contents = inv.get_contents() end
+  -- (everything she carries is held aside: the old body's inventories end with it)
+  local held = carry.hold(old, cid)
   if c.label and c.label.valid then c.label.destroy() end
   old.destroy()
   local new_pos = surf.find_non_colliding_position("character", pos, 5, 0.5) or pos
   local e = surf.create_entity{name = "character", position = new_pos, force = force}
   if not e then
+    local spilled = carry.spill_hold(held, surf, pos)
     u.log_error(string.format(
       "respawn_companion_entity: failed to create a replacement character for companion " ..
-      "%d at (%.1f,%.1f) -- companion is now WITHOUT AN ENTITY, will read as dead",
-      cid, new_pos.x, new_pos.y), "gather_queue")
+      "%d at (%.1f,%.1f) -- companion is now WITHOUT AN ENTITY, will read as dead; her %d " ..
+      "carried stack(s) were spilled at (%.1f,%.1f)",
+      cid, new_pos.x, new_pos.y, spilled, pos.x, pos.y), "gather_queue")
     return false
   end
   e.color = c.color
-  local new_inv = e.get_inventory(defines.inventory.character_main)
-  if new_inv then
-    for _, item in pairs(contents) do
-      new_inv.insert{name = item.name, count = item.count, quality = item.quality}
-    end
-  end
+  carry.release(held, e, cid)
   c.entity = e
   c.label = u.render_label(e, c.name, c.color)
   u.log_error(string.format(
@@ -454,6 +454,43 @@ function M.tick_gather_queues()
         sel = c.entity.selected and c.entity.selected.name or false,
         ti = inv.get_item_count(),
         g = q.product and (inv.get_item_count(q.product) - (q.start_count or 0)) or 0})
+      if q.obs_clear then
+        -- (a tree or rock keeps her from the ore tile: she clears it herself first; the
+        -- clearing's own mining is progress for the stale backstop and its own deadline
+        -- bounds it)
+        if obstruction.step(cid, c, q) == "busy" then
+          q._stale_ticks = 0
+          return false
+        end
+        -- (cleared or nothing came down: the walk to the tile goes on from where she stands)
+        storage.walking_queues[cid] = {target = q.entity_pos}
+        q.approach_deadline = u.approach_deadline(c.entity.position, q.entity_pos)
+        return false
+      end
+      if d_to_target > MINE_ADJACENT_RANGE and d_to_target <= APPROACH_CLEAR_RANGE then
+        -- near the tile but not moving: something may stand on or beside it
+        local p = c.entity.position
+        if not q._appr_pos or u.distance(q._appr_pos, p) >= 0.3 then
+          q._appr_pos, q._appr_tick = {x = p.x, y = p.y}, game.tick
+        elseif game.tick - q._appr_tick >= APPROACH_STILL_TICKS then
+          local tile = _tile_key(q.entity_pos)
+          local res, res_d = nil, math.huge
+          for _, r in ipairs(c.entity.surface.find_entities_filtered{
+              name = q.resource, position = q.entity_pos, radius = 0.5}) do
+            local d = u.distance(r.position, q.entity_pos)
+            if r.valid and d < res_d then res, res_d = r, d end
+          end
+          q._appr_pos = nil
+          if res and res.valid and not (q.obs_tried and q.obs_tried[tile])
+             and obstruction.start(c, q, res, tile) then
+            storage.walking_queues[cid] = nil
+            c.entity.walking_state = {walking = false}
+            return false
+          end
+          q.obs_tried = q.obs_tried or {}
+          q.obs_tried[tile] = true
+        end
+      end
       if d_to_target <= MINE_ADJACENT_RANGE then
         storage.walking_queues[cid] = nil
         c.entity.walking_state = {walking = false}
@@ -516,7 +553,20 @@ function M.tick_gather_queues()
       if gathered >= q.target then
         c.entity.mining_state = {mining = false}
         q.run_end_tick = game.tick
+        if q.obs_clear then clearing_release(cid, c); q.obs_clear = nil end
         q.state = "done"; return false   -- target met
+      end
+      if q.obs_clear then
+        -- (she is clearing an obstacle off the ore tile: nothing else of this state runs;
+        -- the clearing's own mining is progress for the stale backstop, which the clearing's
+        -- own deadline bounds)
+        local cleared = obstruction.step(cid, c, q)
+        if cleared == "busy" then
+          q._stale_ticks = 0
+          return false
+        end
+        if cleared == "cleared" then q.select_fail_ticks = 0 end
+        return false
       end
       -- MINE_STUCK_TICKS bookkeeping (2026-07-27, see that constant's own docstring):
       -- tracks ticks spent in "mine" state with NO actual product gain -- reset the
@@ -675,57 +725,13 @@ function M.tick_gather_queues()
       if c.entity.selected ~= res then
         q.select_fail_ticks = (q.select_fail_ticks or 0) + TICK_INTERVAL
         if q.select_fail_ticks > SELECT_FAIL_TICKS then
-          -- OBSTRUCTION-CLEAR (2026-07-17, Zdendys's own direct instruction: "a
-          -- big-rock entity should be automatically eliminated -- mined -- when
-          -- within the companion's reach, it's the same method as with trees!" -- mirrors
-          -- clear_build_area's own tree/simple-entity clearing exactly (same
-          -- type filter, same instant obs.mine{inventory=...}), applied here to the
-          -- MINING-select-fail case instead of building placement. Live-caught: a
-          -- big-rock sitting almost directly on top of an iron-ore tile (~0.3 tiles
-          -- away) made it permanently unselectable for EVERY character entity that
-          -- tried, including a freshly-respawned one -- proving the blocker is
-          -- per-TARGET (the rock itself), not per-entity, so the respawn mitigation
-          -- below (built for a genuine per-entity engine glitch) can never fix this
-          -- specific shape. Try clearing FIRST, before ever blacklisting/respawning --
-          -- self-limiting: if nothing is actually there to clear, this is a no-op and
-          -- falls straight through to the existing escalation unchanged.
-          --
-          -- FOOTPRINT-SCOPED (2026-07-18, cubic-dev-ai review finding on the original
-          -- radius=2 circular sweep): a plain radius search around res.position could
-          -- mine a tree/rock up to 2 tiles from the ore tile (up to ~4 tiles from the
-          -- companion, since she must be within her own reach of res.position to be
-          -- attempting selection at all) even when that entity does not overlap the
-          -- ore tile and has nothing to do with the select-fail. Mirrors
-          -- clear_build_area's own established pattern below (same type filter, same
-          -- +-0.5 tile padding) instead of a raw radius: build a tight `area` from the
-          -- ore entity's OWN real bounding_box, so only something actually occupying/
-          -- overlapping the ore tile gets cleared.
-          local ore_bb = res.bounding_box
-          local clear_area = {
-            {x = ore_bb.left_top.x - 0.5, y = ore_bb.left_top.y - 0.5},
-            {x = ore_bb.right_bottom.x + 0.5, y = ore_bb.right_bottom.y + 0.5}
-          }
-          local obstacles = surf.find_entities_filtered{
-            area = clear_area, type = {"tree", "simple-entity"}}
-          local cleared = 0
-          for _, obs in ipairs(obstacles) do
-            -- REVERTED (2026-08-02, task #82 course-correction) -- see
-            -- clear_build_area's own comment in queues_build.lua for the full
-            -- reasoning: the companion must NEVER refuse to collect wood, so this
-            -- is back to unconditional mine{inventory=...} exactly as before the
-            -- 2026-08-01 WOOD_STOCK_CAP attempt.
-            if obs.valid then
-              obs.mine{inventory = c.entity.get_main_inventory()}
-              inv_watch.gained(c.entity)
-              cleared = cleared + 1
-            end
-          end
-          if cleared > 0 then
-            u.log_error(string.format(
-              "gather mine-state: cleared %d tree/rock obstacle(s) near %s at %s -- " ..
-              "retrying select instead of blacklisting", cleared, q.resource, res_key),
-              "gather_queue")
-            q.select_fail_ticks = 0
+          -- OBSTRUCTION-CLEAR: a tree or rock on or beside the ore tile blocks its
+          -- selection for every body alike (the respawn below cannot help); she clears it
+          -- in real time (gather_obstruction.lua, driven from the top of this state) and
+          -- selects the tile again. Tried once per tile: a tile that still fails after that
+          -- falls through to the blacklist.
+          if not (q.obs_tried and q.obs_tried[res_key])
+             and obstruction.start(c, q, res, res_key) then
             return false
           end
           u.log_error(string.format(

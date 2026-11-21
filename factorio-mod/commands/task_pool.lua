@@ -29,11 +29,6 @@
 --   {type="find_existing", entity=NAME, radius=N}       -> ctx.px, ctx.py
 --   {type="set_position", x=, y=}                       -> ctx.px, ctx.py
 --   {type="verify_tile", resource=NAME}                -> aborts task if patch gone
---   {type="pick_orientation", primary=ENTITY, secondary=ENTITY, offsets={{dx,dy},...},
---                             opposite_direction=true|nil, primary_exists=true|nil,
---                             secondary_resource=NAME|nil,
---                             ignore_entities_at={{x=,y=},...}|nil}
---                                                       -> ctx.sx, ctx.sy, ctx.dir, ctx.dir2
 --   {type="place", which=/x,y/ref/candidates={{x=,y=,dir=},...}, entity=NAME, dir=N,
 --                  mirror=true|nil, filter=ITEM|nil,
 --                  ug="input"|"output"|nil}              -> horizontal mirror (live-
@@ -126,32 +121,13 @@
 -- furnace is already there, just add a drill to it") rather than starting from a raw
 -- resource tile like find_patch does.
 --
--- pick_orientation's primary_exists (2026-07-07, furnace-upgrade task): when
--- true, the primary (at ctx.px/py, e.g. an EXISTING furnace from find_existing)
--- is NOT can_place_entity-checked or re-placed -- it's already there. Only the
--- secondary's (e.g. a NEW drill's) candidate offset is checked/placed. Pairs
--- with secondary_resource=NAME to ALSO require that offset tile actually have
--- that resource underneath (a drill next to an existing furnace still needs
--- REAL ore there, same as run_verify_tile checks for the primary elsewhere) --
--- without this a candidate could pass can_place_entity yet sit on bare ground.
---
--- pick_orientation's ignore_entities_at (2026-07-07, coal_pair v1->v2 upgrade safety
--- fix): for an UPGRADE task that will "remove" existing entities and rebuild wider at
--- the SAME anchor, checking the wider candidates BEFORE removing anything can suffer
--- FALSE rejections (the still-present old entities' collision boxes can overlap a
--- wider candidate's footprint). Pass the old entities' known {x=,y=} positions here --
--- they get teleported far away, checked, and teleported back, all within this single
--- call (no player-visible flicker, no tick where they're actually gone) -- letting the
--- caller verify a rebuild position is valid BEFORE ever issuing a "remove" step, so a
--- failed pick_orientation never leaves a working setup mid-demolished.
---
 -- Every place/fuel/remove/read_drop_position step resolves ITS OWN target
 -- position the SAME way (step_target_pos), trying in order: explicit {x=,y=}
 -- (caller precomputed it) > candidates[1] (nominal walking target only -- see
 -- "place"'s own candidates note for actual placement resolution) > {ref=NAME}
 -- (a position an earlier read_drop_position step in THIS task saved under that
--- name) > which="primary"|"secondary" (ctx.px/py or ctx.sx/sy, from find_patch/
--- pick_orientation earlier in this task).
+-- name) > which="primary"|"secondary" (ctx.px/py or ctx.sx/sy, set by the position
+-- steps and by a finished place step with that which).
 --
 -- "place"'s candidates (2026-07-07, live-caught TWICE across separate runs: a
 -- single precomputed position -- e.g. an inserter placed exactly 1 tile from a
@@ -159,9 +135,7 @@
 -- (collision)" from sub-tile snap variance at that specific spot, even though
 -- the SAME code succeeds on a different map). An optional list of {x=,y=,dir=}
 -- alternatives lets the caller offer a few nearby fallback spots; the FIRST one
--- that passes can_place_entity at "acting" time is used -- mirrors
--- pick_orientation's own try-candidates-in-order robustness, applied to a
--- single free-standing placement instead of a primary/secondary pair.
+-- that passes can_place_entity at "acting" time is used.
 --
 -- read_drop_position (2026-07-07, coal_pair upgrade task) reads an entity's LIVE
 -- LuaEntity.drop_position -- the engine's own already-rotated absolute output
@@ -170,10 +144,7 @@
 -- Lets a task place a chest/container exactly where an EXISTING drill's mined
 -- output actually lands, whatever direction that drill happens to face.
 --
--- "place" also accepts an explicit simple-0-3 `dir` (bypassing ctx.dir/dir2,
--- which only exist when a pick_orientation step ran earlier in this task) --
--- needed when the caller precomputed the whole layout itself with no
--- pick_orientation step at all.
+-- "place" takes its direction from an explicit simple-0-3 `dir` (north when absent).
 
 local u = require("commands.init")
 local R = require("commands.reservations")
@@ -208,7 +179,6 @@ local run_find_existing = steps.run_find_existing
 local run_set_position = steps.run_set_position
 local run_find_patch = steps.run_find_patch
 local run_verify_tile = steps.run_verify_tile
-local run_pick_orientation = steps.run_pick_orientation
 local run_insert = steps.run_insert
 local run_set_recipe = steps.run_set_recipe
 local run_replace = require("commands.task_pool_replace").run_replace
@@ -222,9 +192,6 @@ local run_take = steps.run_take
 -- (this file only dispatches to ensure_item.start_ensure_item_action below and
 -- handles the resulting "gather"/"craft"/"chop" async polling itself, since that
 -- polling is scheduler state, not procurement logic).
-local WOOD_CHOP_REACH = 3           -- mirrors fac_mine_entity's own distance<=15 check loosely; close enough to swing
-                                     -- (sole remaining use: the "chop" dispatch below, in M.tick)
-
 function M.init()
   storage.tasks = storage.tasks or {}
   storage.next_task_id = storage.next_task_id or 1
@@ -260,17 +227,16 @@ function M.cancel_task(task_id)
     storage.active_step[t.cid] = nil
     local own_walk = active.state == "walking" or active.state == "building"
       or active.state == "laying"
-      or (active.state == "ensuring" and (active.ensuring_kind == "chop_walk"
-                                          or active.ensuring_kind == "fetch_walk"))
+      or (active.state == "ensuring" and active.ensuring_kind == "fetch_walk")
     if active.state == "building" then storage.build_queues[t.cid] = nil end
-    if active.state == "building" or (active.state == "acting" and active.cand_clear) then
+    if active.state == "building" or (active.state == "acting" and active.cand_clear)
+       or (active.state == "ensuring" and active.ensuring_kind == "chop") then
       local c = u.get_companion(t.cid)
       if c then clearing.release(t.cid, c) end       -- (mid-clearing: her mining and steps stop)
     end
     if own_walk then
-      storage.walking_queues[t.cid] = nil
       local c = u.get_companion(t.cid)
-      if c then c.entity.walking_state = {walking = false} end
+      if c then clearing.release(t.cid, c) else storage.walking_queues[t.cid] = nil end
     end
   end
   ledger.cancel_task(task_id, "cancelled by its submitter")
@@ -281,11 +247,8 @@ end
 -- size-refactor split) -- see local aliases above (targeting.step_target_pos/
 -- task_ready; the walk's end: targeting.step_reach).
 
--- The 6 run_* synchronous step handlers (read_drop_position/find_existing/
--- set_position/find_patch/verify_tile/pick_orientation) + their private
--- clear_natural_obstacles/restore_moved/run_pick_orientation_checks helpers
--- moved to task_pool_steps.lua (2026-07-19 size-refactor split) -- see local
--- aliases above.
+-- The synchronous step handlers (read_drop_position/find_existing/set_position/
+-- find_patch/verify_tile) are in task_pool_steps.lua -- see the local aliases above.
 
 -- ---- main scheduler tick ----
 
@@ -624,6 +587,16 @@ local function fail_orphans()
   end
 end
 
+-- The tree standing at `pos` (the nearest of those within a tile), or nil.
+local function nearest_tree(surface, pos)
+  local best, best_d = nil, math.huge
+  for _, tr in ipairs(surface.find_entities_filtered{type = "tree", position = pos, radius = 1}) do
+    local d = u.distance(pos, tr.position)
+    if tr.valid and d < best_d then best, best_d = tr, d end
+  end
+  return best
+end
+
 function M.tick()
   fail_orphans()
   refresh_needs()
@@ -634,13 +607,13 @@ function M.tick()
     if not t or t.status ~= "active" then
       -- (a walk of the step's own stops with it -- review: a task failed or cancelled
       -- through the ledger left her walking to its target, the idle pick blocked)
-      if active.state == "building" or (active.state == "acting" and active.cand_clear) then
+      if active.state == "building" or (active.state == "acting" and active.cand_clear)
+         or (active.state == "ensuring" and active.ensuring_kind == "chop") then
         clearing.release(cid, c)         -- (mid-clearing: her mining and steps stop)
       end
       if active.state == "walking" or active.state == "laying" or (active.state == "ensuring"
-          and (active.ensuring_kind == "chop_walk" or active.ensuring_kind == "fetch_walk")) then
-        storage.walking_queues[cid] = nil
-        c.entity.walking_state = {walking = false}
+          and active.ensuring_kind == "fetch_walk") then
+        clearing.release(cid, c)         -- (the walk's obstacle mining stops with it)
       end
       -- (a build it started ends too -- as M.cancel_task: no entity placed after it;
       -- one that finished in this same tick before the task ended -- the needs
@@ -670,8 +643,7 @@ function M.tick()
         -- within the step's reach (targeting.step_reach: a build, take, fill or empty
         -- reaches 10 tiles): no need to come closer -- an enclosed burner's centre was
         -- never reached, the walk timed out 2.5 tiles from it
-        storage.walking_queues[cid] = nil
-        c.entity.walking_state = {walking = false}
+        clearing.release(cid, c)         -- (an obstacle she was mining on the way stops too)
         active.state = "acting"
       elseif active.approach_deadline and game.tick >= active.approach_deadline
              + u.clearing_grace(cid) then
@@ -710,16 +682,14 @@ function M.tick()
           math.floor(q.clearing_ticks or 0),
           inv and tostring(inv.count_empty_stacks()) or "?")
         u.log_error(why, "task_pool")
-        storage.walking_queues[cid] = nil
-        c.entity.walking_state = {walking = false}
+        clearing.release(cid, c)         -- (the walk's obstacle mining stops with it)
         ledger.step_failed(active.task_id, why, active.step_start_tick)
         storage.active_step[cid] = nil
         goto continue
       elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t) then
         -- a better step takes over (walk_preempted): the walk dropped, the task keeps its
         -- cursor; the idle pick below starts the better one this same tick
-        storage.walking_queues[cid] = nil
-        c.entity.walking_state = {walking = false}
+        clearing.release(cid, c)         -- (the walk's obstacle mining stops with it)
         storage.active_step[cid] = nil
         storage.walk_preempts = storage.walk_preempts or {}
         storage.walk_preempts[cid] = (storage.walk_preempts[cid] or 0) + 1
@@ -757,16 +727,9 @@ function M.tick()
         -- there is no later "building" state to catch it) -- fail_task here or the
         -- task would sit stuck in "acting" forever with active_step never cleared.
         local pos = step_target_pos(t, step)
-        -- Explicit step.dir (simple 0-3, 2026-07-07 coal_pair upgrade) overrides
-        -- ctx.dir/dir2 when the caller precomputed the whole layout itself (no
-        -- pick_orientation step at all for this task) -- translated the SAME way
-        -- pick_orientation does, so callers use the identical simple convention.
-        local place_dir
-        if step.dir ~= nil then
-          place_dir = u.dir_map[step.dir]
-        else
-          place_dir = (step.which == "secondary" and t.ctx.dir2) or t.ctx.dir or 0
-        end
+        -- the explicit step.dir (simple 0-3) translated to the engine's direction
+        local place_dir = 0
+        if step.dir ~= nil then place_dir = u.dir_map[step.dir] end
         -- candidates (2026-07-07, live-caught): a SINGLE precomputed {x,y,dir}
         -- position (e.g. an inserter placed 1 tile from a chest read via
         -- read_drop_position) can intermittently collide -- observed twice
@@ -774,8 +737,7 @@ function M.tick()
         -- (sub-tile snap variance at that specific spot, not a logic bug). An
         -- optional list of {x=,y=,dir=} alternatives lets the caller offer a
         -- few nearby fallback spots; the FIRST one that passes can_place_entity
-        -- is used, mirroring pick_orientation's own try-candidates-in-order
-        -- robustness instead of committing to one fixed spot with no recourse.
+        -- is used instead of committing to one fixed spot with no recourse.
         if step.candidates then
           local surf = c.entity.surface
           local chosen = nil
@@ -849,7 +811,7 @@ function M.tick()
         end
       elseif step.type == "ensure_item" then
         -- Handled entirely inline, like "place" above (see this step type's own
-        -- header comment, near WOOD_CHOP_REACH, for the full design). Genuinely
+        -- header comment, in task_pool_ensure_item.lua, for the full design). Genuinely
         -- async (gather/craft/chop can each take many ticks) -- excluded from the
         -- generic ok/err fall-through below the same way "place" is.
         -- (no_pull / raw: the step's options, task_pool_ensure_item.lua; more = N: the
@@ -920,19 +882,12 @@ function M.tick()
           -- a walk to the place holding a smelted ingredient (task_pool_fetch.lua)
           fetch.begin_walk(c, cid, active, t)
         elseif kind == "chop" then
-          -- Skip the walk entirely if already close enough (mirrors "place"'s own
-          -- distance check in the idle-dispatch loop below) -- go straight to
-          -- chop_mine so a tree that happens to be right next to the companion
-          -- doesn't pay for a pointless 1-tick walking_queue round trip.
-          if u.distance(c.entity.position, t.ctx.wood_target) <= WOOD_CHOP_REACH then
-            active.state = "ensuring"
-            active.ensuring_kind = "chop_mine"
-          else
-            storage.walking_queues[cid] = {target = t.ctx.wood_target}
-            active.state = "ensuring"
-            active.ensuring_kind = "chop_walk"
-            active.chop_deadline = u.approach_deadline(c.entity.position, t.ctx.wood_target)
-          end
+          -- she walks to the tree and fells it with real mining time (clearing.step_target)
+          active.state = "ensuring"
+          active.ensuring_kind = "chop"
+          active.chop_st = {}
+          active.chop_wood_before = c.entity.get_main_inventory().get_item_count("wood")
+          active.chop_tree = nearest_tree(c.entity.surface, t.ctx.wood_target)
         else
           ledger.step_failed(active.task_id, err2 or "ensure_item failed", active.step_start_tick)
           storage.active_step[cid] = nil
@@ -1092,8 +1047,6 @@ function M.tick()
         ok, err = run_set_position(c, t, step)
       elseif step.type == "verify_tile" then
         ok, err = run_verify_tile(c, t, step)
-      elseif step.type == "pick_orientation" then
-        ok, err = run_pick_orientation(c, t, step)
       elseif step.type == "read_drop_position" then
         ok, err = run_read_drop_position(c, t, step)
       else
@@ -1153,25 +1106,17 @@ function M.tick()
         -- Sync ctx to the REAL placed position (2026-07-07, live-caught): create_entity
         -- can snap a 2x2 entity to a different grid alignment than the 1x1 ore tile
         -- position find_patch recorded (observed: requested (46.5,-185.5), actually
-        -- landed at (47,-185)). If this was the PRIMARY and a secondary offset was
-        -- already chosen (pick_orientation ran before this), recompute sx/sy from the
-        -- REAL px/py so the secondary's own place step doesn't overlap the primary's
-        -- true footprint -- fuel steps use step_target_pos too, so this must happen
-        -- before either later step's target position is read.
+        -- landed at (47,-185)). Fuel steps use step_target_pos too, so this must happen
+        -- before a later step's target position is read.
         if step.which == "primary" and st.position then
           t.ctx.px, t.ctx.py = st.position.x, st.position.y
-          if t.ctx.offset_dx then
-            t.ctx.sx = t.ctx.px + t.ctx.offset_dx
-            t.ctx.sy = t.ctx.py + t.ctx.offset_dy
-          end
         elseif step.which == "secondary" and st.position then
           t.ctx.sx, t.ctx.sy = st.position.x, st.position.y
         end
         -- the placed entity's item is used up: out of the shared reservations (ledger)
         ledger.consume(t, step.entity, 1)
         -- what the task put down, at its REAL position (build_plan.placed: what to pick
-        -- up again after a task that did not finish -- for any task, a candidate's or
-        -- a pick_orientation's place too)
+        -- up again after a task that did not finish -- for any task, a candidate's place too)
         if st.position then
           t.placed = t.placed or {}
           t.placed[#t.placed + 1] = {entity = step.entity, x = st.position.x,
@@ -1216,53 +1161,28 @@ function M.tick()
         active.state = "acting"
       elseif active.ensuring_kind == "fetch_walk" then
         if fetch.poll(c, cid, active, t) then goto continue end
-      elseif active.ensuring_kind == "chop_walk" then
-        if not storage.walking_queues[cid] then
-          active.ensuring_kind = "chop_mine"  -- arrived -> fall through below, same tick
-        elseif active.chop_deadline and game.tick >= active.chop_deadline then
-          -- Bounded give-up (mirrors every other approach_deadline in this file):
-          -- blacklist this SPECIFIC tree so the next "acting" pass picks a
-          -- DIFFERENT one instead of re-selecting the identical unreachable tree
-          -- forever (the exact "no exclude" bug class already fixed once for
-          -- _chop_wood itself, spatial_demo.py -- applied here from the start).
-          storage.walking_queues[cid] = nil
-          c.entity.walking_state = {walking = false}
-          local key = math.floor(t.ctx.wood_target.x) .. "," .. math.floor(t.ctx.wood_target.y)
-          t.ctx.wood_tried[key] = true
-          active.state = "acting"
-        else
+      elseif active.ensuring_kind == "chop_walk" or active.ensuring_kind == "chop_mine" then
+        -- (a chop a save of an older mod left half done: it starts again as the timed chop)
+        storage.walking_queues[cid] = nil
+        active.ensuring_kind = "chop"
+        active.chop_st = {}
+        active.chop_wood_before = c.entity.get_main_inventory().get_item_count("wood")
+        active.chop_tree = nearest_tree(c.entity.surface, t.ctx.wood_target)
+      elseif active.ensuring_kind == "chop" then
+        local tree = active.chop_tree
+        if tree and clearing.step_target(cid, c, active.chop_st, tree) == "busy" then
           goto continue
         end
-      end
-      if active.state == "ensuring" and active.ensuring_kind == "chop_mine" then
-        local trees = c.entity.surface.find_entities_filtered{
-          type = "tree", position = t.ctx.wood_target, radius = 1}
-        if trees[1] and trees[1].valid then
-          local inv = c.entity.get_main_inventory()
-          local before = inv.get_item_count("wood")
-          -- REVERTED (2026-08-02, task #82 course-correction) -- see
-          -- queues_build.lua's clear_build_area comment for the full reasoning: the
-          -- companion must NEVER refuse to collect wood -- back to unconditional
-          -- mine{inventory=...} exactly as before the 2026-08-01 WOOD_STOCK_CAP
-          -- attempt.
-          trees[1].mine{inventory = inv}
-          inv_watch.gained(c.entity)
-          if inv.get_item_count("wood") > before then
-            t.ctx.wood_chop_count = (t.ctx.wood_chop_count or 0) + 1
-          else
-            -- Mined but yielded nothing new (inventory full?) -- blacklist so this
-            -- exact tree isn't retried forever; a genuinely full inventory will
-            -- surface via the NEXT tree's identical failure, not silently loop.
-            local key = math.floor(t.ctx.wood_target.x) .. "," .. math.floor(t.ctx.wood_target.y)
-            t.ctx.wood_tried[key] = true
-          end
+        -- (the tree is down, or left standing: not reached, not mined in time, or gone
+        -- to another before she came -- a tree that gave no wood is not tried again)
+        local inv = c.entity.get_main_inventory()
+        if inv.get_item_count("wood") > active.chop_wood_before then
+          t.ctx.wood_chop_count = (t.ctx.wood_chop_count or 0) + 1
         else
-          -- Tree gone (another companion/process claimed it between selection and
-          -- arrival) -- blacklist and retry with a fresh selection, don't fail the
-          -- whole task over a single vanished tree.
           local key = math.floor(t.ctx.wood_target.x) .. "," .. math.floor(t.ctx.wood_target.y)
           t.ctx.wood_tried[key] = true
         end
+        active.chop_tree, active.chop_st, active.chop_wood_before = nil, nil, nil
         active.state = "acting"
       end
     end

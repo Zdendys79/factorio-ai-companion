@@ -330,6 +330,14 @@ function M.tick_orphan_mining_cleanup()
       if c then tracked[c.entity.unit_number] = true end
     end
   end
+  -- (clearing.lua: a tree, rock or loose item in the way of a build, a lay or a wood
+  -- chop -- it stamps the tick of its last mining cycle)
+  for cid, tick in pairs(storage.clearing_mining or {}) do
+    if game.tick - tick <= ORPHAN_CHECK_INTERVAL then
+      local c = valid_companion(cid)
+      if c then tracked[c.entity.unit_number] = true end
+    end
+  end
   for _, surface in pairs(game.surfaces) do
     for _, e in ipairs(surface.find_entities_filtered{type = "character"}) do
       if e.valid and not e.player and e.mining_state.mining and not tracked[e.unit_number] then
