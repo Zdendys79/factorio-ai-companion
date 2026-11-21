@@ -181,6 +181,25 @@ local function coal_wanted_elsewhere(cid)
   return false
 end
 
+-- Whether a task of the controller's stands at an ensure_item step for the fuel itself
+-- (Python's coal rescue, a build's coal): the ledger counts that step as a SUPPLY, never a
+-- need, so coal_wanted_elsewhere misses it -- yet she is short of coal. Without this the
+-- upkeep put the coal she had just fetched into a fuel chest (up to 4 stacks) and her
+-- rescue waited 12-17 game minutes at the start of a run (smoke 40: [COALTAKE] rounds of
+-- ~36 coal, the deficit unchanged; [COALPUT] insert steps of the upkeep into one chest).
+-- A SOFT block: a need that is not urgent (more than URGENT_FUEL_S of fuel left) gets no
+-- coal from her meanwhile; an urgent one (a boiler about to die) still does.
+local URGENT_FUEL_S = 120
+local function coal_awaited_by_step(cid)
+  for _, t in pairs(storage.tasks) do
+    if t.cid == cid and t.status == "active" and t.kind ~= "upkeep" then
+      local step = t.steps and t.steps[t.cursor]
+      if step and step.type == "ensure_item" and step.item == M.FUEL then return true end
+    end
+  end
+  return false
+end
+
 -- (the log books: commands/upkeep_logs.lua -- the feed's, the stock's and the fetch's
 -- books pruned too: their LOG_BOOKS -- review: they were never pruned)
 local log_once = Logs.log_once
@@ -421,8 +440,11 @@ local function scan(cid, c)
   end
   -- the fuel an upkeep task for need n takes (upkeep_batch.choose; `extra`: what a task
   -- about to be replaced would release, by item)
+  local awaited = coal_awaited_by_step(cid)
   local function choose(n, extra)
-    return B.choose(M, n, extra or {}, inv, blocked, free_coal(), cid)
+    return B.choose(M, n, extra or {}, inv,
+                    blocked or (awaited and (n.t or math.huge) > URGENT_FUEL_S),
+                    free_coal(), cid)
   end
   local function open_count()
     local k = 0
@@ -513,7 +535,11 @@ local function scan(cid, c)
   end
   -- getting the coal she lacks (not while another task waits for coal: its own
   -- ensure_item gets it, and a fetch under way is not withdrawn meanwhile)
-  if not blocked then
+  local urgent = false
+  for _, n in ipairs(needs) do
+    if (n.t or math.huge) <= URGENT_FUEL_S then urgent = true; break end
+  end
+  if not blocked and not (awaited and not urgent) then
     local fills = {}
     for _, n in ipairs(needs) do
       if n.into then fills[n.key] = true end

@@ -1063,6 +1063,11 @@ function M.tick()
               ok, err = false, "no burner nearby had room for " .. step.item
             else
               ledger.consume(t, step.item, delivered)   -- used up: out of the reservations
+              if step.item == "coal" then   -- (the early coal wait's trace: where her coal goes)
+                log(string.format("[ai-companion] [COALPUT] fuel step: %d coal into burners at "
+                                  .. "(%.1f,%.1f) (task %s kind %s)", delivered, pos.x, pos.y,
+                                  tostring(t.id), tostring(t.kind)))
+              end
               result = {inserted = delivered, item = step.item}   -- (reported in step_results)
             end
           end

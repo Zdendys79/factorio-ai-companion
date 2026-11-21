@@ -92,6 +92,11 @@ function M.run_insert(c, t, step)
   end
   if removed > 0 then ledger.consume(t, step.item, removed) end
   if removed <= 0 then return false, "insert: no " .. step.item .. " left in inventory" end
+  if step.item == "coal" then            -- (the early coal wait's trace: where her coal goes)
+    log(string.format("[ai-companion] [COALPUT] insert step: %d coal into %s at (%.1f,%.1f) "
+                      .. "(task %s kind %s)", removed, target.name, target.position.x,
+                      target.position.y, tostring(t.id), tostring(t.kind)))
+  end
   return true, nil
 end
 

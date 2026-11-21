@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.240
+  Bugfixes:
+    - The upkeep no longer feeds the coal she has just fetched for her own ensure_item coal step
+      (Python's coal rescue, a build's coal) into the fuel chests: the ledger counts that step
+      as a supply, so "another task waits for coal" never saw it, and her rescue waited 12-17 game
+      minutes at the start of a run while the upkeep poured her coal into a stone drill's fuel
+      chest (up to 4 stacks). A soft block: needs with more than 120 s of fuel left get no coal
+      from her and the upkeep's own coal fetch pauses meanwhile; an urgent need (a boiler about
+      to die) is still served. Live: 4 runs in a row without the long wait (it came in 5 of 12
+      before).
+    - A trace of where coal goes: [COALPUT] for the upkeep's insert / fuel steps.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.239
   Changes:
     - A trace of who takes coal out of chests: "[COALTAKE] fetch: N coal from <chest> (M left)" and
