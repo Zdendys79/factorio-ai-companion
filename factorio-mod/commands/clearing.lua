@@ -24,6 +24,9 @@ M.STEER_FROM = 6.0          -- nearer than this she steers straight at the obsta
 M.MINE_TICKS = 900          -- the longest she mines one obstacle before she leaves it
 M.WALK_TICKS = 1200         -- the longest she walks toward one obstacle
 M.STUCK_TICKS = 90          -- steering straight at it without moving this long: the pathfinder takes her
+M.STUCK_REACH = 3.1        -- a tree she cannot get nearer to is mined from this far (its selection box is ~0.4 round it)
+M.STUCK_MINE_TICKS = 150   -- the longest she mines from the stuck spot (a tree ~66 ticks): the ladder must end before the 600-tick backstop
+M.PATH_STUCK_TICKS = 200   -- a path walk that moves her less than STUCK_MOVE this long: she tries from here, then leaves the obstacle
 M.STUCK_MOVE = 0.3          -- (moved less than this many tiles in STUCK_TICKS = stuck)
 local OBSTACLE_TYPES = {"tree", "simple-entity"}
 
@@ -168,10 +171,12 @@ function M.step(cid, c, st, entity_name, position, direction)
   if st.target ~= best then
     st.target, st.mining, st.mine_started = best, nil, nil
     st.steer_pos, st.steer_tick, st.path_mode = nil, nil, nil
+    st.path_pos, st.path_tick, st.reach_ext = nil, nil, nil
     st.started = game.tick
   end
   local waited = game.tick - (st.started or game.tick)
-  if best_d > M.REACH then
+  local reach = st.reach_ext and M.STUCK_REACH or M.REACH
+  if best_d > reach then
     -- walk closer: to a point AIM_NEAR from it, on her side
     if waited >= M.WALK_TICKS then
       st.skip[key(best)] = true
@@ -200,6 +205,27 @@ function M.step(cid, c, st, entity_name, position, direction)
         end
       end
       if st.path_mode then
+        -- (a path walk that gets her no nearer is left after PATH_STUCK_TICKS -- sooner than the
+        -- task pool's no-progress backstop (600 ticks), which would otherwise fail the whole
+        -- build: smoke 2026-11-21, a tree 2.7 tiles off, her reach 2.5, "state clearing, path=true")
+        if not st.path_pos or u.distance(st.path_pos, p) >= M.STUCK_MOVE then
+          st.path_pos, st.path_tick = {x = p.x, y = p.y}, game.tick
+        elseif game.tick - st.path_tick >= M.PATH_STUCK_TICKS then
+          st.path_pos, st.path_tick = nil, nil
+          stand_down(cid, c, st)
+          if best_d <= M.STUCK_REACH and not st.reach_ext then
+            -- (she cannot get nearer: the engine mines a tree from its selection box, a little
+            -- farther than REACH -- try from here before leaving it)
+            st.reach_ext = true
+            return "busy"
+          end
+          st.skip[key(best)] = true
+          u.log_error(string.format("clearing: %s at (%.1f,%.1f) %.1f tiles off, the path walk "
+                                    .. "got her no nearer in %d ticks -- left", best.name,
+                                    best.position.x, best.position.y, best_d,
+                                    M.PATH_STUCK_TICKS), "clearing")
+          return "busy"
+        end
         path_to()                 -- (kept going: the walker's pathfinding is taking her round)
       elseif st.steer_pos and u.distance(st.steer_pos, p) < M.STUCK_MOVE
              and game.tick - st.steer_tick >= M.STUCK_TICKS then
@@ -244,7 +270,8 @@ function M.step(cid, c, st, entity_name, position, direction)
     return "busy"
   end
   st.mine_started = st.mine_started or game.tick       -- (the mining time counts from here)
-  if game.tick - st.mine_started >= M.MINE_TICKS then
+  -- (from the stuck spot she tries only a while: the task pool's no-progress backstop is 600 ticks)
+  if game.tick - st.mine_started >= (st.reach_ext and M.STUCK_MINE_TICKS or M.MINE_TICKS) then
     -- it does not come down (a full inventory): left, the build fails its check
     st.skip[key(best)] = true
     stand_down(cid, c, st)

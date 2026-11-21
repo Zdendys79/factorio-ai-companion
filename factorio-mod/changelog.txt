@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.241
+  Bugfixes:
+    - Clearing: a tree she cannot get within her reach of (a path walk that moves her less than
+      0.3 tiles in 200 ticks, e.g. 2.6 tiles off with reach 2.5) is mined from where she stands
+      (within 3.1 tiles, for at most 150 ticks), else left -- before the task pool's 600-tick
+      no-progress backstop fails the whole build ("state clearing, path=true", a green block's
+      build in a 30-minute smoke). Live: a tree ringed by 16 chests, the old mod failed in 605
+      ticks, the new one places the chest in 539.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.240
   Bugfixes:
     - The upkeep no longer feeds the coal she has just fetched for her own ensure_item coal step
