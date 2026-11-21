@@ -111,6 +111,10 @@ local function take(c, e, item, want)
   local put = c.entity.insert{name = item, count = removed}
   if put < removed then inv.insert{name = item, count = removed - put} end
   if put > 0 then inv_watch.gained(c.entity) end
+  if item == "coal" and put > 0 then     -- (the early coal wait's trace: who takes what)
+    log(string.format("[ai-companion] [COALTAKE] fetch: %d coal from %s at (%.1f,%.1f) (%d left)",
+                      put, e.name, e.position.x, e.position.y, inv.get_item_count(item)))
+  end
   return put
 end
 

@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.239
+  Changes:
+    - A trace of who takes coal out of chests: "[COALTAKE] fetch: N coal from <chest> (M left)" and
+      "[COALTAKE] take step: ..." (the early coal wait of a run: the coal pairs' chests grow, her
+      coal rescue waits -- who takes the production is the question). A log line only.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.238
   Changes:
     - The task pool's "fuel" step reports what it put in ({inserted, item} in step_results), so the

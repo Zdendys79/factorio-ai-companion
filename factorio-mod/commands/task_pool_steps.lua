@@ -251,6 +251,11 @@ function M.run_take(c, t, step)
   if got < n then inv.insert{name = step.item, count = n - got} end
   if got <= 0 then return false, "take: no room in her inventory for " .. step.item end
   inv_watch.gained(c.entity)
+  if step.item == "coal" then            -- (the early coal wait's trace: who takes what)
+    log(string.format("[ai-companion] [COALTAKE] take step: %d coal from %s at (%.1f,%.1f) "
+                      .. "(%d left)", got, chest.name, chest.position.x, chest.position.y,
+                      inv.get_item_count(step.item)))
+  end
   return true, nil
 end
 
