@@ -2,7 +2,6 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
-local entity_at = require("commands.entity_at")
 local machine_fill = require("commands.machine_fill")
 local ledger = require("commands.task_pool_ledger")
 local machine_empty = require("commands.machine_empty")
@@ -62,23 +61,15 @@ commands.add_command("fac_building_place", nil, function(cmd)
   end)
 end)
 
+-- Retired: a pick-up takes her mining time, which a one-shot command cannot give -- it is
+-- the task pool's "remove" step (CompanionAPI.pick_up / remove).
 commands.add_command("fac_building_remove", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+(%S+)%s+([%d.-]+)%s+([%d.-]+)$", cmd.parameter)
-    local id, c = u.find_companion(args[1])
+    local args = u.parse_args("^(%S+)", cmd.parameter)
+    local id = u.find_companion(args[1])
     if not id then u.not_found(); return end
-    local name, x, y = args[2], tonumber(args[3]), tonumber(args[4])
-    if not x or not y then u.error_response("Invalid coordinates"); return end
-    -- the entity the position means: the nearest of that name, on it (entity_at.find)
-    local t = entity_at.find(c.entity.surface, name, {x = x, y = y}, c.entity.force)
-    if not t then u.json_response({id = id, error = "Not found"}); return end
-    if u.distance(c.entity.position, t.position) > 10 then u.json_response({id = id, error = "Too far"}); return end
-    local ok, err = entity_at.mine_into(c, t)
-    if ok then
-      u.json_response({id = id, removed = true, entity = name})
-    else
-      u.json_response({id = id, error = err})
-    end
+    u.json_response({id = id, error = "fac_building_remove is retired: a pick-up is a task "
+                                      .. "step (remove) that takes her mining time"})
   end)
 end)
 

@@ -135,7 +135,10 @@ local function prelude(cid, c, st)
     -- else runs meanwhile
     local r = make_room(cid, c, st)
     if r == "busy" then return true end
-    if r == "none" then st.skip[st.relief] = true end
+    if r == "none" then
+      st.skip[st.relief] = true
+      st.room_failed = true         -- (no room could be made: a pick-up reads "inventory full")
+    end
     st.relief, st.room_since = nil, nil
     return true
   end
@@ -145,6 +148,23 @@ local function prelude(cid, c, st)
     st.target = nil
   end
   return false
+end
+
+-- A target wider than this (half its box side; a tree's box is under it) is reached from its
+-- edge, not from its centre (a crash-site wreck's centre lies inside its own collision box:
+-- nobody can stand there).
+local BIG_HALF = 1.4
+
+-- The point of `best` she reaches from: its centre for a small target; for a big one the
+-- point of its box nearest to her.
+local function reach_point(best, p)
+  local bb = best.selection_box
+  if not bb then return best.position end
+  local hx = (bb.right_bottom.x - bb.left_top.x) / 2
+  local hy = (bb.right_bottom.y - bb.left_top.y) / 2
+  if hx <= BIG_HALF and hy <= BIG_HALF then return best.position end
+  return {x = math.min(math.max(p.x, bb.left_top.x), bb.right_bottom.x),
+          y = math.min(math.max(p.y, bb.left_top.y), bb.right_bottom.y)}
 end
 
 -- One cycle of work on `best`: the walk to it, then its mining (or the pick-up of a loose
@@ -160,6 +180,8 @@ local function work(cid, c, st, best, best_d, kind)
   end
   local waited = game.tick - (st.started or game.tick)
   local reach = st.reach_ext and M.STUCK_REACH or M.REACH
+  local spot = reach_point(best, e.position)
+  best_d = u.distance(e.position, spot)
   if best_d > reach then
     -- walk closer: to a point AIM_NEAR from it, on her side
     if waited >= M.WALK_TICKS then
@@ -174,8 +196,8 @@ local function work(cid, c, st, best, best_d, kind)
       if not storage.walking_queues[cid] then
         local p = e.position
         storage.walking_queues[cid] = {
-          target = {x = best.position.x + (p.x - best.position.x) / best_d * AIM_NEAR,
-                    y = best.position.y + (p.y - best.position.y) / best_d * AIM_NEAR}}
+          target = {x = spot.x + (p.x - spot.x) / best_d * AIM_NEAR,
+                    y = spot.y + (p.y - spot.y) / best_d * AIM_NEAR}}
       end
     else
       -- near: her last steps straight at it (the walker ends a walk within 2 tiles of its
@@ -184,8 +206,8 @@ local function work(cid, c, st, best, best_d, kind)
       local function path_to()
         if not storage.walking_queues[cid] then
           storage.walking_queues[cid] = {
-            target = {x = best.position.x + (p.x - best.position.x) / best_d * AIM_NEAR,
-                      y = best.position.y + (p.y - best.position.y) / best_d * AIM_NEAR}}
+            target = {x = spot.x + (p.x - spot.x) / best_d * AIM_NEAR,
+                      y = spot.y + (p.y - spot.y) / best_d * AIM_NEAR}}
         end
       end
       if st.path_mode then

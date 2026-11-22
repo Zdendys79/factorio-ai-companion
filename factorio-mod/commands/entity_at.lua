@@ -1,7 +1,5 @@
--- The entity a command or a task step means at a position, and its pick-up (shared by
--- building.lua's fac_building_remove and the task pool's "remove" step).
-local inv_watch = require("commands.inventory_watch")
-
+-- The entity a task step means at a position (the task pool's "remove" step; its
+-- pick-up itself: task_pool_remove.lua).
 local M = {}
 
 -- how far off an entity's selection box a requested position may lie: callers pass a
@@ -32,21 +30,6 @@ function M.find(surface, name, pos, force)
     return nil
   end
   return t
-end
-
--- MINE `t` (native) into the companion's inventory: its real item and its contents go
--- there and the game removes it -- never a fabricated item and a free destroy. With a
--- full inventory mine{} leaves it standing -- also when only its contents fitted (they
--- moved, the item count rose, the entity still stands: judged by the entity, not the
--- count -- independent review). Returns true, or false and the reason.
-function M.mine_into(c, t)
-  local mined = t.mine{inventory = c.entity.get_main_inventory()}
-  if not mined or t.valid then
-    inv_watch.gained(c.entity)          -- (its contents may have moved)
-    return false, "Cannot remove (inventory full?)"
-  end
-  inv_watch.gained(c.entity)
-  return true
 end
 
 return M

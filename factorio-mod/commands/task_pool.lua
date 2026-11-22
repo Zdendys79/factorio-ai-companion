@@ -162,6 +162,7 @@ local entity_at = require("commands.entity_at")
 local machine_steps = require("commands.task_pool_machine_steps")
 local fetch = require("commands.task_pool_fetch")
 local lay = require("commands.task_pool_lay")
+local pickup = require("commands.task_pool_remove")
 
 -- an ensure_item craft waits at most this long for her crafting queue to empty
 local CRAFT_QUEUE_WAIT_TICKS = 1800
@@ -230,6 +231,7 @@ function M.cancel_task(task_id)
       or (active.state == "ensuring" and active.ensuring_kind == "fetch_walk")
     if active.state == "building" then storage.build_queues[t.cid] = nil end
     if active.state == "building" or (active.state == "acting" and active.cand_clear)
+       or active.state == "removing"
        or (active.state == "ensuring" and active.ensuring_kind == "chop") then
       local c = u.get_companion(t.cid)
       if c then clearing.release(t.cid, c) end       -- (mid-clearing: her mining and steps stop)
@@ -608,6 +610,7 @@ function M.tick()
       -- (a walk of the step's own stops with it -- review: a task failed or cancelled
       -- through the ledger left her walking to its target, the idle pick blocked)
       if active.state == "building" or (active.state == "acting" and active.cand_clear)
+         or active.state == "removing"
          or (active.state == "ensuring" and active.ensuring_kind == "chop") then
         clearing.release(cid, c)         -- (mid-clearing: her mining and steps stop)
       end
@@ -699,6 +702,15 @@ function M.tick()
       end
     end
 
+    if active.state == "removing" then
+      -- a pick-up in real mining time (task_pool_remove.lua); its end runs through the
+      -- acting state below, this same tick, with the result
+      local going, done_ok, done_err = pickup.tick(cid, c, active)
+      if going then goto continue end
+      active.remove_result = {ok = done_ok, err = done_err}
+      active.state = "acting"
+    end
+
     if active.state == "acting" then
       local ok, err, result = true, nil, nil
       -- A step that acts on a target by hand (remove, fuel, insert, set_recipe, take,
@@ -706,10 +718,11 @@ function M.tick()
       -- within her reach: the walk also ends when the walker gives it up (its queue
       -- dropped -- an entity across water), and the step would then reach from any
       -- distance (independent review: a pick-up mined from tens of tiles away). Out
-      -- of reach it fails "Too far", as fac_building_remove does.
+      -- of reach it fails "Too far".
       local reach_pos = REACH_STEPS[step.type] and step_target_pos(t, step)
-      local too_far = reach_pos and u.distance(c.entity.position, reach_pos)
-                                    > targeting.step_reach(c.entity, step)
+      local too_far = reach_pos and not active.remove_result
+                      and u.distance(c.entity.position, reach_pos)
+                          > targeting.step_reach(c.entity, step)
       if too_far then
         ok, err = false, string.format("Too far: %s target (%.1f,%.1f) is %.1f tiles from her",
                                        step.type, reach_pos.x, reach_pos.y,
@@ -895,25 +908,29 @@ function M.tick()
       elseif step.type == "remove" then
         -- Pick up an existing entity (2026-07-07, coal_pair upgrade task: reuses
         -- the 2 ALREADY-BUILT coal_pair drills rather than crafting new ones --
-        -- Zdendys: "zvedne obe vrtacky, nemusi je vyrabet"). Native mine into her
-        -- inventory (entity_at.mine_into: done only when mine{} succeeds and the
-        -- entity is gone -- mine{} leaves it INTACT if her inventory can't hold it,
-        -- no silent item loss, no cheat).
-        -- The entity is the one the position means (entity_at.find: the nearest of
-        -- that name and force, on it -- not the first found, a neighbour of the same
-        -- name could be mined; the same pick as fac_building_remove). An unresolved
-        -- position fails the step cleanly (the fuel step's nil-pos wedge below).
-        local pos = step_target_pos(t, step)
-        local target = pos and entity_at.find(c.entity.surface, step.entity, pos,
-                                              c.entity.force)
-        if not pos then
-          ok, err = false, "remove: no target position resolved"
-        elseif not target then
-          -- "Not found" first, as fac_building_remove's: a caller tells a part already
-          -- gone from a real failure by it (CompanionAPI.pick_up)
-          ok, err = false, "Not found: no " .. step.entity .. " at the target"
+        -- Zdendys: "zvedne obe vrtacky, nemusi je vyrabet"). She mines it with real
+        -- mining time (task_pool_remove.lua, the "removing" state above): the item and
+        -- a chest's contents go into her inventory; it stands on when her inventory
+        -- cannot hold it. The entity is the one the position means (entity_at.find:
+        -- the nearest of that name and force, on it -- a neighbour of the same name
+        -- must not be mined). An unresolved position fails the step cleanly (the fuel
+        -- step's nil-pos wedge below).
+        if active.remove_result then
+          ok, err = active.remove_result.ok, active.remove_result.err
+          active.remove_result = nil
         else
-          ok, err = entity_at.mine_into(c, target)
+          local pos = step_target_pos(t, step)
+          local target = pos and entity_at.find(c.entity.surface, step.entity, pos,
+                                                c.entity.force)
+          if not pos then
+            ok, err = false, "remove: no target position resolved"
+          elseif not target then
+            -- "Not found" first: a caller tells a part already gone from a real
+            -- failure by it (CompanionAPI.pick_up)
+            ok, err = false, "Not found: no " .. step.entity .. " at the target"
+          else
+            pickup.begin(c, active, target)
+          end
         end
       elseif step.type == "fuel" then
         local pos = step_target_pos(t, step)
@@ -1057,7 +1074,8 @@ function M.tick()
       -- transitioned to their own separate polling state) -- every OTHER step
       -- type completes synchronously within this same tick, so their ok/err is
       -- resolved here.
-      if step.type ~= "place" and step.type ~= "ensure_item" and step.type ~= "lay" then
+      if step.type ~= "place" and step.type ~= "ensure_item" and step.type ~= "lay"
+         and active.state == "acting" then
         if ok then
           -- step_ticks: see the "ensure_item" cursor-advance site above for the
           -- full rationale (same capture, same pre-increment cursor key).
