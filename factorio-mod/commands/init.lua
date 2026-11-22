@@ -173,6 +173,12 @@ function M.log_error(msg, ctx)
   storage.error_counts = storage.error_counts or {}
   local key = ctx or "internal"
   storage.error_counts[key] = (storage.error_counts[key] or 0) + 1   -- (all of them: the ring keeps 50)
+  -- (the last 3 messages of each context: the ring is crowded out by a frequent one)
+  storage.error_samples = storage.error_samples or {}
+  local samples = storage.error_samples[key] or {}
+  samples[#samples + 1] = {tick = game.tick, error = tostring(msg)}
+  if #samples > 3 then table.remove(samples, 1) end
+  storage.error_samples[key] = samples
   table.insert(storage.errors, {context = key, error = tostring(msg), tick = game.tick})
   if #storage.errors > 50 then table.remove(storage.errors, 1) end
 end

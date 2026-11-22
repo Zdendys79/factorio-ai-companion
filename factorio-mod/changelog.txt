@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.249
+  Features:
+    - /fac_get_errors also answers "samples": the last 3 messages of each error context, so a
+      frequent context (walk retargets, no-path walks) shows what it is about.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.248
   Features:
     - /fac_get_errors also answers "counts": how many errors of each context the mod logged since
