@@ -165,7 +165,8 @@ end
 -- `kind` (commands/priority.lua: build / relocate / dismantle, default build) gives
 -- the task its base priority -- the scheduler runs the step with the highest
 -- priority raised by nearness. The mod's own upkeep (commands/upkeep.lua) submits
--- kind "upkeep" with its computed priority `p` (not open to /fac_task_submit).
+-- kind "upkeep" with its computed priority `p` (not open to /fac_task_submit). A build
+-- request may carry its own `p` (already validated by priority.build_request).
 function M.submit_task(cid, steps, kind, p)
   local c = u.get_companion(cid)
   if not c then return {error = "Invalid companion"} end
@@ -176,6 +177,7 @@ function M.submit_task(cid, steps, kind, p)
     base = type(p) == "number" and p or nil
   else
     base = priority.base(kind)
+    if kind == "build" and type(p) == "number" then base = p end
   end
   if not base then return {error = "Unknown task kind: " .. tostring(kind)} end
 

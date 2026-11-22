@@ -11,6 +11,10 @@ local M = {}
 -- a task's base priority by its kind
 M.BASE = {build = 2, relocate = 3, dismantle = 4}
 M.DEFAULT_KIND = "build"
+-- the highest a build request may be raised to (/fac_task_submit "priority"): just below
+-- the plain relocation, so a build ranks below a relocation or a dismantling at equal
+-- distance and age
+M.BUILD_MAX = 2.9
 -- the mod's own upkeep tasks (commands/upkeep.lua): their priority is computed (the
 -- time a burner's fuel lasts, its output's fill) and kept up to date by the upkeep
 M.UPKEEP_KIND = "upkeep"
@@ -20,6 +24,20 @@ M.UPKEEP_KIND = "upkeep"
 -- @return number|nil
 function M.base(kind)
   return M.BASE[kind or M.DEFAULT_KIND]
+end
+
+-- A build request's own priority, validated and clamped to [BASE.build, BUILD_MAX].
+-- @param kind string|nil the task's kind
+-- @param p any the requested value
+-- @return number|nil the priority; nil and an error text when refused
+function M.build_request(kind, p)
+  if (kind or M.DEFAULT_KIND) ~= "build" then
+    return nil, "\"priority\" is only for kind \"build\" tasks"
+  end
+  if type(p) ~= "number" or p ~= p or p == math.huge or p == -math.huge then
+    return nil, "\"priority\" must be a finite number"
+  end
+  return math.min(M.BUILD_MAX, math.max(M.BASE.build, p))
 end
 
 -- A priority aged: p times log2 of the ticks since `since` (Zdendys: every command and

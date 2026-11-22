@@ -56,7 +56,9 @@ end)
 --                              | {"kind": KIND, "plan": build_plan}>
 -- build_plan: a whole build, split into steps by the mod (commands/build_plan.lua).
 -- KIND: build (the default), relocate, dismantle -- the task's base priority
--- (commands/priority.lua).
+-- (commands/priority.lua). An optional "priority": p beside "kind" (kind build only; a
+-- finite number, clamped to [2, 2.9], commands/priority.lua build_request) raises a
+-- build above the plain build; anything else is refused. Echoed by fac_task_status.
 -- json_step_list is a JSON array of step objects, e.g.
 --   [{"type":"find_patch","resource":"iron-ore"},
 --    {"type":"verify_tile","resource":"iron-ore"},
@@ -82,7 +84,8 @@ commands.add_command("fac_task_submit", nil, function(cmd)
     -- commands/priority.lua); a plain step array is a build. {"kind": ..., "plan":
     -- {...}}: a whole build plan, split into the task's steps by the mod itself
     -- (commands/build_plan.lua); the plan's name names the task.
-    local kind, name, anchor = nil, nil, nil
+    local kind, name, anchor, requested = nil, nil, nil, nil
+    if type(steps) == "table" then requested = steps.priority end
     local surface = type(steps) == "table" and type(steps.surface) == "string" and steps.surface or nil
     local primary = type(steps) == "table" and steps.primary == true
     if type(steps) == "table" and type(steps.plan) == "table" then
@@ -111,7 +114,16 @@ commands.add_command("fac_task_submit", nil, function(cmd)
       u.error_response("kind \"upkeep\" is the mod's own (commands/upkeep.lua)", "task_submit")
       return
     end
-    local result = task_pool.submit_task(id, steps, kind)
+    local build_p
+    if requested ~= nil then
+      local err
+      build_p, err = priority.build_request(kind, requested)
+      if not build_p then
+        u.error_response(err .. " (companion #" .. id .. ")", "task_submit")
+        return
+      end
+    end
+    local result = task_pool.submit_task(id, steps, kind, build_p)
     if result.task_id and type(name) == "string" then
       storage.tasks[result.task_id].name = name
       result.name = name

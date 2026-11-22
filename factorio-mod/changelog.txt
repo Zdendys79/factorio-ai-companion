@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.252
+  Features:
+    - /fac_task_submit takes an optional "priority" for a build task (object form, kind build or
+      none): a number clamped to 2 to 2.9 (a plain build is 2, a relocation 3), echoed in the
+      task status; any other kind or a non-number is refused. Absent: as before.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.251
   Changes:
     - A walk target moved to a walkable spot (walk_target_retargeted) and a walk start shifted
