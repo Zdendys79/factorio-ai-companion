@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.253
+  Bugfixes:
+    - A big rock (a target with a half side over 1.4 tiles: big-sand-rock) is mined at the nearest
+      point of its box, not its centre; a build's clearing that waits for room in her inventory
+      (a relief chest) is no longer failed by the 605-tick no-progress backstop (the clearing
+      bounds the wait itself, ROOM_TICKS). A line-mining build over big rocks stood stuck for want
+      of this. Live: tree, rock, wreck and clearing checks pass; a 5-pair line builds.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.252
   Features:
     - /fac_task_submit takes an optional "priority" for a build task (object form, kind build or

@@ -343,6 +343,9 @@ function M.tick_build_queues()
       q.clear_skip = q.clear_skip or {}          -- (what she gave up on stays given up)
       q.clear = q.clear or {skip = q.clear_skip}
       if clearing.step(cid, c, q.clear, q.entity, q.position, q.direction) == "busy" then
+        -- (she is making room in her inventory for what she mines: a wait the clearing
+        -- itself bounds -- clearing.ROOM_TICKS -- not a stall for the stale backstop)
+        if q.clear and q.clear.relief then q._stale_ticks = 0 end
         return false
       end
       q.clear = nil

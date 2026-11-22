@@ -292,11 +292,11 @@ local function work(cid, c, st, best, best_d, kind)
   storage.clearing_mining[cid] = game.tick
   if not st.mining then
     e.selected = best
-    e.mining_state = {mining = true, position = best.position}
+    e.mining_state = {mining = true, position = spot}
     st.mining = true
   elseif not e.mining_state.mining then
     e.selected = best
-    e.mining_state = {mining = true, position = best.position}
+    e.mining_state = {mining = true, position = spot}
   end
   return "busy"
 end

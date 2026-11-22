@@ -411,9 +411,11 @@ function M.process_queue(queue_name, processor)
             local what = ""
             local ct = q.clear and q.clear.target
             if q.state == "clearing" and ct and ct.valid then
-              what = string.format(", clearing %s at (%.1f,%.1f) %.1f tiles off, mining=%s, path=%s",
+              what = string.format(", clearing %s at (%.1f,%.1f) %.1f tiles off, mining=%s, path=%s, "
+                .. "making room=%s",
                 ct.name, ct.position.x, ct.position.y, u.distance(pos, ct.position),
-                tostring(q.clear.mining), tostring(q.clear.path_mode))
+                tostring(q.clear.mining), tostring(q.clear.path_mode),
+                tostring(q.clear.relief ~= nil))
             end
             q.failed = string.format(head .. " (no progress for %d ticks: she stands at "
               .. "(%.1f,%.1f), state %s%s)", tostring(tp.x), tostring(tp.y), q._stale_ticks,
