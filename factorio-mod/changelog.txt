@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.250
+  Bugfixes:
+    - A walk whose path request finds no path (a goal tile boxed in by a science cell's machines,
+      inserters and pole) asks again once with a wider tolerance (6 tiles) and is routed to the
+      cell's edge, instead of falling back to a straight line that ignores water and cliffs and
+      logging the same failure every 180 ticks. walk_path_no_path is logged only when the wide
+      request fails too. Live smoke: 141 to 3 per 30 minutes; the forest-walk, walk-preempt and
+      walk-timeout checks pass.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.249
   Features:
     - /fac_get_errors also answers "samples": the last 3 messages of each error context, so a

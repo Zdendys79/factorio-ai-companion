@@ -39,6 +39,12 @@ local CLEARABLE_ROCK_NAMES = {"big-rock", "big-sand-rock", "huge-rock"}
 -- silently teleports the intended destination somewhere far away and unexpected.
 local WALK_TARGET_WALKABLE_RADIUS = 3
 
+-- The pathfinder's goal tolerance for a walk whose first request found NO PATH: a target
+-- boxed in by a machine cell (an enclosed grass tile) has no open tile within the usual 2,
+-- the walk then fell back to a straight line with no route round water or cliffs. One
+-- wider request (once per walk) ends the route at the cell's edge instead.
+local PATH_WIDE_RADIUS = 6
+
 -- WAYPOINT_STALL_REPATH_TICKS (2026-07-25, Zdendys: 2nd of 3 confirmed walking-
 -- obstacle gaps -- see process_walking_queues' own "RE-PATH AFTER PROLONGED
 -- WAYPOINT STALL" comment below for the full fix/derivation). 150 ticks (~2.5
@@ -394,7 +400,7 @@ local function request_walk_path(cid, q, e)
       start = start,
       goal = q.target,
       force = e.force,
-      radius = 2,
+      radius = q.path_radius or 2,
       can_open_gates = true,
       -- CRITICAL: ignore the companion itself, otherwise its own collision box makes
       -- the START position collide -> pathfinder returns nil (no path) every time.
@@ -479,6 +485,13 @@ script.on_event(defines.events.on_script_path_request_finished, function(ev)
   else
     q.path = nil               -- no route found / try later -> straight-line fallback
     q.path_failed_tick = game.tick
+    if not q.path_radius then
+      -- boxed-in target: one request with a wide goal tolerance, at once (no cooldown),
+      -- before the walk counts as having no path
+      q.path_radius = PATH_WIDE_RADIUS
+      q.path_failed_tick = nil
+      return
+    end
     -- DIAGNOSTIC (task #49, 2026-07-09): distinguishes "pathfinder genuinely found no
     -- route" (this branch) from "needs to destroy something" (above) and from "still
     -- pending" -- the three collapse into identical straight-line+bypass behavior today,
