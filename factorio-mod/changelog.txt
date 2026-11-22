@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.244
+  Bugfixes:
+    - A task-pool walk that timed out raised "attempt to index local 'clearing' (a nil value)"
+      every tick (0.16.243: a local of that name shadowed the clearing module), which froze the
+      task pool: an iron drill unit task stayed at its first step for 147000 ticks and the whole
+      base ran dry. The timeout now fails the step with its reason again. Live: the task of the
+      stalled smoke save completes; the walk-timeout check passes.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.243
   Bugfixes:
     - No more mining or moving from afar. The task pool's wood chop walks to the tree and fells

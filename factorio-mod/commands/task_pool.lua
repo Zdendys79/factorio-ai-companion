@@ -666,7 +666,7 @@ function M.tick()
         -- a full inventory cannot take its wood; factorio-ai smoke_full_1119h, 9 walks
         -- timed out that walk fine on the end save)
         local inv = c.entity.get_main_inventory()
-        local clearing = q.clearing_target
+        local obstacle = q.clearing_target
         local why = string.format(
           "could not reach step target (walking timed out: %s tiles left, she at %.1f,%.1f, "
           .. "path %s/%s%s, stuck %d samples, bypass round %d left, %d tries, waypoint "
@@ -678,7 +678,7 @@ function M.tick()
           math.floor(q.waypoint_stall_ticks or 0),
           game.tick - (active.step_start_tick or game.tick),
           tostring(c.entity.mining_state and c.entity.mining_state.mining or false),
-          (clearing and clearing.valid) and clearing.name or "-",
+          (obstacle and obstacle.valid) and obstacle.name or "-",
           math.floor(q.clearing_ticks or 0),
           inv and tostring(inv.count_empty_stacks()) or "?")
         u.log_error(why, "task_pool")
