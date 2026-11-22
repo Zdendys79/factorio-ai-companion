@@ -168,10 +168,19 @@ function M.dry_char_spot(surf, p, radius)
   return nil
 end
 
+-- Contexts that report what the mod does as usual, not a fault: they are only counted
+-- (storage.info_counts), never put in the error ring or the error counts.
+local INFO_CONTEXTS = {walk_target_retargeted = true, walk_start_shifted = true}
+
 function M.log_error(msg, ctx)
+  local key = ctx or "internal"
+  if INFO_CONTEXTS[key] then
+    storage.info_counts = storage.info_counts or {}
+    storage.info_counts[key] = (storage.info_counts[key] or 0) + 1
+    return
+  end
   storage.errors = storage.errors or {}
   storage.error_counts = storage.error_counts or {}
-  local key = ctx or "internal"
   storage.error_counts[key] = (storage.error_counts[key] or 0) + 1   -- (all of them: the ring keeps 50)
   -- (the last 3 messages of each context: the ring is crowded out by a frequent one)
   storage.error_samples = storage.error_samples or {}

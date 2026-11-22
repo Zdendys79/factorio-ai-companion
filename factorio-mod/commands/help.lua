@@ -13,7 +13,8 @@ end)
 -- what silently failed instead of it just accumulating unread ([[feedback_log_every_silent_failure]]).
 commands.add_command("fac_get_errors", nil, function()
   u.json_response({errors = storage.errors or {}, counts = storage.error_counts or {},
-                     samples = storage.error_samples or {}})
+                     samples = storage.error_samples or {},
+                     info_counts = storage.info_counts or {}})
 end)
 
 commands.add_command("fac_help", nil, function()

@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.251
+  Changes:
+    - A walk target moved to a walkable spot (walk_target_retargeted) and a walk start shifted
+      onto a dry tile (walk_start_shifted) are usual events: they are counted apart
+      (/fac_get_errors "info_counts") and no longer fill the error ring or the error counts.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.250
   Bugfixes:
     - A walk whose path request finds no path (a goal tile boxed in by a science cell's machines,
