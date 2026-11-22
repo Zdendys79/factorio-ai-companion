@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.246
+  Changes:
+    - The rare-symptom saves keep one file per code (saves/rare_symptoms/<CODE>.zip, replaced by
+      the next save) instead of one per save, so a run adds no files. RARE-WALK-01 (a walk with
+      no path) and RARE-WALK-02 (a path destroy that finds nothing to mine) are not rare: their
+      save triggers are removed. Live: five saves of one code leave one file.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.245
   Bugfixes:
     - Picking up one of her own buildings takes real mining time: the task pool's remove step
