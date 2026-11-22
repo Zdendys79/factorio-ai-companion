@@ -170,7 +170,10 @@ end
 
 function M.log_error(msg, ctx)
   storage.errors = storage.errors or {}
-  table.insert(storage.errors, {context = ctx or "internal", error = tostring(msg), tick = game.tick})
+  storage.error_counts = storage.error_counts or {}
+  local key = ctx or "internal"
+  storage.error_counts[key] = (storage.error_counts[key] or 0) + 1   -- (all of them: the ring keeps 50)
+  table.insert(storage.errors, {context = key, error = tostring(msg), tick = game.tick})
   if #storage.errors > 50 then table.remove(storage.errors, 1) end
 end
 

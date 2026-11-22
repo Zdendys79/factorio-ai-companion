@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.248
+  Features:
+    - /fac_get_errors also answers "counts": how many errors of each context the mod logged since
+      the game began (the ring of the last 50 stays), so a frequent fault can be told from a rare one.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.247
   Changes:
     - This changelog keeps the 0.16.x entries; the older ones (0.1 to 0.15) are in the git history.
