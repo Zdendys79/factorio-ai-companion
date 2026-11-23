@@ -13,9 +13,10 @@
 --   (everything while Python says the first productions do not stand yet:
 --   /fac_craft_exempt) -- or nil: the craft makes up a production's shortfall;
 -- - note(item, pieces, why): a hand craft booked -- a shortfall (why nil, logged
---   [HAND_SHORT]) or a far one ("far": the store holding it lay beyond FAR_DIST and she
---   needed at most FAR_MAX pieces -- the walk costs more than the craft); kept per item
---   as the pieces so far and the tick of the last, for /fac_upkeep's status (status());
+--   [HAND_SHORT], at most once per LOG_TICKS per item) or a far one ("far": the store
+--   holding it lay beyond FAR_DIST and she needed at most FAR_MAX pieces -- the walk
+--   costs more than the craft); kept per item as the pieces so far and the tick of the
+--   last (and of the last log line), for /fac_upkeep's status (status());
 -- - is_far(deficit, dist): whether a shortfall that small is crafted rather than
 --   fetched from a place that far.
 local u = require("commands.init")
@@ -24,13 +25,15 @@ local M = {}
 
 M.FAR_MAX = 5        -- pieces: a shortfall this small ...
 M.FAR_DIST = 50      -- tiles: ... whose nearest store lies farther is crafted on the spot
+M.LOG_TICKS = 3600   -- a shortfall of an item logged at most this often
 -- the technology from which on no stone furnace is made by hand any more
 local FASTER_FURNACES = "advanced-material-processing"
 -- always hand-made after automation (game rule 69: an assembler for them does not pay)
 local ALWAYS_EXEMPT = {lab = true}
 
--- storage.hand_policy = {exempt_all = bool, short = {[item] = {pieces, tick}},
---   far = {[item] = {pieces, tick}}}; created on first use (older saves have none)
+-- storage.hand_policy = {exempt_all = bool, short = {[item] = {pieces, tick,
+--   logged_tick, logged_pieces}}, far = {[item] = {pieces, tick}}}; created on first use
+--   (older saves have none; an entry without the logged fields logs at its next craft)
 local function book()
   storage.hand_policy = storage.hand_policy or {}
   local b = storage.hand_policy
@@ -80,9 +83,15 @@ function M.note(item, pieces, why)
   e.tick = game.tick
   shelf[item] = e
   if why == nil then
-    log("[ai-companion] [HAND_SHORT] " .. pieces .. " " .. item .. " made by hand: no "
-        .. "store held it -- its production is short or missing (" .. e.pieces
-        .. " so far)")
+    -- (one line per item per LOG_TICKS with the pieces since the last -- each craft its
+    -- own line flooded the log)
+    local last = e.logged_tick
+    if last == nil or game.tick - last >= M.LOG_TICKS then
+      log("[ai-companion] [HAND_SHORT] " .. (e.pieces - (e.logged_pieces or 0)) .. " "
+          .. item .. " made by hand: no store held it -- its production is short or "
+          .. "missing (" .. e.pieces .. " so far)")
+      e.logged_tick, e.logged_pieces = game.tick, e.pieces
+    end
   end
 end
 

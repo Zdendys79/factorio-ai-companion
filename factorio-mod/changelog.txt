@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.256
+  Changes:
+    - The [HAND_SHORT] log line of a hand craft no store could give comes at most once per
+      item per 3600 ticks, with the pieces since the last line (smoke 1123s: over a thousand
+      lines, one per craft). The books in the /fac_upkeep status read the same way (two
+      extra fields per short entry: the tick and the count of its last line).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.255
   Changes:
     - Hand crafting after "automation" (factorio-ai game rule 69, commands/hand_craft_policy.lua):
