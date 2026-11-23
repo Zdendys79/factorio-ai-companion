@@ -892,7 +892,7 @@ function M.tick()
           active.state = "ensuring"
           active.ensuring_kind = kind
         elseif kind == "fetch" then
-          -- a walk to the place holding a smelted ingredient (task_pool_fetch.lua)
+          -- a walk to the place holding the item (task_pool_fetch.lua)
           fetch.begin_walk(c, cid, active, t)
         elseif kind == "chop" then
           -- she walks to the tree and fells it with real mining time (clearing.step_target)

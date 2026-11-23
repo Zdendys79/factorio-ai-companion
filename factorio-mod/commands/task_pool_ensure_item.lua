@@ -98,6 +98,19 @@ local function resolve_recipe(item)
 end
 
 
+-- The need's shortfall taken from the places holding it (task_pool_fetch): "fetch" (a
+-- walk set up), "satisfied" or "push" (something taken: judged again next pass), nil
+-- (no place gave any).
+local function from_places(c, t, need, held)
+  local fetched, got = fetch.start(c, t, need.item, need.count - held(need.item))
+  if fetched == "fetch" then return "fetch" end
+  if fetched == "taken" and got > 0 then
+    if held(need.item) >= need.count then return "satisfied" end
+    return "push"      -- (the rest from the next place: judged again next tick)
+  end
+  return nil
+end
+
 -- Starts exactly ONE concrete action toward satisfying the need at the TOP of
 -- t.ctx.ensure_stack (item=, count=) for companion c/cid. Returns a `kind`
 -- string describing what was started ("gather"|"craft"|"chop"|"push"|"satisfied")
@@ -106,7 +119,7 @@ end
 -- this cycle, the caller should look at the stack again next "acting" pass.
 -- "satisfied" means the top-of-stack need is ALREADY met (checked fresh here,
 -- not assumed) -- pop it and reassess without starting anything. "fetch": a walk to
--- a place holding a smelted ingredient was set up (task_pool_fetch.begin_walk);
+-- a place holding the item was set up (task_pool_fetch.begin_walk);
 -- "wait": a furnace may still make it (the smelt wait), or a drill of a raw material
 -- (no store holds it, no hand mining: the raw wait) -- reassess next pass.
 function M.start_ensure_item_action(c, cid, t)
@@ -152,12 +165,8 @@ function M.start_ensure_item_action(c, cid, t)
   if need.item == "wood" and not need.no_pull then
     -- (Zdendys 2026-11-09: wood first from the stores -- the supply chests --, only then
     -- chopping)
-    local fetched, got = fetch.start(c, t, need.item, need.count - held(need.item))
-    if fetched == "fetch" then return "fetch" end
-    if fetched == "taken" and got > 0 then
-      if held(need.item) >= need.count then return "satisfied" end
-      return "push"
-    end
+    local kind = from_places(c, t, need, held)
+    if kind then return kind end
   end
   if need.item == "wood" then
     -- Wood has NO gather()-compatible resource-tile path (trees are type="tree",
@@ -306,14 +315,9 @@ function M.start_ensure_item_action(c, cid, t)
     -- with 100 plates two tiles away; the earlier 5-tile pull took from any output,
     -- a plate row's too). The wait below only while no place holds it.
     -- (no_pull: the step takes nothing from places -- the upkeep's getting material)
-    local fetched, got = nil, 0
     if not need.no_pull then
-      fetched, got = fetch.start(c, t, need.item, need.count - held(need.item))
-    end
-    if fetched == "fetch" then return "fetch" end
-    if fetched == "taken" and got > 0 then
-      if held(need.item) >= need.count then return "satisfied" end
-      return "push"      -- (the rest from the next place: judged again next tick)
+      local kind = from_places(c, t, need, held)
+      if kind then return kind end
     end
     t.ctx.smelt_wait_deadline = t.ctx.smelt_wait_deadline or {}
     local deadline = t.ctx.smelt_wait_deadline[need.item]
@@ -326,6 +330,15 @@ function M.start_ensure_item_action(c, cid, t)
     end
     return nil, need.item .. " recipe is not hand-craftable and no furnace produced " ..
       "enough within " .. SMELT_WAIT_TICKS .. " ticks (needs a real machine, e.g. smelting)"
+  end
+  -- A hand-craftable item is taken from the places holding it first -- a production's
+  -- store chest (the mall row's pick points), any free chest or machine output
+  -- (task_pool_fetch) -- and only what they cannot give is crafted (factorio-ai game
+  -- rule 6: from automation on she crafts nothing by hand; docs/
+  -- production_for_every_item.md, phase 3). no_pull: the step takes nothing from places.
+  if not need.no_pull then
+    local kind = from_places(c, t, need, held)
+    if kind then return kind end
   end
   -- (crafts for the shortfall only, not the whole count -- live: holding 4 of 5 gears
   -- she crafted 5 more, her plates fetched for them)

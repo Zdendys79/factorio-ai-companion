@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.254
+  Changes:
+    - An ensure_item step short of a hand-craftable item takes it from the places holding it
+      first -- a store chest (a production's pick point, e.g. the mall row's), any chest or
+      machine output no inserter picks from, nearest first, within reach at once, farther by a
+      walk -- and crafts only what they could not give (factorio-ai game rule 6: from automation
+      on she crafts nothing by hand). Before, she crafted it beside a full store of it. The
+      step's no_pull option skips this as before. Live: the fetch check passes (D4: 5 gears
+      taken from a gear store 20 tiles off, her 20 plates untouched).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.253
   Bugfixes:
     - A big rock (a target with a half side over 1.4 tiles: big-sand-rock) is mined at the nearest

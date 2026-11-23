@@ -1,8 +1,9 @@
 -- A hand craft's material fetched from places (factorio-ai docs/mod_upkeep_supply.md D;
 -- game rule 34 -- Zdendys: finding the material is the mod's, queued by what she holds:
--- no walk while her inventory has enough). An ensure_item step short of an item she
--- cannot hand-craft (a smelted plate) takes the missing amount from the nearest place
--- holding it: a furnace's or an assembler's output, a chest -- never one an inserter
+-- no walk while her inventory has enough). An ensure_item step short of an item -- a
+-- smelted plate, a raw item, wood, or a hand-craftable one before it is crafted
+-- (factorio-ai game rule 6: a production's store, the mall row's pick points) -- takes
+-- the missing amount from the nearest place holding it: a furnace's or an assembler's output, a chest -- never one an inserter
 -- picks from (it feeds a line or a machine: a fuel chest, a plate row's output; a coal
 -- drill's output chest excepted, less its partner's keep -- upkeep_feeds.store_share)
 -- nor a furnace the controller loads itself (upkeep_feed_regs "own" / "loading"). The
