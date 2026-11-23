@@ -2,16 +2,47 @@
 local u = require("commands.init")
 local queues = require("commands.queues")
 local inv_watch = require("commands.inventory_watch")
+local fetch = require("commands.task_pool_fetch")
+local Policy = require("commands.hand_craft_policy")
 
+-- fac_item_craft <cid> <item> [count] [under]: `count` craft actions of `item` at once
+-- (begin_crafting). After "automation" (commands/hand_craft_policy.lua) what the places
+-- within her reach hold of it is taken first and only the rest is crafted; a craft that
+-- makes up a production's shortfall is booked for Python (`under`: the root item of the
+-- craft chain, e.g. the assembler a gear is crafted for -- an exempt root exempts it; or
+-- "far" / "far-part": a few pieces crafted as their store lay far, and their ingredients).
+-- Replies {id, crafted, taken, item} or {id, error[, missing]}.
 commands.add_command("fac_item_craft", nil, function(cmd)
   u.safe_command(function()
-    local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)$", cmd.parameter)
+    local args = u.parse_args("^(%S+)%s+(%S+)%s*(%d*)%s*([%w%-_]*)$", cmd.parameter)
     local id, c = u.find_companion(args[1])
     if not id then u.not_found(); return end
     local item, count = args[2], tonumber(args[3]) or 1
-    local recipe = c.entity.force.recipes[item]
+    local under = args[4] ~= "" and args[4] or nil
+    if under and args[3] == "" then
+      u.json_response({id = id, error = "usage: /fac_item_craft <cid> <item> [count] [under]"})
+      return
+    end
+    local force = c.entity.force
+    local recipe = force.recipes[item]
     if not recipe then u.json_response({id = id, error = "Recipe not found"}); return end
     if not recipe.enabled then u.json_response({id = id, error = "Not unlocked"}); return end
+    -- (under "far" / "far-part": Python crafts a few pieces on the spot as their store lay
+    -- far -- booked far, its ingredients nowhere)
+    local why = Policy.reason(force, item, under)
+    if why == nil and (under == "far" or under == "far-part") then why = under end
+    local yield = 1
+    for _, p in ipairs(recipe.products) do
+      if p.name == item then yield = p.amount or 1; break end
+    end
+    local taken = 0
+    if why ~= "before" then
+      taken = fetch.take_near(c, item, count * yield)
+      count = math.ceil(math.max(0, count * yield - taken) / yield)
+      if count == 0 then
+        u.json_response({id = id, crafted = 0, taken = taken, item = item}); return
+      end
+    end
     if c.entity.get_craftable_count(recipe) < count then
       local missing = {}
       local inv = c.entity.get_inventory(defines.inventory.character_main)
@@ -19,14 +50,15 @@ commands.add_command("fac_item_craft", nil, function(cmd)
         local have, need = inv.get_item_count(ing.name), ing.amount * count
         if have < need then missing[#missing + 1] = {name = ing.name, have = have, need = need} end
       end
-      u.json_response({id = id, error = "Missing", missing = missing}); return
+      u.json_response({id = id, error = "Missing", missing = missing, taken = taken}); return
     end
     local crafted = c.entity.begin_crafting{recipe = item, count = count}
     -- headless: the companion's craft does not fire craft-item research triggers ->
     -- compensate (e.g. crafting a lab unlocks the automation-science-pack recipe).
-    u.fire_craft_triggers(c.entity.force, item, crafted)
+    u.fire_craft_triggers(force, item, crafted)
     u.note_hand_craft(id, item, crafted)
-    u.json_response({id = id, crafted = crafted, item = item})
+    Policy.note(item, crafted * yield, why)
+    u.json_response({id = id, crafted = crafted, taken = taken, item = item})
   end)
 end)
 

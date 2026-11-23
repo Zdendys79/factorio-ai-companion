@@ -23,6 +23,7 @@ local F = require("commands.upkeep_feeds")
 local Regs = require("commands.upkeep_feed_regs")
 local Stock = require("commands.upkeep_stock")
 local inv_watch = require("commands.inventory_watch")
+local Policy = require("commands.hand_craft_policy")
 
 local M = {}
 
@@ -76,7 +77,8 @@ end
 
 -- The place to take `want` of `item` from: the nearest holding the whole of it, else
 -- the nearest holding MIN_TAKE (or the whole shortfall, when less); `tried`: the places
--- this step gave up on. Returns the entity or nil.
+-- this step gave up on. Returns the entity or nil, and the nearest place holding
+-- MIN_TAKE (or the whole shortfall) with its distance.
 local function pick(c, item, want, tried)
   local pos = c.entity.position
   local least = math.min(M.MIN_TAKE, want)
@@ -97,7 +99,7 @@ local function pick(c, item, want, tried)
       end
     end
   end
-  return whole or some
+  return whole or some, some, some_d
 end
 
 -- Take up to `want` of `item` out of the place `e` into her inventory (what does not
@@ -121,14 +123,16 @@ end
 
 -- The step's shortfall of `item` (`want`): taken from a place within reach ("taken",
 -- with the count), or a walk to a farther one set up in t.ctx.fetch ("fetch"), or nil
--- (no place holds it).
-function M.start(c, t, item, want)
+-- (no place holds it). far_ok: a shortfall small enough whose nearest place lies far
+-- (hand_craft_policy.is_far) is not walked to -- "far" (she crafts it on the spot).
+function M.start(c, t, item, want, far_ok)
   t.ctx.fetch_tried = t.ctx.fetch_tried or {}
   -- (per item: a step's ingredients are fetched one after another)
   local next_scan = t.ctx.fetch_next_scan
   if type(next_scan) == "table" and next_scan.item == item and game.tick < next_scan.tick then
     return nil
   end
+  local deficit = want      -- (the far rule judges the whole shortfall, not what fits)
   want = math.min(want, c.entity.get_main_inventory().get_insertable_count(item))
   if want <= 0 then
     t.ctx.fetch_noroom_logged = t.ctx.fetch_noroom_logged or {}
@@ -140,13 +144,19 @@ function M.start(c, t, item, want)
     t.ctx.fetch_next_scan = {item = item, tick = game.tick + M.RESCAN_TICKS}
     return nil
   end
-  local e = pick(c, item, want, t.ctx.fetch_tried)
+  local e, some, some_d = pick(c, item, want, t.ctx.fetch_tried)
   if not e then
     t.ctx.fetch_next_scan = {item = item, tick = game.tick + M.RESCAN_TICKS}
     return nil
   end
   t.ctx.fetch_next_scan = nil
-  if u.distance(c.entity.position, e.position) <= M.FETCH_REACH then
+  local d = u.distance(c.entity.position, e.position)
+  if far_ok and Policy.is_far(deficit, d) then
+    -- (a nearer place holding part of it: from there rather than a craft of it all)
+    if not (some and not Policy.is_far(deficit, some_d)) then return "far" end
+    e, d = some, some_d
+  end
+  if d <= M.FETCH_REACH then
     local got = take(c, e, item, want)
     if got <= 0 then
       t.ctx.fetch_tried[tried_key(e, item)] = game.tick + M.TRIED_TICKS
@@ -160,6 +170,26 @@ function M.start(c, t, item, want)
   t.ctx.fetch = {x = e.position.x, y = e.position.y, key = tried_key(e, item),
                  item = item, want = want}
   return "fetch"
+end
+
+-- What of `item` (up to `want`) she takes from the nearest place within her reach
+-- that may give it (no walk): the count taken -- 0 when none is in reach (/fac_item_craft:
+-- after automation a craft is made only of what the places at hand cannot give).
+function M.take_near(c, item, want)
+  want = math.min(want, c.entity.get_main_inventory().get_insertable_count(item))
+  if want <= 0 then return 0 end
+  local pos = c.entity.position
+  local near = c.entity.surface.find_entities_filtered{type = SOURCE_TYPES, position = pos,
+                                                       radius = M.FETCH_REACH,
+                                                       force = c.entity.force}
+  table.sort(near, function(a, b) return u.distance(pos, a.position) < u.distance(pos, b.position) end)
+  local got = 0
+  for _, e in ipairs(near) do
+    if got >= want then break end
+    local inv = e.valid and source_inv(e)
+    if inv and inv.get_item_count(item) > 0 then got = got + take(c, e, item, want - got) end
+  end
+  return got
 end
 
 -- Start the walk to the place in t.ctx.fetch (the step's state "ensuring", kind

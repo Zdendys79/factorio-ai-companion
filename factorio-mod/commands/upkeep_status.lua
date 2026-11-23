@@ -7,6 +7,7 @@ local Stores = require("commands.supply_stores")
 local Feed = require("commands.upkeep_feed")
 local Stock = require("commands.upkeep_stock")
 local Hand = require("commands.upkeep_hand")
+local Policy = require("commands.hand_craft_policy")
 
 local M = {}
 
@@ -53,6 +54,13 @@ function M.status(cid)
   out.hand_fuel = Hand.status(cid)
   -- keeping her stock: [{item, task_id, priority, at}] -- commands/upkeep_stock.lua
   out.stock = Stock.status(cid)
+  -- her hand crafting after automation (commands/hand_craft_policy.lua): {limited,
+  -- exempt_all, short = {[item] = {pieces, tick}} -- made by hand as no store held it,
+  -- its production short or missing --, far = the same for pieces whose store lay far}
+  local comp = storage.companions and storage.companions[cid]
+  local force = comp and comp.entity and comp.entity.valid and comp.entity.force
+                or game.forces["player"]
+  out.hand_policy = Policy.status(force)
   return out
 end
 

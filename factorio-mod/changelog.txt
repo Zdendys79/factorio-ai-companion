@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.255
+  Changes:
+    - Hand crafting after "automation" (factorio-ai game rule 69, commands/hand_craft_policy.lua):
+      /fac_item_craft takes what the places within her reach hold first and crafts only the
+      rest (its reply's new `taken`; an optional 4th argument names the root item of the craft
+      chain, or "far" / "far-part" for the controller's far piece); an ensure_item step crafts a
+      shortfall of at most 5 pieces on the spot when the nearest place holding it lies beyond 50
+      tiles and her inventory makes it at once. Every hand craft no store could give --
+      not a lab, not a stone furnace before advanced-material-processing, nothing for such a
+      root, nothing while /fac_craft_exempt all -- is booked as its production's shortfall
+      ([HAND_SHORT] log line) and reported in the /fac_upkeep status (hand_policy: limited,
+      exempt_all, short, far). New command /fac_craft_exempt all|none. Live: the hand-craft
+      check passes 9/9 (booked shortfalls, a take at hand, exempt crafts, the far rule).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.254
   Changes:
     - An ensure_item step short of a hand-craftable item takes it from the places holding it

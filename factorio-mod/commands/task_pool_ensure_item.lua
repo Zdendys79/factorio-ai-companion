@@ -10,6 +10,7 @@ local R = require("commands.reservations")
 local queues = require("commands.queues")
 local fetch = require("commands.task_pool_fetch")
 local Stores = require("commands.supply_stores")
+local Policy = require("commands.hand_craft_policy")
 
 local M = {}
 
@@ -99,11 +100,12 @@ end
 
 
 -- The need's shortfall taken from the places holding it (task_pool_fetch): "fetch" (a
--- walk set up), "satisfied" or "push" (something taken: judged again next pass), nil
--- (no place gave any).
-local function from_places(c, t, need, held)
-  local fetched, got = fetch.start(c, t, need.item, need.count - held(need.item))
-  if fetched == "fetch" then return "fetch" end
+-- walk set up), "satisfied" or "push" (something taken: judged again next pass), "far"
+-- (far_ok: so small and its place so far that she crafts it -- hand_craft_policy.is_far),
+-- nil (no place gave any).
+local function from_places(c, t, need, held, far_ok)
+  local fetched, got = fetch.start(c, t, need.item, need.count - held(need.item), far_ok)
+  if fetched == "fetch" or fetched == "far" then return fetched end
   if fetched == "taken" and got > 0 then
     if held(need.item) >= need.count then return "satisfied" end
     return "push"      -- (the rest from the next place: judged again next tick)
@@ -334,24 +336,52 @@ function M.start_ensure_item_action(c, cid, t)
   -- A hand-craftable item is taken from the places holding it first -- a production's
   -- store chest (the mall row's pick points), any free chest or machine output
   -- (task_pool_fetch) -- and only what they cannot give is crafted (factorio-ai game
-  -- rule 6: from automation on she crafts nothing by hand; docs/
-  -- production_for_every_item.md, phase 3). no_pull: the step takes nothing from places.
-  if not need.no_pull then
-    local kind = from_places(c, t, need, held)
-    if kind then return kind end
+  -- rules 6, 69: from automation on hand crafting is cut down as far as it goes; docs/
+  -- production_for_every_item.md, phase 3). After automation a few pieces whose nearest
+  -- place lies far are crafted on the spot (need.far), and a craft that makes up a
+  -- production's shortfall is booked for Python (hand_craft_policy.note). need.quiet:
+  -- why its root's craft was no shortfall (its ingredients' crafts are none either).
+  -- no_pull: the step takes nothing from places.
+  -- (need.quiet holds only "exempt" / "far-part": "before" and "exempt_all" are judged
+  -- afresh -- automation may finish, the mall row come up, during a long step)
+  local why = need.quiet or Policy.reason(c.entity.force, need.item)
+  if not need.no_pull and not need.far then
+    local kind = from_places(c, t, need, held, why ~= "before")
+    -- (far only when what she holds free makes it at once -- its direct ingredients less
+    -- other tasks' reservations: no walk for them either)
+    local at_hand = kind == "far"
+    if at_hand then
+      local crafts = math.ceil((need.count - held(need.item)) / recipe.yield)
+      for _, ing in ipairs(recipe.ingredients) do
+        if held(ing.name) < ing.amount * crafts then at_hand = false; break end
+      end
+    end
+    if at_hand then
+      need.far = true
+    elseif kind == "far" then
+      kind = from_places(c, t, need, held, false)
+      if kind then return kind end
+    elseif kind then
+      return kind
+    end
   end
+  if need.far and why == nil then why = "far" end
+  -- (a far piece's ingredients: crafted on the spot too, booked with no shelf)
+  local quiet = (why == "far" or why == "far-part") and "far-part"
+                or (why == "exempt" and "exempt") or nil
   -- (crafts for the shortfall only, not the whole count -- live: holding 4 of 5 gears
   -- she crafted 5 more, her plates fetched for them)
   local craft_count = math.ceil((need.count - held(need.item)) / recipe.yield)
   for _, ing in ipairs(recipe.ingredients) do
     local needed_amount = craft_count * ing.amount
     if held(ing.name) < needed_amount then
-      stack[#stack + 1] = {item = ing.name, count = needed_amount}
+      stack[#stack + 1] = {item = ing.name, count = needed_amount, quiet = quiet}
       return "push"
     end
   end
   local r = queues.start_craft(cid, need.item, craft_count)
   if r.error then return nil, r.error end
+  Policy.note(need.item, r.target * recipe.yield, why)
   return "craft"
 end
 
