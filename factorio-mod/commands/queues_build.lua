@@ -184,9 +184,36 @@ end
 -- `filter` (0.16.186, optional): an inserter's one item filter, set as it is placed.
 -- `ug` (0.16.191, optional): an underground belt's side, "input" or "output" (a raw
 -- place step can carry it too, so it is checked here, not only by build_plan.lua).
+-- The keep-off owners whose ground no build takes but their own pieces (Python's
+-- keep_off.PLANT_GROWTH_KEEP_OFF: the steam plant's next columns -- smokes 1124u-y, a belt, two
+-- poles and a coal tap's inserter took a column's spot, one placer after another); the
+-- entities each owner's own builds place there.
+M.STRICT_KEEP_OFF = {["plant-growth"] = {boiler = true, ["steam-engine"] = true, pipe = true}}
+
+-- The strict keep-off owner whose ground (x, y) lies on and that `entity_name` is not one of
+-- its own pieces of, or nil.
+local function kept_off(entity_name, x, y)
+  for owner, own in pairs(M.STRICT_KEEP_OFF) do
+    if not own[entity_name] then
+      for _, r in ipairs((storage.keep_off or {})[owner] or {}) do
+        if x >= r[1] - 0.5 and x <= r[3] + 0.5 and y >= r[2] - 0.5 and y <= r[4] + 0.5 then
+          return owner
+        end
+      end
+    end
+  end
+  return nil
+end
+
 function M.start_build(cid, entity_name, position, direction, mirror, filter, ug, chest)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
+  if position then
+    local owner = kept_off(entity_name, position.x or position[1], position.y or position[2])
+    if owner then
+      return {error = "kept off: the ground of " .. owner .. " takes no " .. entity_name}
+    end
+  end
   if ug ~= nil then
     local proto = prototypes.entity[entity_name]
     if ug ~= "input" and ug ~= "output" then

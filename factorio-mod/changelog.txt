@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.261
+  Changes:
+    - The steam plant's growth ground (keep-off owner plant-growth, Python's _reserve_plant_growth) is
+      strict: start_build refuses any entity but a boiler, a steam engine or a pipe on it
+      (queues_build.STRICT_KEEP_OFF) -- smokes 1124u-y, a belt, poles and a coal tap's inserter
+      took the next column's spot one placer after another.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.260
   Changes:
     - The task journal (commands/task_journal.lua, /fac_task_journal <after seq>, read-only): every
