@@ -55,7 +55,49 @@ local function rate_of(recipe, speed)
   return out
 end
 
-local function describe(e)
+-- The electric network of a pole (Zdendys: the poles of one network share their numbers):
+-- what it draws and makes now (its flow statistics over the last 5 seconds, in kW) and
+-- the most its generators can make -- read once a network per command (`memo`).
+local GENERATORS = {"generator", "solar-panel", "burner-generator", "fusion-generator"}
+local NET_KEEP_TICKS = 60          -- a network's numbers kept this long across commands
+local nets = {}                    -- id -> {tick, net} (not saved: a cache)
+local function network_of(en, memo)
+  local id = en.electric_network_id
+  if not id then return nil end
+  if memo[id] then return memo[id] end
+  local kept = nets[id]
+  if kept and game.tick - kept.tick < NET_KEEP_TICKS then
+    memo[id] = kept.net
+    return kept.net
+  end
+  local net = {id = id}
+  local st = en.electric_network_statistics
+  local function flow(counts, category)
+    local sum = 0
+    for name in pairs(counts) do
+      sum = sum + st.get_flow_count{name = name, category = category,
+                                     precision_index = defines.flow_precision_index.five_seconds}
+    end
+    return math.floor(sum * 60 / 1000 + 0.5)
+  end
+  -- (the electric statistics' input side is what the network's machines take, the output
+  -- side what its generators give -- live check: the steam engines on the output side)
+  net.draw_kw = flow(st.input_counts, "input")
+  net.make_kw = flow(st.output_counts, "output")
+  local max = 0
+  for _, g in pairs(en.surface.find_entities_filtered{type = GENERATORS, force = en.force}) do
+    if g.electric_network_id == id then
+      local ok, w = pcall(function() return g.prototype.get_max_energy_production() end)
+      if ok and w then max = max + w end
+    end
+  end
+  net.max_kw = math.floor(max * 60 / 1000 + 0.5)
+  memo[id] = net
+  nets[id] = {tick = game.tick, net = net}
+  return net
+end
+
+local function describe(e, memo)
   local r = {name = e.name, type = e.type, x = e.position.x, y = e.position.y}
   part(e, r, "box", function(en, t)
     local b = en.bounding_box
@@ -73,6 +115,10 @@ local function describe(e)
     return r
   end
   if PLAIN[e.type] then return r end       -- (a tree, a rock, a fish: what and where only)
+  if e.type == "electric-pole" then
+    part(e, r, "network", function(en, t) t.network = network_of(en, memo or {}) end)
+    return r
+  end
   if e.type == "assembling-machine" or e.type == "furnace" then
     part(e, r, "recipe", function(en, t)
       local recipe = en.get_recipe()
@@ -154,13 +200,14 @@ M.CHUNK = 32
 function M.chunk_info(x0, y0)
   local s = game.surfaces[1]
   local out = {x0 = x0, y0 = y0, side = M.CHUNK, entities = {}, resources = {}}
+  local memo = {}
   for _, e in pairs(s.find_entities_filtered{area = {{x0, y0}, {x0 + M.CHUNK, y0 + M.CHUNK}}}) do
     if e.valid and e.type ~= "character-corpse" then
       if e.type == "resource" then
         out.resources[#out.resources + 1] = {math.floor(e.position.x), math.floor(e.position.y),
                                              e.name, e.amount}
       elseif e.type ~= "character" then
-        out.entities[#out.entities + 1] = describe(e)
+        out.entities[#out.entities + 1] = describe(e, memo)
       end
     end
   end
@@ -178,11 +225,11 @@ function M.area_info(x0, y0, x1, y1)
   local s = game.surfaces[1]
   local out = {x0 = x0, y0 = y0, x1 = x1, y1 = y1, machines = {}, makes = {}, power_kw = 0,
                power_max_kw = 0, outputs = {}, errors = {}}
-  local makes, outputs = {}, {}
+  local makes, outputs, memo = {}, {}, {}
   for _, e in pairs(s.find_entities_filtered{area = {{x0, y0}, {x1 + 1, y1 + 1}},
                                              force = "player"}) do
     if e.valid and e.type ~= "character" then
-      local d = describe(e)
+      local d = describe(e, memo)
       local m = out.machines[e.name] or {count = 0, status = {}}
       out.machines[e.name] = m
       m.count = m.count + 1

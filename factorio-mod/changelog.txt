@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.260
+  Changes:
+    - The task journal (commands/task_journal.lua, /fac_task_journal <after seq>, read-only): every
+      ended task of the pool with its kind, companion, made and ended ticks, error and steps; each
+      step's record (task_pool_ledger.step_record -- one function for the four places that wrote
+      it) carries its place, where she stood at its end and the tiles she walked during it.
+    - activity.lua counts the tiles she walks (a jump over 30 tiles is no walk); /fac reply
+      counters carry `walked`.
+    - /fac_chunk_info: an electric pole carries its network -- the power drawn and made over
+      the last 5 seconds and the most its generators can make (one read a network).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.259
   Changes:
     - Coal's stores have no bar either (chest_roles BULK; game rule 74, Zdendys).

@@ -11,6 +11,8 @@ local R = require("commands.reservations")
 local priority = require("commands.priority")
 local build_plan = require("commands.build_plan")
 local events = require("commands.events")
+local activity = require("commands.activity")
+local journal = require("commands.task_journal")
 
 local M = {}
 
@@ -131,6 +133,7 @@ local function fail_task(task_id, reason)
   -- below) -- lets Python compute a whole-task wall duration (done_tick -
   -- created_tick) alongside the finer per-step breakdown in step_ticks.
   t.done_tick = game.tick
+  journal.add(task_id, t)
   u.log_error(string.format("task %d failed: %s", task_id, tostring(reason)), "task_pool")
   events.emit({kind = "task", id = task_id, cid = t.cid, status = "failed",
                error = tostring(reason)})
@@ -147,6 +150,7 @@ local function cancel_task(task_id, reason)
   t.status = "cancelled"
   t.error = reason
   t.done_tick = game.tick
+  journal.add(task_id, t)
   events.emit({kind = "task", id = task_id, cid = t.cid, status = "cancelled",
                error = reason and tostring(reason) or nil})
 end
@@ -157,6 +161,7 @@ local function complete_task(task_id)
   release_reservations(t)
   t.status = "done"
   t.done_tick = game.tick
+  journal.add(task_id, t)
   events.emit({kind = "task", id = task_id, cid = t.cid, status = "done"})
 end
 
@@ -290,6 +295,24 @@ local function clear_ensure_ctx(t)
   t.ctx.fetch_noroom_logged = nil
 end
 
+-- The step at t.cursor's record in t.step_ticks (the run's timeline, task_journal): its
+-- type, start and end tick, failed or not, where it acted (the step's own x, y), where she
+-- stood at its end and the tiles she walked during it (activity.walked since
+-- `walked_from`, nil: not known).
+local function step_record(t, step, start_tick, walked_from, failed)
+  t.step_ticks = t.step_ticks or {}
+  local e = {type = step.type, start = start_tick, done = game.tick, failed = failed or nil,
+             x = step.x, y = step.y}
+  if walked_from then          -- (a record made again mid-step counts from 0: never below)
+    e.walked = math.max(0, math.floor((activity.walked(t.cid) - walked_from) * 10 + 0.5) / 10)
+  end
+  local c = storage.companions and storage.companions[t.cid]
+  if c and c.entity and c.entity.valid then
+    e.at = {math.floor(c.entity.position.x * 10) / 10, math.floor(c.entity.position.y * 10) / 10}
+  end
+  t.step_ticks[t.cursor] = e
+end
+
 -- A step of an active task failed. An optional step (step.optional = true -- one
 -- pick-up of a list, where one entity not found must not leave the rest standing) is
 -- recorded in t.step_errors and the task goes on with its next step (done after the
@@ -300,7 +323,7 @@ end
 -- need is recomputed for the steps ahead (step_passed, 0.16.173). The caller clears the
 -- companion's active step.
 -- @param start_tick the tick the step started (active.step_start_tick), for step_ticks
-local function step_failed(task_id, reason, start_tick)
+local function step_failed(task_id, reason, start_tick, walked_from)
   local t = storage.tasks[task_id]
   if not t or t.status ~= "active" then return end
   local step = t.steps[t.cursor]
@@ -308,13 +331,12 @@ local function step_failed(task_id, reason, start_tick)
     t.step_errors = t.step_errors or {}
     t.step_errors[#t.step_errors + 1] = {step = t.cursor, error = tostring(reason)}
     clear_ensure_ctx(t)
-    t.step_ticks = t.step_ticks or {}
-    t.step_ticks[t.cursor] = {type = step.type, start = start_tick, done = game.tick,
-                              failed = true}
+    step_record(t, step, start_tick, walked_from, true)
     t.cursor = t.cursor + 1
     M.step_passed(t, step)
     if t.cursor > #t.steps then complete_task(task_id) end
   else
+    if step then step_record(t, step, start_tick, walked_from, true) end
     fail_task(task_id, reason)
   end
 end
@@ -383,5 +405,6 @@ M.fail_task = fail_task
 M.cancel_task = cancel_task
 M.complete_task = complete_task
 M.step_failed = step_failed
+M.step_record = step_record
 
 return M

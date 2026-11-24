@@ -37,10 +37,13 @@ local ENDED = {done = true, failed = true}
 -- a gap longer than this between two samples of a companion (her entity was invalid --
 -- dead, respawning -- so she was not sampled) is credited to neither side
 local MAX_CREDIT_TICKS = 60
+-- her move between two samples (a few ticks: walking makes well under a tile) counted as
+-- walked only up to this many tiles -- a teleport, a respawn is no walk
+local MAX_STEP_TILES = 3
 
 function M.init()
   -- storage.activity[cid] = {busy = ticks, idle = ticks, craft_only = ticks (a part of
-  -- busy), last = tick of the last sample}
+  -- busy), last = tick of the last sample, walked = tiles, x, y = her last position}
   storage.activity = storage.activity or {}
 end
 
@@ -103,8 +106,23 @@ function M.tick()
         end
       end
       rec.last = tick
+      -- the tiles she walked (her moves between samples up to MAX_STEP_TILES)
+      local pos = c.entity.position
+      if rec.x then
+        local d = math.sqrt((pos.x - rec.x) ^ 2 + (pos.y - rec.y) ^ 2)
+        if d <= MAX_STEP_TILES then rec.walked = (rec.walked or 0) + d end
+      end
+      rec.x, rec.y = pos.x, pos.y
     end
   end
+end
+
+-- The tiles companion `cid` has walked since her record began (0 before it).
+-- @param cid number
+-- @return number
+function M.walked(cid)
+  local rec = storage.activity and storage.activity[cid]
+  return rec and rec.walked or 0
 end
 
 -- The companion's counters for a reply.
@@ -114,7 +132,8 @@ end
 function M.counters(cid)
   local rec = storage.activity and storage.activity[cid]
   if not rec then return nil end
-  return {busy = rec.busy or 0, idle = rec.idle or 0, craft_only = rec.craft_only or 0}
+  return {busy = rec.busy or 0, idle = rec.idle or 0, craft_only = rec.craft_only or 0,
+          walked = math.floor(rec.walked or 0)}
 end
 
 return M

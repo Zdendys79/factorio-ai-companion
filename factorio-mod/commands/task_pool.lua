@@ -686,7 +686,7 @@ function M.tick()
           inv and tostring(inv.count_empty_stacks()) or "?")
         u.log_error(why, "task_pool")
         clearing.release(cid, c)         -- (the walk's obstacle mining stops with it)
-        ledger.step_failed(active.task_id, why, active.step_start_tick)
+        ledger.step_failed(active.task_id, why, active.step_start_tick, active.step_start_walked)
         storage.active_step[cid] = nil
         goto continue
       elseif game.tick % PREEMPT_CHECK_TICKS == 0 and walk_preempted(cid, c, active, t) then
@@ -806,7 +806,7 @@ function M.tick()
             if game.tick < active.candidate_retry_deadline then
               goto continue
             end
-            ledger.step_failed(active.task_id, "no candidate position free for " .. step.entity, active.step_start_tick)
+            ledger.step_failed(active.task_id, "no candidate position free for " .. step.entity, active.step_start_tick, active.step_start_walked)
             storage.active_step[cid] = nil
             goto continue
           end
@@ -815,7 +815,7 @@ function M.tick()
         local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror, step.filter,
                                        step.ug, step.chest)
         if r.error then
-          ledger.step_failed(active.task_id, r.error, active.step_start_tick)
+          ledger.step_failed(active.task_id, r.error, active.step_start_tick, active.step_start_walked)
           storage.active_step[cid] = nil
         else
           -- Poll build_queues to completion via the SEPARATE "building" state
@@ -857,8 +857,7 @@ function M.tick()
             -- and survives the walking->acting sub-state transition untouched, so
             -- this captures the full wall-to-wall duration, not just the final
             -- sub-phase.
-            t.step_ticks = t.step_ticks or {}
-            t.step_ticks[t.cursor] = {type = step.type, start = active.step_start_tick, done = game.tick}
+            ledger.step_record(t, step, active.step_start_tick, active.step_start_walked)
             t.cursor = t.cursor + 1
             storage.active_step[cid] = nil
             if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
@@ -902,7 +901,7 @@ function M.tick()
           active.chop_wood_before = c.entity.get_main_inventory().get_item_count("wood")
           active.chop_tree = nearest_tree(c.entity.surface, t.ctx.wood_target)
         else
-          ledger.step_failed(active.task_id, err2 or "ensure_item failed", active.step_start_tick)
+          ledger.step_failed(active.task_id, err2 or "ensure_item failed", active.step_start_tick, active.step_start_walked)
           storage.active_step[cid] = nil
         end
       elseif step.type == "remove" then
@@ -1079,8 +1078,7 @@ function M.tick()
         if ok then
           -- step_ticks: see the "ensure_item" cursor-advance site above for the
           -- full rationale (same capture, same pre-increment cursor key).
-          t.step_ticks = t.step_ticks or {}
-          t.step_ticks[t.cursor] = {type = step.type, start = active.step_start_tick, done = game.tick}
+          ledger.step_record(t, step, active.step_start_tick, active.step_start_walked)
           if result then
             -- what the step moved (a fill's {inserted, item, into}, a take_out's
             -- {extracted, item}), reported back:
@@ -1095,7 +1093,7 @@ function M.tick()
           storage.active_step[cid] = nil
           if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
         else
-          ledger.step_failed(active.task_id, err, active.step_start_tick)
+          ledger.step_failed(active.task_id, err, active.step_start_tick, active.step_start_walked)
           storage.active_step[cid] = nil
         end
       end
@@ -1104,13 +1102,12 @@ function M.tick()
     if active.state == "laying" then
       local res, why = lay.tick(cid, c, t, step, active)
       if res == "done" then
-        t.step_ticks = t.step_ticks or {}
-        t.step_ticks[t.cursor] = {type = step.type, start = active.step_start_tick, done = game.tick}
+        ledger.step_record(t, step, active.step_start_tick, active.step_start_walked)
         t.cursor = t.cursor + 1
         storage.active_step[cid] = nil
         if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
       elseif not res then
-        ledger.step_failed(active.task_id, why, active.step_start_tick)
+        ledger.step_failed(active.task_id, why, active.step_start_tick, active.step_start_walked)
         storage.active_step[cid] = nil
       end
       goto continue
@@ -1142,13 +1139,12 @@ function M.tick()
         end
         -- step_ticks: see the "ensure_item" cursor-advance site (near line 404) for
         -- the full rationale. This is the "place" step's own completion point.
-        t.step_ticks = t.step_ticks or {}
-        t.step_ticks[t.cursor] = {type = step.type, start = active.step_start_tick, done = game.tick}
+        ledger.step_record(t, step, active.step_start_tick, active.step_start_walked)
         t.cursor = t.cursor + 1
         storage.active_step[cid] = nil
         if t.cursor > #t.steps then ledger.complete_task(active.task_id) end
       else
-        ledger.step_failed(active.task_id, st.error or "build failed", active.step_start_tick)
+        ledger.step_failed(active.task_id, st.error or "build failed", active.step_start_tick, active.step_start_walked)
         storage.active_step[cid] = nil
       end
     end
@@ -1280,10 +1276,12 @@ function M.tick()
           -- (control.lua on_script_path_request_finished)
           storage.active_step[cid] = {task_id = task_id, state = "walking",
                                        approach_deadline = walk_deadline,
-                                       step_start_tick = game.tick, route_extend = true}
+                                       step_start_tick = game.tick, route_extend = true,
+                                       step_start_walked = activity.walked(cid)}
         else
           storage.active_step[cid] = {task_id = task_id, state = "acting",
-                                       step_start_tick = game.tick}
+                                       step_start_tick = game.tick,
+                                       step_start_walked = activity.walked(cid)}
         end
       end
     end
