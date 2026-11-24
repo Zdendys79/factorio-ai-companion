@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.258
+  Changes:
+    - A store chest (chest_roles role "store") is barred to BUFFER_SLOTS = 2 slots (was 4; game
+      rule 74: a production's output chest 2 stacks); the store of a material building takes in
+      quantity (BULK: iron, copper and steel plates, stone bricks, gears, cables, electronic
+      circuits, pipes) has no bar.
+    - On a mod update every store's bar is set again by that rule (reapply_store_bars, from
+      on_configuration_changed): a save made with an older version kept its old bars.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.257
   Changes:
     - A gather whose search finds no usable patch within 400 tiles looks again every 60

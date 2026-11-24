@@ -140,6 +140,7 @@ end)
 
 script.on_configuration_changed(function()
   init_storage()
+  chest_roles.reapply_store_bars()
   game.print("[AI Companion] Updated to v" .. MOD_VERSION, u.print_color(u.COLORS.system))
 end)
 
