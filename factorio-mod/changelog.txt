@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.259
+  Changes:
+    - Coal's stores have no bar either (chest_roles BULK; game rule 74, Zdendys).
+    - /fac_chunk_info <x0> <y0> and /fac_area_info <x0> <y0> <x1> <y1> (commands/tile_info.lua,
+      read-only): the dashboard map's tile details -- a square of 32 tiles, every entity
+      described (status, recipe and rate, a drill's mining, consumption, a burner's fuel, the
+      inventories, a belt's lanes; trees and rocks by name and place only), the resources as
+      [x, y, name, amount] -- and an area's sums (machines by status, products a minute, the
+      power the working electric machines draw, the outputs).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.258
   Changes:
     - A store chest (chest_roles role "store") is barred to BUFFER_SLOTS = 2 slots (was 4; game
