@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.257
+  Changes:
+    - A gather whose search finds no usable patch within 400 tiles looks again every 60
+      ticks of its 300-tick retry (was: every turn of the queue, every 5 ticks) and logs its
+      reason (the gather_queue error) once, when it gives up (smoke 1123t: coal gathers far
+      from any coal logged 2758 errors, each look a 400-tile scan). A search that finds a
+      patch clears the retry, so a later search (the patch mined out) gets a whole retry of
+      its own instead of giving up on its first miss.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.256
   Changes:
     - The [HAND_SHORT] log line of a hand craft no store could give comes at most once per

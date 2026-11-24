@@ -192,6 +192,11 @@ local function building_covers_tile(surf, position)
   return false
 end
 
+-- ticks between two looks of a search that found nothing (within its retry of 300 ticks:
+-- find_retry_deadline in the "find" state)
+local FIND_RETRY_GAP = 60
+
+-- The nearest usable `resource` entity within 400 tiles, or nil and why none is usable.
 local function find_reachable_resource(surf, from, resource, blacklist)
   local ores = surf.find_entities_filtered{name = resource, position = from, radius = 400}
   table.sort(ores, function(a, b) return u.distance(a.position, from) < u.distance(b.position, from) end)
@@ -226,12 +231,10 @@ local function find_reachable_resource(surf, from, resource, blacklist)
       end
     end
   end
-  u.log_error(string.format(
+  return nil, string.format(
     "find_reachable_resource: no usable %s within 400 tiles of (%.1f,%.1f) -- total=%d "
     .. "depleted=%d blacklisted=%d built_on=%d near_spawner=%d no_stand_pos=%d",
-    resource, from.x, from.y, total, depleted, blacklisted, built_on, near_spawner, no_stand_pos),
-    "gather_queue")
-  return nil
+    resource, from.x, from.y, total, depleted, blacklisted, built_on, near_spawner, no_stand_pos)
 end
 
 -- SELECT-FAIL ENTITY RESPAWN (2026-07-11, Phase 3 of the mode-a-select-fail
@@ -386,7 +389,11 @@ function M.tick_gather_queues()
     if q.state == "done" then return false end
 
     if q.state == "find" then
-      local e = find_reachable_resource(surf, c.entity.position, q.resource, q.blacklist)
+      -- (an empty search is looked at again every FIND_RETRY_GAP ticks, not on every
+      -- turn of the queue: each look scans 400 tiles; the reason is logged once, when the
+      -- retry gives up)
+      if q.find_next_tick and game.tick < q.find_next_tick then return false end
+      local e, why = find_reachable_resource(surf, c.entity.position, q.resource, q.blacklist)
       if not e then
         -- Bounded retry (2026-07-08, live-caught: gather("coal") returned {gathered=0,
         -- done=true, blacklist=[]} on the VERY FIRST check on one fresh map -- 5
@@ -398,7 +405,11 @@ function M.tick_gather_queues()
         -- as the collision-retry above, just for "found nothing" instead of "found
         -- something blocked".
         q.find_retry_deadline = q.find_retry_deadline or (game.tick + 300)
-        if game.tick < q.find_retry_deadline then return false end
+        if game.tick < q.find_retry_deadline then
+          q.find_next_tick = game.tick + FIND_RETRY_GAP
+          return false
+        end
+        u.log_error(why, "gather_queue")
         q.run_end_tick = game.tick
         q.state = "done"; return false   -- no reachable patch left after retrying -> done, return what we have
       end
@@ -413,6 +424,8 @@ function M.tick_gather_queues()
           ") has no minable item product, skipping", "gather_queue")
         return false
       end
+      -- (a patch found: a later search, once it is mined out, gets its own retry)
+      q.find_retry_deadline, q.find_next_tick = nil, nil
       q.entity_pos = {x = e.position.x, y = e.position.y}
       q.product = mp.products[1].name
       if not q.start_count then q.start_count = inv.get_item_count(q.product) end
