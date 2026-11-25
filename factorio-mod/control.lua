@@ -14,6 +14,7 @@ local chest_roles = require("commands.chest_roles")
 local queues_core = require("commands.queues_core")
 local carry = require("commands.inventory_carry")
 require("commands.scout")
+require("commands.companion_remote")
 local seen_map = require("commands.seen_map")
 
 -- Get version dynamically from mod info

@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.263
+  Changes:
+    - remote "fac_companions".position(cid) (commands/companion_remote.lua): where a companion
+      stands, for read-only console commands -- "the first character without a player" took
+      the scout too.
+    - remote "fac_seen".pieces(surface, x0, y0, size): the map pieces holding a seen chunk (the
+      dashboard reads only those).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.262
   Changes:
     - The seen map (commands/seen_map.lua; factorio-ai game rule 82): the game charts nothing for a

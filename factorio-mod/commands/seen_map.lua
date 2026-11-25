@@ -145,6 +145,26 @@ end
 
 remote.add_interface("fac_seen", {
   is_seen = function(si, x, y) return M.is_seen(si, x, y) end,
+  -- the pieces (squares of `size` tiles from (x0, y0)) holding a seen chunk, as "i,j"
+  -- (column, row) joined by ';' -- the dashboard reads only those
+  pieces = function(si, x0, y0, size)
+    local out, got = {}, {}
+    for k in pairs((storage.seen_chunks or {})[si] or {}) do
+      local cx, cy = k:match("^(%-?%d+),(%-?%d+)$")
+      if cx then
+        -- (a chunk across a piece's edge: both pieces)
+        for _, dx in ipairs({0, 31}) do
+          for _, dy in ipairs({0, 31}) do
+            local i = math.floor((tonumber(cx) * 32 + dx - x0) / size)
+            local j = math.floor((tonumber(cy) * 32 + dy - y0) / size)
+            local key = i .. "," .. j
+            if not got[key] then got[key] = true; out[#out + 1] = key end
+          end
+        end
+      end
+    end
+    return table.concat(out, ";")
+  end,
   count = function(si)
     local n = 0
     for _ in pairs((storage.seen_chunks or {})[si] or {}) do n = n + 1 end
