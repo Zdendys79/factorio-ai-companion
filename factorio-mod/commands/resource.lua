@@ -3,6 +3,7 @@ local u = require("commands.init")
 local queues = require("commands.queues")
 local requests = require("commands.controller_requests")
 local nearest = require("commands.nearest")
+local seen_map = require("commands.seen_map")
 
 local normalize = {copper = "copper-ore", iron = "iron-ore", coal = "coal", stone = "stone", uranium = "uranium-ore", oil = "crude-oil"}
 
@@ -27,7 +28,10 @@ commands.add_command("fac_resource_list", nil, function(cmd)
     local res = c.entity.surface.find_entities_filtered(search)
     local found = {}
     for _, r in ipairs(res) do
-      found[#found + 1] = {name = r.name, position = {x = math.floor(r.position.x), y = math.floor(r.position.y)}, amount = r.amount, distance = math.floor(u.distance(pos, r.position))}
+      -- (only what was seen: game rule 82, commands/seen_map.lua)
+      if seen_map.is_seen(c.entity.surface.index, r.position.x, r.position.y) then
+        found[#found + 1] = {name = r.name, position = {x = math.floor(r.position.x), y = math.floor(r.position.y)}, amount = r.amount, distance = math.floor(u.distance(pos, r.position))}
+      end
     end
     table.sort(found, function(a, b) return a.distance < b.distance end)
     local total = #found

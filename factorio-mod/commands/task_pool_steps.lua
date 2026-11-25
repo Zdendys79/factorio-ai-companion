@@ -9,6 +9,7 @@ local ledger = require("commands.task_pool_ledger")
 local feeds = require("commands.upkeep_feeds")
 local inv_watch = require("commands.inventory_watch")
 local machine_recipe = require("commands.machine_recipe")
+local seen_map = require("commands.seen_map")
 
 local step_target_pos = targeting.step_target_pos
 local WALK_REACH = targeting.WALK_REACH
@@ -269,7 +270,9 @@ function M.run_find_patch(c, t, step)
     return u.distance(a.position, c.entity.position) < u.distance(b.position, c.entity.position)
   end)
   for _, e in ipairs(es) do
+    -- (only what was seen: game rule 82, commands/seen_map.lua)
     if e.valid and (e.amount or 1) > 0
+       and seen_map.is_seen(surf.index, e.position.x, e.position.y)
        and surf.find_non_colliding_position("character", e.position, WALK_REACH, 0.5) then
       t.ctx.px, t.ctx.py = e.position.x, e.position.y
       return true

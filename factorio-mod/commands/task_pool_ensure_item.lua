@@ -7,6 +7,7 @@
 
 local u = require("commands.init")
 local R = require("commands.reservations")
+local seen_map = require("commands.seen_map")
 local queues = require("commands.queues")
 local fetch = require("commands.task_pool_fetch")
 local Stores = require("commands.supply_stores")
@@ -204,7 +205,9 @@ function M.start_ensure_item_action(c, cid, t)
         type = "tree", position = c.entity.position, radius = radius}
       for _, tr in ipairs(trees) do
         local key = math.floor(tr.position.x) .. "," .. math.floor(tr.position.y)
-        if tr.valid and not t.ctx.wood_tried[key] then
+        -- (only what was seen: game rule 82, commands/seen_map.lua)
+        if tr.valid and not t.ctx.wood_tried[key]
+           and seen_map.is_seen(c.entity.surface.index, tr.position.x, tr.position.y) then
           local d = u.distance(c.entity.position, tr.position)
           if d < best_d then best, best_d = tr, d end
         end

@@ -70,7 +70,9 @@ function M.pick(anchor, surface, primary)
   local best, best_id, best_key = nil, nil, nil
   local near_id, near_c, near_d = nil, nil, math.huge
   for cid, c in pairs(storage.companions or {}) do
-    if c.entity and c.entity.valid and (not surface or c.entity.surface.name == surface) then
+    -- (a scout takes no team task: commands/scout.lua)
+    if c.entity and c.entity.valid and (not surface or c.entity.surface.name == surface)
+       and c.role ~= "scout" then
       local n = (open[cid] or 0) + ((storage.active_step and storage.active_step[cid]) and 1 or 0)
       local d = anchor and u.distance(c.entity.position, anchor) or 0
       -- 1. already working in that area (with something open): it keeps the area
@@ -90,7 +92,7 @@ function M.pick(anchor, surface, primary)
     local low, low_c = nil, nil
     for cid, c in pairs(storage.companions or {}) do
       if c.entity and c.entity.valid and (not surface or c.entity.surface.name == surface)
-         and (low == nil or cid < low) then
+         and c.role ~= "scout" and (low == nil or cid < low) then
         low, low_c = cid, c
       end
     end

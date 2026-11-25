@@ -4,8 +4,18 @@
 -- ring by ring and the answer is the true minimum distance within the first ring that
 -- holds a match. WHAT: no result cap is ever applied before the minimum is taken.
 local u = require("commands.init")
+local seen_map = require("commands.seen_map")
 
 local M = {}
+
+-- only what was seen (factorio-ai game rule 82: commands/seen_map.lua)
+local function seen_only(surf, list)
+  local out = {}
+  for _, e in ipairs(list) do
+    if seen_map.is_seen(surf.index, e.position.x, e.position.y) then out[#out + 1] = e end
+  end
+  return out
+end
 
 -- Circle radii tried in order; past the last one the whole MAX_HALF square is searched.
 local RINGS = {32, 96, 200}
@@ -32,7 +42,7 @@ end
 -- on `surf`, with its distance; nil when none exists within MAX_HALF.
 function M.nearest_entity(surf, center, filter)
   for _, area in ipairs(search_areas(center)) do
-    local es = surf.find_entities_filtered(with_area(filter, area))
+    local es = seen_only(surf, surf.find_entities_filtered(with_area(filter, area)))
     if #es > 0 then
       local best = surf.get_closest(center, es)
       if best and best.valid then return best, u.distance(best.position, center) end
@@ -66,11 +76,12 @@ end
 -- none exists within MAX_HALF.
 function M.nearest_tile(surf, center, names)
   for _, area in ipairs(search_areas(center)) do
-    local tiles = surf.find_tiles_filtered(with_area({name = names}, area))
+    local tiles = seen_only(surf, surf.find_tiles_filtered(with_area({name = names}, area)))
     if #tiles > 0 then
       local best, min = min_tile(tiles, center)
       if area.radius then
-        local again = surf.find_tiles_filtered{name = names, position = center, radius = min + TILE_MARGIN}
+        local again = seen_only(surf, surf.find_tiles_filtered{name = names, position = center,
+                                                             radius = min + TILE_MARGIN})
         best, min = min_tile(again, center)
       end
       return best, min

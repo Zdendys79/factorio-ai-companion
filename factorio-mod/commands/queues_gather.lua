@@ -12,6 +12,7 @@
 -- every call site below, same as the original's real assignment was).
 
 local u = require("commands.init")
+local seen_map = require("commands.seen_map")
 local core = require("commands.queues_core")
 local requests = require("commands.controller_requests")
 local inv_watch = require("commands.inventory_watch")
@@ -201,7 +202,9 @@ local function find_reachable_resource(surf, from, resource, blacklist)
   local ores = surf.find_entities_filtered{name = resource, position = from, radius = 400}
   table.sort(ores, function(a, b) return u.distance(a.position, from) < u.distance(b.position, from) end)
   for _, e in ipairs(ores) do
+    -- (only what was seen: game rule 82, commands/seen_map.lua)
     if e.valid and (e.amount or 0) > 0
+       and seen_map.is_seen(surf.index, e.position.x, e.position.y)
        and not (blacklist and blacklist[_tile_key(e.position)])
        and not building_covers_tile(surf, e.position)
        and surf.count_entities_filtered{type = "unit-spawner", position = e.position, radius = 20} == 0

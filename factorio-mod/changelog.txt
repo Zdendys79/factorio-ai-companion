@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.262
+  Changes:
+    - The seen map (commands/seen_map.lua; factorio-ai game rule 82): the game charts nothing for a
+      force without a connected player, so the mod books what was seen by the game's rules -- the
+      5x5 chunks round every companion (and the chunks within 5 generated round her, so she can
+      walk on), a working radar's 7x7 and one more sector chunk out to 14 every 2000 ticks -- only
+      generated chunks; an older save's built chunks booked once. Remote interface "fac_seen"
+      (is_seen, count). The nearest ore / water search, the resource list, find_patch, the gather's
+      ore search, the wood's tree search and fac_world_scan keep only seen entities and tiles.
+    - The scout (commands/scout.lua): /fac_companion_role <cid> <scout|none>; team.pick gives a
+      scout no task.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.261
   Changes:
     - The steam plant's growth ground (keep-off owner plant-growth, Python's _reserve_plant_growth) is

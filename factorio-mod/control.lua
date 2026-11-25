@@ -13,6 +13,8 @@ local inv_watch = require("commands.inventory_watch")
 local chest_roles = require("commands.chest_roles")
 local queues_core = require("commands.queues_core")
 local carry = require("commands.inventory_carry")
+require("commands.scout")
+local seen_map = require("commands.seen_map")
 
 -- Get version dynamically from mod info
 local MOD_VERSION = script.active_mods["ai-companion"] or "unknown"
@@ -1118,6 +1120,8 @@ script.on_nth_tick(5, function(ev)
   -- the mod's own fuel upkeep (upkeep.lua): after the pool's tick, so its reservations
   -- of newly mined coal come first; its tasks enter the pool for the next tick
   guard_tick("upkeep", upkeep.tick, ev.tick)
+  -- the map the companions and the radars saw (commands/seen_map.lua)
+  guard_tick("seen_map", seen_map.tick, ev.tick)
   -- last: after every queue had its turn this tick (commands/activity.lua)
   guard_tick("activity", activity.tick, ev.tick)
 end)

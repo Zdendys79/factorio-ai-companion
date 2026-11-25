@@ -1,5 +1,6 @@
 -- AI Companion v0.7.0 - World commands
 local u = require("commands.init")
+local seen_map = require("commands.seen_map")
 local nearest = require("commands.nearest")
 
 local normalize = {copper = "copper-ore", iron = "iron-ore", coal = "coal", stone = "stone", uranium = "uranium-ore"}
@@ -41,7 +42,9 @@ commands.add_command("fac_world_scan", nil, function(cmd)
     local es = c.entity.surface.find_entities_filtered(search)
     local result = {}
     for _, e in ipairs(es) do
-      if e.valid and e ~= c.entity then
+      -- (only what was seen: game rule 82, commands/seen_map.lua)
+      if e.valid and e ~= c.entity
+         and seen_map.is_seen(c.entity.surface.index, e.position.x, e.position.y) then
         local r = {name = e.name, type = e.type, position = {x = math.floor(e.position.x * 10) / 10, y = math.floor(e.position.y * 10) / 10}}
         if e.health then r.health = e.health end
         result[#result + 1] = r
