@@ -170,7 +170,8 @@ end
 
 -- Contexts that report what the mod does as usual, not a fault: they are only counted
 -- (storage.info_counts), never put in the error ring or the error counts.
-local INFO_CONTEXTS = {walk_target_retargeted = true, walk_start_shifted = true}
+local INFO_CONTEXTS = {walk_target_retargeted = true, walk_start_shifted = true,
+                       walk_inventory_full = true}
 
 function M.log_error(msg, ctx)
   local key = ctx or "internal"

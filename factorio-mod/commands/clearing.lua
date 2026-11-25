@@ -54,15 +54,24 @@ end
 local RELIEF_ITEMS = {"wood", "stone", "iron-ore", "copper-ore", "coal", "stone-brick"}
 M.ROOM_TICKS = 3600        -- the longest she waits for a chest or a walk to one
 
--- Whether her inventory takes what mining `o` yields.
+-- Whether her inventory takes what mining `o` yields (also the walk's clearing, control.lua):
+-- each item product's amount (its most) fits -- the room left in its part stacks first,
+-- the rest in empty slots counted across all the products (a huge rock's stone and coal
+-- do not both fit in one slot). can_insert would answer whether SOME fit: a stack of 99
+-- wood takes 1 of a tree's 4, and the tree then never comes down.
 local function room_for(inv, o)
-  local products = o.prototype.mineable_properties.products
-  for _, p in ipairs(products or {}) do
-    local n = p.amount or p.amount_max or 1
-    if not inv.can_insert{name = p.name, count = n} then return false end
+  local empty, slots = inv.count_empty_stacks(), 0
+  for _, p in ipairs(o.prototype.mineable_properties.products or {}) do
+    if p.type == "item" then
+      local n = p.amount or p.amount_max or 1
+      local stack = prototypes.item[p.name].stack_size
+      local in_parts = math.max(0, inv.get_insertable_count(p.name) - empty * stack)
+      if n > in_parts then slots = slots + math.ceil((n - in_parts) / stack) end
+    end
   end
-  return true
+  return slots <= empty
 end
+M.room_for = room_for
 
 -- Her inventory is full: she frees it herself, the mod's own business (Zdendys: Python
 -- is only told she has nowhere to put things). The item she holds most of (of
@@ -88,7 +97,8 @@ local function make_room(cid, c, st)
   end
   if not best then return "none" end
   local half = math.floor((prototypes.item[best].stack_size or 50) / 2)
-  local move = math.max(1, best_n - half)
+  -- (all but half a stack; half a stack or less goes whole, so a slot comes free)
+  local move = best_n > half and best_n - half or best_n
   local chest = Surplus.relief_chest(cid, c, best, move)
   if not chest then return "busy" end              -- (Python asked: she waits)
   if u.distance(e.position, chest.position) > 8 then

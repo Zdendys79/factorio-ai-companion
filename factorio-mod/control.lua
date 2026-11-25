@@ -13,6 +13,7 @@ local inv_watch = require("commands.inventory_watch")
 local chest_roles = require("commands.chest_roles")
 local queues_core = require("commands.queues_core")
 local carry = require("commands.inventory_carry")
+local clearing = require("commands.clearing")
 require("commands.scout")
 require("commands.companion_remote")
 local seen_map = require("commands.seen_map")
@@ -356,6 +357,24 @@ local function obstacle_ahead(list, from, toward, within, skip)
   return best
 end
 
+-- obstacle_ahead for her walk's clearing (q.clear_skip passed over), but only an obstacle
+-- whose yield her inventory takes: with it full one never comes down (the engine keeps
+-- mining it, CLEAR_TARGET_MAX_TICKS lost) -- such an obstacle is skipped for this walk at
+-- once (logged) and the walk goes round it.
+local function minable_ahead(e, q, list, from, toward, within)
+  local inv = e.get_main_inventory()
+  for _ = 1, #list do
+    local o = obstacle_ahead(list, from, toward, within, q.clear_skip)
+    if not o or clearing.room_for(inv, o) then return o end
+    q.clear_skip = q.clear_skip or {}
+    q.clear_skip[queues_core.tile_key(o.position)] = true
+    u.log_error(string.format("walk: %s at (%.1f,%.1f) not mined -- her inventory takes "
+                              .. "nothing of it; passed", o.name, o.position.x, o.position.y),
+                "walk_inventory_full")
+  end
+  return nil
+end
+
 -- Her way on for obstacle_ahead: the walk's next waypoint, else its target.
 local function walk_heading(q)
   local wp = q.path and q.path_idx and q.path[q.path_idx]
@@ -638,8 +657,8 @@ local function process_walking_queues()
       -- ~0.4-tile collision box and stop even closer).
       -- (only one in her way: a tree beside the path is passed -- Zdendys: she clears
       -- what is in her way; stuck, the radius-4 scan below takes any near one)
-      local ahead = obstacle_ahead(find_clearable_obstacles(e.surface, e.position, 2),
-                                   e.position, walk_heading(q), IN_WAY_R, q.clear_skip)
+      local ahead = minable_ahead(e, q, find_clearable_obstacles(e.surface, e.position, 2),
+                                  e.position, walk_heading(q), IN_WAY_R)
       if ahead then
         q.clearing_target = ahead
       end
@@ -868,8 +887,8 @@ local function process_walking_queues()
           -- right at the WAYPOINT instead, so a mineable tree/rock blocking it gets
           -- targeted before the character ever walks into it.
           if q.path[q.path_idx].needs_destroy_to_reach and not q.clearing_target then
-            local blocker = obstacle_ahead(find_clearable_obstacles(e.surface, goal, 2), goal,
-                                           nil, nil, q.clear_skip)
+            local blocker = minable_ahead(e, q, find_clearable_obstacles(e.surface, goal, 2),
+                                          goal, nil, nil)
             if blocker then
               q.clearing_target = blocker
               e.selected = blocker
@@ -930,7 +949,7 @@ local function process_walking_queues()
       -- -- same reasoning as above: mining_time is real, one-shot calls fail silently).
       if moved < 0.3 and not q.clearing_target then
         local nearby = find_clearable_obstacles(e.surface, e.position, 4)
-        local near = obstacle_ahead(nearby, e.position, walk_heading(q), nil, q.clear_skip)
+        local near = minable_ahead(e, q, nearby, e.position, walk_heading(q), nil)
         if near then
           q.clearing_target = near
           e.selected = near

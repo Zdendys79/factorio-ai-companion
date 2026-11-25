@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.265
+  Changes:
+    - The walk's clearing (control.lua minable_ahead): an obstacle whose mining yield her
+      inventory cannot take is passed at once (logged, walk_inventory_full) -- with it full the
+      engine never fells it and she stood 900 ticks at each.
+    - clearing.room_for counts what fits (LuaInventory.get_insertable_count): can_insert answered
+      whether some of a tree's 4 wood fit, a stack of 99 took one and the tree stayed.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.264
   Changes:
     - chest_roles BULK: landfill -- a landfill block's store chests have no limit (factorio-ai
