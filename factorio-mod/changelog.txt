@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.264
+  Changes:
+    - chest_roles BULK: landfill -- a landfill block's store chests have no limit (factorio-ai
+      game rule 83: its three steel chests "bez nastaveneho limitu objemu").
+---------------------------------------------------------------------------------------------------
 Version: 0.16.263
   Changes:
     - remote "fac_companions".position(cid) (commands/companion_remote.lua): where a companion

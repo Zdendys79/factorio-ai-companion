@@ -31,10 +31,11 @@ M.ROLES = {store = true, surplus = true}
 M.BUFFER_SLOTS = 2          -- the slots of a store (buffer) chest: 2 stacks (game rule 74)
 -- The materials building takes in quantity, and coal: their stores are not limited (game
 -- rule 74, Zdendys: plates, gears, cables -- "all materials needed in quantity when
--- building"; coal added by him).
+-- building"; coal added by him; landfill too, game rule 83: "3 bedny (ocelove) bez
+-- nastaveneho limitu objemu").
 M.BULK = {["iron-plate"] = true, ["copper-plate"] = true, ["steel-plate"] = true,
           ["stone-brick"] = true, ["iron-gear-wheel"] = true, ["copper-cable"] = true,
-          ["electronic-circuit"] = true, ["pipe"] = true, ["coal"] = true}
+          ["electronic-circuit"] = true, ["pipe"] = true, ["coal"] = true, ["landfill"] = true}
 M.AT = {consumer = true, belt = true, central = true}
 
 local function book()
