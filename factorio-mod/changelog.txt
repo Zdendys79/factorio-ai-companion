@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.268
+  Changes:
+    - queues_build.lua: a placement that fails on a collision carries what stands there in its
+      failure reason ("Cannot place (collision) <entity> at (x,y) tile=<tile> nearby: <names>"),
+      so the controller logs the blocker with the task's end -- before, only the mod's error ring
+      (the last 50) held it and a long run lost it.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.267
   Changes:
     - escape.lua (new; factorio-ai game rule 93, keep the way out free while building): before a

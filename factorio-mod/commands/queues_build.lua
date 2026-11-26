@@ -562,9 +562,12 @@ function M.tick_build_queues()
           q.self_collision_step_away_count, table.concat(diag.nearby, ",")),
           "build_queue")
         -- her own body was the blocker but no dry spot to step away to: say so (review)
-        q.failed = (clear_without_self and tries_left)
+        -- (what stands there travels with the failure: Python logs it at the task's end)
+        q.failed = ((clear_without_self and tries_left)
           and "Cannot place (collision): her own body, and no dry step-away spot"
-          or "Cannot place (collision)"
+          or "Cannot place (collision)")
+          .. string.format(" %s at (%.1f,%.1f) tile=%s nearby: %s", q.entity, q.position.x,
+                           q.position.y, diag.tile, table.concat(diag.nearby, ","):sub(1, 200))
         q.run_end_tick = game.tick
         q.state = "failed"
         return false
