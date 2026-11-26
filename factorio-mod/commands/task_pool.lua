@@ -162,6 +162,7 @@ local entity_at = require("commands.entity_at")
 local machine_steps = require("commands.task_pool_machine_steps")
 local fetch = require("commands.task_pool_fetch")
 local lay = require("commands.task_pool_lay")
+local escape = require("commands.escape")
 local pickup = require("commands.task_pool_remove")
 
 -- an ensure_item craft waits at most this long for her crafting queue to empty
@@ -812,8 +813,10 @@ function M.tick()
           end
           pos, place_dir = {x = chosen.x, y = chosen.y}, chosen.dir
         end
+        -- (the whole plan's bounds: a piece must not close her in them -- escape.lua, rule 93)
+        t.escape_bounds = t.escape_bounds or escape.bounds(t.steps)
         local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror, step.filter,
-                                       step.ug, step.chest)
+                                       step.ug, step.chest, t.escape_bounds)
         if r.error then
           ledger.step_failed(active.task_id, r.error, active.step_start_tick, active.step_start_walked)
           storage.active_step[cid] = nil

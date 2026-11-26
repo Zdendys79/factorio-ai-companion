@@ -8,6 +8,7 @@ local core = require("commands.queues_core")
 local inv_watch = require("commands.inventory_watch")
 local clearing = require("commands.clearing")
 local body_collision = require("commands.body_collision")
+local escape = require("commands.escape")
 
 local valid_companion = core.valid_companion
 local process_queue = core.process_queue
@@ -151,6 +152,10 @@ end
 -- path, same order of magnitude as this file's other bounded retries (place_verified's
 -- tries=3, direction_achieved's tries=5).
 local MAX_SELF_COLLISION_STEP_AWAY = 2
+-- moves to a spot that keeps her way out before a build fails (escape.lua; the spot is
+-- computed with the piece standing, so one move should do -- a second covers her walk
+-- stopping short of it)
+local MAX_ESCAPE_MOVES = 2
 -- re-approaches after she drifted out of reach in the BUILDING state, each with a fresh
 -- deadline -- bounded so a build cannot loop approaching/clearing/building forever
 local MAX_REAPPROACH = 3
@@ -205,7 +210,7 @@ local function kept_off(entity_name, x, y)
   return nil
 end
 
-function M.start_build(cid, entity_name, position, direction, mirror, filter, ug, chest)
+function M.start_build(cid, entity_name, position, direction, mirror, filter, ug, chest, bounds)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
   if position then
@@ -256,6 +261,9 @@ function M.start_build(cid, entity_name, position, direction, mirror, filter, ug
     -- ug: an underground belt's side ("input" | "output" | nil) -- create_entity's
     -- type only (can_place_entity takes none); nil for every other build
     ug = ug,
+    -- bounds: the build's bounds (escape.lua) a placed piece must not close her in; nil for
+    -- a single build (its own box and a ring are used)
+    escape_bounds = bounds,
     approach = approach,
     state = "approaching",
     tick_start = game.tick,
@@ -301,6 +309,28 @@ function M.tick_build_queues()
     -- somehow can't even reach the nearby step-away point doesn't hang here forever --
     -- either way (arrived or timed out) falls through to "approaching" and from there a
     -- normal build attempt, since ANY distance away from where she was already helps.
+    -- ESCAPING (game rule 93): she walks to the spot from which the piece keeps her way out,
+    -- then the build goes on from there (approaching: she is within reach of it)
+    if q.state == "escaping" then
+      local dir = u.get_direction(c.entity.position, q.step_away_target)
+      -- (on the spot's tile: get_direction answers nil within half a tile)
+      local arrived = dir == nil or u.distance(c.entity.position, q.step_away_target) <= 0.5
+      if not arrived and game.tick < q.step_away_deadline then
+        c.entity.walking_state = {walking = true, direction = dir}
+        return false
+      end
+      if arrived or game.tick >= q.step_away_deadline then
+        storage.walking_queues[cid] = nil
+        c.entity.walking_state = {walking = false}
+        q.approach = c.entity.position
+        q.state = "approaching"
+        q.escape_checked = nil
+        q.last_pos = nil
+        q.approach_deadline = u.approach_deadline(c.entity.position, q.position)
+      end
+      return false
+    end
+
     if q.state == "stepping_away" then
       -- arrived: the walker stops her up to 2 tiles short of a target and drops its
       -- queue, so <= 1 never held and every step-away waited out its deadline (review)
@@ -313,6 +343,7 @@ function M.tick_build_queues()
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
+        q.escape_checked = nil
         q.last_pos = nil
         q.approach_deadline = u.approach_deadline(c.entity.position, approach)
       end
@@ -412,6 +443,7 @@ function M.tick_build_queues()
         storage.walking_queues[cid] = {target = approach}
         q.approach = approach
         q.state = "approaching"
+        q.escape_checked = nil
         q.last_pos = nil
         q.approach_deadline = u.approach_deadline(c.entity.position, approach)
         return false
@@ -439,6 +471,37 @@ function M.tick_build_queues()
       -- always something else and could never be cleared by an in-place wait alone. A
       -- genuinely permanent OTHER-cause collision still correctly fails, just after a
       -- few retries instead of the very first check, exactly as before.
+      -- KEEP THE WAY OUT (factorio-ai game rule 93, escape.lua): a piece that would close
+      -- her in the build is placed from a spot that keeps her way out -- she walks there
+      -- first (at most MAX_ESCAPE_MOVES times, then the build fails, logged)
+      local b = q.escape_bounds or escape.bounds(nil, {body_collision.box_at(
+        prototypes.entity[q.entity], q.position, q.direction)})
+      -- (once per placement attempt -- not again on every collision-retry tick)
+      if not q.escape_checked and escape.traps(c.entity, q.entity, q.position, q.direction, b) then
+        q.escape_moves = (q.escape_moves or 0) + 1
+        local spot = q.escape_moves <= MAX_ESCAPE_MOVES and escape.safe_spot(
+          c.entity, q.entity, q.position, q.direction, b, reach)
+        if spot then
+          -- (she walks there step by step herself: the walker stops up to 2 tiles short, and
+          -- the spot may be one tile across the closing gap)
+          storage.walking_queues[cid] = nil
+          q.step_away_target = spot
+          q.state = "escaping"
+          q.step_away_deadline = u.approach_deadline(c.entity.position, spot)
+          return false
+        end
+        local why = q.escape_moves > MAX_ESCAPE_MOVES
+          and (MAX_ESCAPE_MOVES .. " move(s) made, still closed in")
+          or (escape.last_miss or "no spot found")
+        u.log_error(string.format("build queue: %s at (%.1f,%.1f) would close her in the build "
+          .. "and no spot within reach keeps her way out (%s)", q.entity, q.position.x,
+          q.position.y, why), "build_queue")
+        q.failed = "would close her in: no spot within reach keeps her way out (" .. why .. ")"
+        q.run_end_tick = game.tick
+        q.state = "failed"
+        return false
+      end
+      q.escape_checked = true
       if not surf.can_place_entity{name = q.entity, position = q.position,
                                    direction = q.direction, force = c.entity.force,
                                    mirror = q.mirror} then
@@ -608,6 +671,7 @@ function M.get_build_status(cid)
   local progress = 0
   if q.state == "approaching" then progress = 10
   elseif q.state == "stepping_away" then progress = 55  -- self-collision fix, 2026-07-13
+  elseif q.state == "escaping" then progress = 55       -- the way out kept (escape.lua)
   elseif q.state == "clearing" then progress = 50
   elseif q.state == "building" then
     progress = 60 + math.floor((game.tick - q.tick_start) / BUILD_TICKS * 40)

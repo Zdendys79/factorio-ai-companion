@@ -1,4 +1,21 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.267
+  Changes:
+    - escape.lua (new; factorio-ai game rule 93, keep the way out free while building): before a
+      piece that stands in a character's way is placed, a flood over the tiles round her (free
+      where a character could stand -- can_place_entity "character") asks whether she reaches the
+      ground outside the build's bounds (the whole plan's boxes and a one-tile ring) now and with
+      the piece standing; only a piece that takes her way out away traps her. She then walks
+      herself (state "escaping", walking_state step by step) to the nearest spot within build
+      reach from which the piece keeps her way out, at most 2 moves, else the build fails with
+      its reason logged. The check runs once per placement attempt; a failed pocket is not
+      flooded again; belt tiles are no spots.
+    - task_pool passes the plan's bounds to start_build; queues_core pauses the no-progress clock
+      while she is escaping (as for the step-away); body_collision exports box_at and
+      blocks_characters.
+    - Why (factorio-ai smoke 1126l): she stood inside a steam-engine block from tick 144k to
+      306k, every walk timed out.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.266
   Changes:
     - build_plan: a plan piece may be optional (optional = true, checked a boolean): its place

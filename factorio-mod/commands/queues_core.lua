@@ -143,7 +143,8 @@ function M.process_queue(queue_name, processor)
       -- stepping_away->approaching transition, and this state's OWN bounded deadline
       -- (mirrored above, capped at MAX_SELF_COLLISION_STEP_AWAY cycles) is what actually
       -- bounds total time spent here, exactly as intended.
-      if queue_name == "build_queues" and q.state == "stepping_away" then
+      if queue_name == "build_queues"
+          and (q.state == "stepping_away" or q.state == "escaping") then
         q._stale_total, q._stale_pos, q._stale_ticks = total, {x = pos.x, y = pos.y}, 0
       elseif q._stale_total == total and q._stale_pos and not moved then
         q._stale_ticks = (q._stale_ticks or 0) + M.TICK_INTERVAL

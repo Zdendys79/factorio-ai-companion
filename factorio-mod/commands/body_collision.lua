@@ -21,6 +21,16 @@ local function box_at(proto, position, direction)
          position.x + math.max(x1, x2), position.y + math.max(y1, y2)
 end
 
+M.box_at = box_at
+
+-- Whether an `entity_name` stands in a character's way at all (their collision masks share
+-- a layer: a building does, a belt or a pipe-to-ground's hidden span does not).
+function M.blocks_characters(character, entity_name)
+  local proto = prototypes.entity[entity_name]
+  return proto ~= nil and proto.collision_box ~= nil
+    and share_layer(proto.collision_mask, character.prototype.collision_mask)
+end
+
 -- @param character LuaEntity her body
 -- @return boolean true when an `entity_name` built at `position` would overlap it
 function M.blocks(character, entity_name, position, direction)
