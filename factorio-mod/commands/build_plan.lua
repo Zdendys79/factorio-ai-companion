@@ -21,7 +21,8 @@
 --      set_recipe step (0.16.174: an assembler, a chemical plant, a refinery); an
 --      inserter with a filter gets it as it is placed (0.16.186: a line's burner
 --      inserter takes only coal -- unfiltered, an empty furnace takes iron plates
---      for steel);
+--      for steel); a piece marked optional that cannot be placed is skipped (the
+--      task's step_errors say so) and the task goes on;
 --   6. one insert step per fill, optional (a fill that fails leaves the build
 --      standing; the task's step_errors say so) -- the fuel goes in only once the
 --      whole chain stands.
@@ -112,6 +113,9 @@ local function check(plan, force)
     end
     if p.mirror ~= nil and type(p.mirror) ~= "boolean" then
       return "piece " .. i .. ": mirror must be true or false"
+    end
+    if p.optional ~= nil and type(p.optional) ~= "boolean" then
+      return "piece " .. i .. ": optional must be true or false"
     end
     if p.ug ~= nil then
       if p.ug ~= "input" and p.ug ~= "output" then
@@ -266,9 +270,11 @@ function M.expand(plan, force)
       end
     else
       local p = g.piece
+      -- (an optional piece that cannot be placed is skipped and the task goes on: a coal
+      -- line's units -- one blocked unit must not undo the whole line)
       steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
                            dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
-                           filter = p.filter, ug = p.ug,
+                           filter = p.filter, ug = p.ug, optional = p.optional or nil,
                            chest = p.chest_role and {role = p.chest_role, item = p.chest_item,
                                                      at = p.chest_at}}
       -- (an assembler's recipe right after it stands -- 0.16.174)

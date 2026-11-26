@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.266
+  Changes:
+    - build_plan: a plan piece may be optional (optional = true, checked a boolean): its place
+      step is optional -- a piece that cannot be placed is recorded in the task's step_errors
+      and the task goes on (factorio-ai: a coal line's units, one blocked unit must not undo
+      the whole line; live: a chest put on a unit's drill tile, 25 of 26 units stood).
+    - belt_runs: an optional belt piece is never carried by a lay run (a lay's failure fails
+      its task) -- it is placed on its own.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.265
   Changes:
     - The walk's clearing (control.lua minable_ahead): an obstacle whose mining yield her

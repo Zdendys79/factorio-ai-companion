@@ -8,11 +8,12 @@ local M = {}
 
 local BELT_TYPES = {["transport-belt"] = true, ["underground-belt"] = true}
 
--- Whether `p` is a belt piece a lay can carry (no role, recipe, filter or mirror).
+-- Whether `p` is a belt piece a lay can carry (no role, recipe, filter or mirror, and
+-- not optional: a lay's failure fails its task, an optional piece is placed on its own).
 local function belt_piece(p)
   local proto = prototypes.entity[p.entity]
   return proto and BELT_TYPES[proto.type] and not p.role and not p.recipe
-    and not p.filter and not p.mirror
+    and not p.filter and not p.mirror and not p.optional
 end
 
 -- Whether `b` follows `a` in one run: the next tile (adjacent), or the exit paired with
