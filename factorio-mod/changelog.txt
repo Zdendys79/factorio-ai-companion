@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.270
+  Changes:
+    - task_pool_machine_steps.lua: a new "take_belt" step (a player's pick-up off a belt): at a
+      belt END (a transport belt with no belt output), off its full (backed-up) lanes only --
+      at least BELT_FULL_LANE (4) of the item on a lane -- up to the asked count; it fails
+      when nothing was taken. task_pool and task_pool_targeting know it (a reach step).
+    - upkeep_stock.lua: her stock takes the plates off such a belt end when it is nearer than
+      the furnace output or store chest found (searched within BELT_SEARCH_R, 32 tiles, of
+      her); a failed belt source is held off like the others.
+    - entity_at.lua: a tree or a rock (simple-entity) named at its own position is found in
+      the neutral force too, so a pick-up step mines it (factorio-ai game rule 20: the base's
+      passages kept free); any other neutral thing still is not.
+---------------------------------------------------------------------------------------------------
 Version: 0.16.269
   Changes:
     - splitter_settings.lua (new; factorio-ai game rule 96): a plan piece's "splitter" settings

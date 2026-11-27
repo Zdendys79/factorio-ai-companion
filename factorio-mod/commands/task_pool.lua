@@ -63,6 +63,8 @@
 --   {type="fuel", x=, y=, item=NAME, count=N}            -> up to N into the burners round
 --                                                          (x, y), nearest first -- its result
 --                                                          {inserted, item} in step_results
+--   {type="take_belt", x=, y=, item=NAME, count=N}       -> up to N off the belts there
+--                                                          (machine_steps.run_take_belt)
 --   {type="take_out", x=, y=, item=NAME, count=N}        -> up to N out of the entity
 --                                                          closest to (x, y): chest,
 --                                                          crafter output, fuel
@@ -169,7 +171,8 @@ local pickup = require("commands.task_pool_remove")
 local CRAFT_QUEUE_WAIT_TICKS = 1800
 -- the steps that act on their target by hand, only within her reach (the acting state)
 local REACH_STEPS = {remove = true, fuel = true, insert = true, set_recipe = true,
-                     take = true, fill = true, take_out = true, replace = true}
+                     take = true, fill = true, take_out = true, take_belt = true,
+                     replace = true}
 
 local M = {}
 
@@ -1056,6 +1059,8 @@ function M.tick()
         ok, err, result = machine_steps.run_fill(c, t, step)
       elseif step.type == "take_out" then
         ok, err, result = machine_steps.run_take_out(c, t, step)
+      elseif step.type == "take_belt" then
+        ok, err, result = machine_steps.run_take_belt(c, t, step)
       elseif step.type == "take" then
         ok, err = run_take(c, t, step)
       elseif step.type == "find_patch" then

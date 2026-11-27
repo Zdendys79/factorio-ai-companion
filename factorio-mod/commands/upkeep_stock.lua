@@ -1,6 +1,8 @@
 -- Her stock (factorio-ai docs/mod_upkeep_supply.md B; game rules 11 and 33 -- Zdendys:
 -- keeping her inventory is purely Nyara's while she is not building). Stage 1: the
--- plates, taken from furnace outputs and from the STORE chests of the item (chest_roles). Called by the upkeep's scan (commands/upkeep.lua) every SCAN_TICKS
+-- plates, taken from furnace outputs and from the STORE chests of the item (chest_roles),
+-- or off a belt carrying them when that is nearer (a player's pick-up off a belt: the
+-- "take_belt" step). Called by the upkeep's scan (commands/upkeep.lua) every SCAN_TICKS
 -- for a companion with upkeep on.
 --
 -- For each item of STOCK_ITEMS: below half a stack in her inventory, a stock need --
@@ -25,6 +27,7 @@ local F = require("commands.upkeep_feeds")
 local N = require("commands.upkeep_need")
 local Regs = require("commands.upkeep_feed_regs")
 local roles = require("commands.chest_roles")
+local machine_steps = require("commands.task_pool_machine_steps")
 
 local M = {}
 
@@ -43,6 +46,11 @@ M.MAX_TASKS = 2
 local NOSOURCE_LOG_TICKS = 18000
 local FAIL_BACKOFF_TICKS = 3600
 local BUILDING = {build = true, relocate = true, dismantle = true}
+-- a belt carrying the item is searched within this many tiles of her (the area of one
+-- surface search per scan, not a rule of the game: a farther belt is left to the furnace
+-- or store sources) -- and only nearer than the furnace or store found (Zdendys: she takes
+-- plates where they are nearest)
+local BELT_SEARCH_R = 32
 -- its log books (pruned by the upkeep with its own: commands/upkeep.lua LOG_BOOKS)
 M.LOG_BOOKS = {nosource = NOSOURCE_LOG_TICKS}
 
@@ -116,6 +124,32 @@ local function source_for(c, furnaces, off, item, want)
   return some, some_n
 end
 
+-- The nearest belt END within BELT_SEARCH_R (and nearer than `limit`) whose full lanes of
+-- the item carry at least `least` of it, with the count -- or nil (a player's pick-up off a
+-- belt: the stock's source when it is nearer than a furnace or a store; only a backed-up
+-- belt end -- task_pool_machine_steps.run_take_belt).
+local function belt_source(c, item, least, limit)
+  local pos = c.entity.position
+  local best, best_d, best_n = nil, math.min(limit, BELT_SEARCH_R), 0
+  for _, b in pairs(c.entity.surface.find_entities_filtered{
+      type = "transport-belt", position = pos, radius = best_d,
+      force = c.entity.force}) do
+    local d = u.distance(pos, b.position)
+    if d < best_d and machine_steps.belt_end(b) then
+      -- (only a full lane, backed up -- task_pool_machine_steps.run_take_belt)
+      local n = 0
+      for i = 1, b.get_max_transport_line_index() do
+        local line = b.get_transport_line(i)
+        if line.get_item_count(item) >= machine_steps.BELT_FULL_LANE then
+          n = n + line.get_item_count(item)
+        end
+      end
+      if n >= least then best, best_d, best_n = b, d, n end
+    end
+  end
+  return best, best_n
+end
+
 -- The stock scan of one companion (module header). `acting(task_id)`: whether that task
 -- is her current step; `log_once(book, cid, key, every, msg)`: the upkeep's log books.
 -- Forget ended tasks; one that failed holds its source off for its item, every failure
@@ -179,12 +213,19 @@ function M.scan(cid, c, acting, log_once)
             end
           end
           local src, n = source_for(c, furnaces, off, item, want)
+          local step_type = "take_out"
+          local limit = src and u.distance(c.entity.position, src.position) or math.huge
+          local belt, bn = belt_source(c, item, math.min(M.MIN_TAKE, want), limit)
+          if belt and not (off[pos_key(belt) .. "|" .. item]
+                           and game.tick < off[pos_key(belt) .. "|" .. item][1]) then
+            src, n, step_type = belt, bn, "take_belt"
+          end
           if not src then
             log_once("nosource", cid, item, NOSOURCE_LOG_TICKS, string.format(
-              "upkeep stock: %d %s on hand (under half a stack) and no furnace output "
-              .. "or store chest to take it from", have, item))
+              "upkeep stock: %d %s on hand (under half a stack) and no furnace output, "
+              .. "store chest or belt to take it from", have, item))
           else
-            local r = ledger.submit_task(cid, {{type = "take_out", x = src.position.x,
+            local r = ledger.submit_task(cid, {{type = step_type, x = src.position.x,
                                                 y = src.position.y, item = item,
                                                 count = math.min(want, n)}},
                                          "upkeep", priority_of(want))

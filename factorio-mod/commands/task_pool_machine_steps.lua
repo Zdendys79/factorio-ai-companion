@@ -11,6 +11,14 @@ local machine_empty = require("commands.machine_empty")
 
 local M = {}
 
+-- a lane of one straight belt tile holds 4 items; full at a belt's last tile means backed up
+M.BELT_FULL_LANE = 4
+
+-- Whether `b` is a belt's last tile: a transport belt with no belt after it.
+function M.belt_end(b)
+  return b.type == "transport-belt" and #b.belt_neighbours.outputs == 0
+end
+
 -- The step's position, item and whole count >= 1 -- or the reason it has none.
 -- @return table|nil pos, string|nil item, number|nil count, string|nil err
 local function resolve(t, step)
@@ -57,6 +65,53 @@ function M.run_take_out(c, t, step)
   local pos, item, count, err = resolve(t, step)
   if err then return false, err end
   return true, nil, machine_empty.empty(c, pos, item, count)
+end
+
+-- {type="take_belt", x=, y=, item=NAME, count=N}: up to N of the item taken off the belts
+-- at (x, y) and next to it (within 1.5 tiles), lane by lane, into her inventory -- a
+-- player's pick-up off a belt (factorio-ai: her stock taken from a belt nearer than any
+-- furnace or store). Only off a belt's LAST tile (no belt after it: what reaches it passed
+-- every consumer upstream) and only a lane full of the item there (BELT_FULL_LANE: it stands
+-- backed up) -- a production fed by the belt keeps priority (factorio-ai game rule 11
+-- answer 2). Never more than her inventory takes; taking none fails the step (the
+-- upkeep's back-off). Result {extracted, item}.
+-- @return boolean ok, string|nil err, table|nil result
+function M.run_take_belt(c, t, step)
+  local pos, item, count, err = resolve(t, step)
+  if err then return false, err end
+  local inv = c.entity.get_main_inventory()
+  local left = math.min(count, inv.get_insertable_count(item))
+  local got = 0
+  local belts = {}
+  for _, b in pairs(c.entity.surface.find_entities_filtered{
+      type = "transport-belt", position = pos, radius = 1.5, force = c.entity.force}) do
+    if M.belt_end(b) then belts[#belts + 1] = b end
+  end
+  table.sort(belts, function(a, b)
+    return (a.position.x - pos.x) ^ 2 + (a.position.y - pos.y) ^ 2
+         < (b.position.x - pos.x) ^ 2 + (b.position.y - pos.y) ^ 2 end)
+  for _, b in ipairs(belts) do
+    for i = 1, b.get_max_transport_line_index() do
+      if left < 1 then break end
+      local line = b.get_transport_line(i)
+      local n = 0
+      if line.get_item_count(item) >= M.BELT_FULL_LANE then
+        n = line.remove_item{name = item, count = left}
+      end
+      if n > 0 then
+        local put = inv.insert{name = item, count = n}
+        if put < n then
+          c.entity.surface.spill_item_stack{position = c.entity.position,
+                                            stack = {name = item, count = n - put}}
+        end
+        got, left = got + n, left - n
+      end
+    end
+  end
+  if got < 1 then
+    return false, "take_belt: no belt end with a full lane of " .. item .. " there (nothing taken)"
+  end
+  return true, nil, {extracted = got, item = item}
 end
 
 return M
