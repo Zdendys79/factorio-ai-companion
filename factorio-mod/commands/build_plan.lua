@@ -33,6 +33,8 @@
 --   "pieces": [{"entity": NAME, "x": X, "y": Y, "dir": 0-3, "role": "primary" |
 --               "secondary" | nil, "mirror": true | nil, "recipe": NAME | nil,
 --               "filter": ITEM | nil, "ug": "input" | "output" | nil,
+--               "splitter": {"input": SIDE, "output": SIDE, "filter": ITEM} | nil (SIDE
+--               "left" | "none" | "right"; commands/splitter_settings.lua),
 --               "chest_role": "store" | "surplus" | nil, "chest_item": ITEM (with
 --               chest_role), "chest_at": "consumer" | "belt" | "central" (a surplus
 --               chest's place),
@@ -45,6 +47,7 @@
 --   "fills": [{"entity": NAME, "x": X, "y": Y, "item": NAME, "count": N}, ...],
 --   "removals": [{"entity": NAME, "x": X, "y": Y}, ...] | nil}
 
+local splitter_settings = require("commands.splitter_settings")
 local belt_runs = require("commands.belt_runs")
 local chest_roles = require("commands.chest_roles")
 local replace_check = require("commands.replace_check")
@@ -131,8 +134,8 @@ local function check(plan, force)
       end
       local why = replace_check.problem(p.entity, p.replaces)
       if why then return "piece " .. i .. ": " .. why end
-      if p.role ~= nil or p.ug ~= nil or p.mirror ~= nil then
-        return "piece " .. i .. ": a replaced piece takes no role, ug or mirror"
+      if p.role ~= nil or p.ug ~= nil or p.mirror ~= nil or p.splitter ~= nil then
+        return "piece " .. i .. ": a replaced piece takes no role, ug, mirror or splitter"
       end
     end
     if p.filter ~= nil then
@@ -143,6 +146,11 @@ local function check(plan, force)
       if e.type ~= "inserter" or (e.filter_count or 0) < 1 then
         return "piece " .. i .. ": " .. p.entity .. " takes no filter"
       end
+    end
+    -- a splitter's priorities and filter, set as it is placed (commands/splitter_settings.lua)
+    if p.splitter ~= nil then
+      local why = splitter_settings.problem(p.entity, p.splitter)
+      if why then return "piece " .. i .. ": " .. why end
     end
     -- a chest's role, registered as it is placed (commands/chest_roles.lua); a replace
     -- step carries none (review)
@@ -275,6 +283,7 @@ function M.expand(plan, force)
       steps[#steps + 1] = {type = "place", entity = p.entity, x = p.x, y = p.y,
                            dir = p.dir or 0, which = p.role, mirror = p.mirror or nil,
                            filter = p.filter, ug = p.ug, optional = p.optional or nil,
+                           splitter = p.splitter,
                            chest = p.chest_role and {role = p.chest_role, item = p.chest_item,
                                                      at = p.chest_at}}
       -- (an assembler's recipe right after it stands -- 0.16.174)

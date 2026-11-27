@@ -3,6 +3,7 @@
 
 local u = require("commands.init")
 local inserter_filter = require("commands.inserter_filter")
+local splitter_settings = require("commands.splitter_settings")
 local chest_roles = require("commands.chest_roles")
 local core = require("commands.queues_core")
 local inv_watch = require("commands.inventory_watch")
@@ -210,7 +211,8 @@ local function kept_off(entity_name, x, y)
   return nil
 end
 
-function M.start_build(cid, entity_name, position, direction, mirror, filter, ug, chest, bounds)
+function M.start_build(cid, entity_name, position, direction, mirror, filter, ug, chest, bounds,
+                       splitter)
   local c = valid_companion(cid)
   if not c then return {error = "Invalid companion"} end
   if position then
@@ -256,6 +258,8 @@ function M.start_build(cid, entity_name, position, direction, mirror, filter, ug
     -- so this is a no-op for all pre-existing build_queues use.
     mirror = mirror or nil,
     filter = filter,
+    -- splitter: {input, output, filter} -- a splitter's settings (splitter_settings)
+    splitter = splitter,
     -- chest: {role, item} -- a chest's role, registered as it is placed (chest_roles)
     chest = chest,
     -- ug: an underground belt's side ("input" | "output" | nil) -- create_entity's
@@ -628,6 +632,16 @@ function M.tick_build_queues()
       -- an inserter's filter (0.16.186; commands/inserter_filter.lua)
       if q.filter then
         local why = inserter_filter.apply(placed, q.filter, c.entity)
+        if why then
+          q.failed = why
+          q.run_end_tick = game.tick
+          q.state = "failed"
+          return false
+        end
+      end
+      -- a splitter's priorities and filter (factorio-ai game rule 96)
+      if q.splitter then
+        local why = splitter_settings.apply(placed, q.splitter, c.entity)
         if why then
           q.failed = why
           q.run_end_tick = game.tick

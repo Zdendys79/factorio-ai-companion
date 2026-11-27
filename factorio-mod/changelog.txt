@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.16.269
+  Changes:
+    - splitter_settings.lua (new; factorio-ai game rule 96): a plan piece's "splitter" settings
+      {input, output: "left"|"none"|"right", filter: ITEM} are checked by the plan check (a
+      splitter only; a filter needs an output side; not on a replaced piece) and set right after
+      the splitter is placed, read back; a setting the game did not take fails the step and the
+      splitter goes back into her inventory ("splitter not set: ...", logged).
+    - build_plan.lua copies the settings into the place step, task_pool passes them to
+      start_build (a new last parameter; older build queue entries carry none).
+---------------------------------------------------------------------------------------------------
 Version: 0.16.268
   Changes:
     - queues_build.lua: a placement that fails on a collision carries what stands there in its

@@ -816,7 +816,7 @@ function M.tick()
         -- (the whole plan's bounds: a piece must not close her in them -- escape.lua, rule 93)
         t.escape_bounds = t.escape_bounds or escape.bounds(t.steps)
         local r = queues.start_build(cid, step.entity, pos, place_dir, step.mirror, step.filter,
-                                       step.ug, step.chest, t.escape_bounds)
+                                       step.ug, step.chest, t.escape_bounds, step.splitter)
         if r.error then
           ledger.step_failed(active.task_id, r.error, active.step_start_tick, active.step_start_walked)
           storage.active_step[cid] = nil
